@@ -206,7 +206,7 @@ impl Bitmap {
         let mut buf = Vec::with_capacity(image.width() as usize * image.height() as usize);
         for y in 0..image.height() {
             for x in 0..image.width() {
-                let pixel = image.get_pixel(x, image.height() - y - 1);
+                let pixel = image.get_pixel(x, y);
                 buf.push(pixel[0]);
             }
         }
@@ -218,7 +218,7 @@ impl Bitmap {
         let mut buf = Vec::with_capacity(image.width() as usize * image.height() as usize * 2);
         for y in 0..image.height() {
             for x in 0..image.width() {
-                let pixel = image.get_pixel(x, image.height() - y - 1);
+                let pixel = image.get_pixel(x, y);
                 buf.push(pixel[0]);
                 buf.push(pixel[1]);
             }
@@ -231,7 +231,7 @@ impl Bitmap {
         let mut buf = Vec::with_capacity(image.width() as usize * image.height() as usize * 3);
         for y in 0..image.height() {
             for x in 0..image.width() {
-                let pixel = image.get_pixel(x, image.height() - y - 1);
+                let pixel = image.get_pixel(x, y);
                 buf.push(pixel[0]);
                 buf.push(pixel[1]);
                 buf.push(pixel[2]);
@@ -245,7 +245,7 @@ impl Bitmap {
         let mut buf = Vec::with_capacity(image.width() as usize * image.height() as usize * 4);
         for y in 0..image.height() {
             for x in 0..image.width() {
-                let pixel = image.get_pixel(x, image.height() - y - 1);
+                let pixel = image.get_pixel(x, y);
                 buf.push(pixel[0]);
                 buf.push(pixel[1]);
                 buf.push(pixel[2]);

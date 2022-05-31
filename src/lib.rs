@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 pub mod anim;
 pub mod bitmap;
 pub mod bitmap_font;

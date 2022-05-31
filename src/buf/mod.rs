@@ -24,7 +24,7 @@ use {
         BitmapFontId, BitmapId, BlobId, MaterialId, MaterialInfo, ModelBuf, ModelId, Pak, SceneBuf,
         SceneId,
     },
-    log::{error, trace, warn},
+    log::{error, trace, info, warn},
     serde::{de::DeserializeOwned, Deserialize, Serialize},
     std::{
         collections::HashMap,
@@ -342,6 +342,8 @@ impl PakBuf {
                 .context("Unable to glob source directory")?;
             for asset_path in asset_paths {
                 let asset_path = asset_path.context("Unable to get asset path")?;
+
+                info!("processing {}", asset_path.display());
 
                 re_run_if_changed(&asset_path);
 
