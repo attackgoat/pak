@@ -98,6 +98,9 @@ where
 /// Holds a description of position/orientation/scale and tagged data specific to each program.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Scene {
+    // (Values here)
+
+    // Tables must follow values
     #[serde(rename = "ref")]
     refs: Vec<SceneRef>,
 }
@@ -235,6 +238,8 @@ pub struct SceneRef {
 
     position: Option<[OrderedFloat<f32>; 3]>,
     rotation: Option<[OrderedFloat<f32>; 3]>,
+
+    // Tables must follow values
     tags: Option<Vec<String>>,
 }
 

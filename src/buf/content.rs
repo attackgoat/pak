@@ -11,6 +11,7 @@ pub struct Content {
     quality: Option<u32>,
     window_size: Option<u32>,
 
+    // Tables must follow values
     #[serde(rename = "group")]
     groups: Vec<Group>,
 }

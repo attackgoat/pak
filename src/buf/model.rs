@@ -13,7 +13,7 @@ use {
         mesh::{util::ReadIndices, Mode, Reader},
         Buffer, Node,
     },
-    log::{info, warn},
+    log::{info, trace, warn},
     meshopt::{
         build_meshlets, generate_vertex_remap, optimize_overdraw_in_place,
         optimize_vertex_cache_in_place, optimize_vertex_fetch_in_place, quantize_unorm,
@@ -83,8 +83,6 @@ pub struct Model {
     lod: Option<bool>,
     lod_min: Option<usize>,
     lod_target_error: Option<OrderedFloat<f32>>,
-    #[serde(rename = "mesh")]
-    meshes: Option<Vec<MeshRef>>,
     meshlet_max_triangles: Option<usize>,
     meshlet_max_vertices: Option<usize>,
     meshlets: Option<bool>,
@@ -94,6 +92,10 @@ pub struct Model {
     scale: Option<[OrderedFloat<f32>; 3]>,
     shadow: Option<bool>,
     src: PathBuf,
+
+    // Tables must follow values
+    #[serde(rename = "mesh")]
+    meshes: Option<Vec<MeshRef>>,
 }
 
 impl Model {
@@ -503,6 +505,14 @@ impl Model {
             }
         }
 
+        trace!(
+            "{} mesh names specified",
+            self.meshes
+                .as_ref()
+                .map(|meshes| meshes.len())
+                .unwrap_or_default()
+        );
+
         // Watch the GLTF file for changes, only if we're in a cargo build
         let src = self.src();
         re_run_if_changed(&src);
@@ -516,17 +526,15 @@ impl Model {
         let (doc, bufs, _) = import(self.src()).unwrap();
         let doc_meshes = doc
             .nodes()
+            .filter(|node| {
+                mesh_names.is_empty()
+                    || node
+                        .name()
+                        .map(|name| mesh_names.contains_key(name))
+                        .unwrap_or_default()
+            })
             .filter_map(|node| {
                 node.mesh()
-                    .filter(|mesh| {
-                        // If the model asset contains no mesh array then we bake all meshes
-                        // If the model asset does contain a mesh array then we only bake what is specified
-                        mesh_names.is_empty()
-                            || mesh
-                                .name()
-                                .map(|name| mesh_names.contains_key(name))
-                                .unwrap_or_default()
-                    })
                     .map(|mesh| {
                         (
                             mesh.primitives()
@@ -561,13 +569,14 @@ impl Model {
                                     _ => None,
                                 })
                                 .collect::<Vec<_>>(),
-                            mesh,
                             node,
                         )
                     })
                     .filter(|(primitives, ..)| !primitives.is_empty())
             })
             .collect::<Vec<_>>();
+
+        trace!("Document contains {} meshes", doc_meshes.len());
 
         // Figure out which unique materials are used on these target mesh primitives and convert
         // those to a map of "Mesh Local" material index from "Gltf File" material index
@@ -587,11 +596,22 @@ impl Model {
         let mut meshes = vec![];
         let mut index_buf = vec![];
         let mut vertex_buf = vec![];
-        for (mesh_primitives, mesh, node) in doc_meshes {
-            let name = mesh_names
-                .get(mesh.name().unwrap_or_default())
-                .map(|name| name.map(|name| name.to_owned()))
-                .unwrap_or(None);
+        for (mesh_primitives, node) in doc_meshes {
+            let name = if mesh_names.is_empty() {
+                node.name().map(|name| name.to_owned())
+            } else {
+                mesh_names
+                    .get(node.name().unwrap_or_default())
+                    .map(|name| name.map(|name| name.to_owned()))
+                    .unwrap_or(None)
+            };
+
+            trace!(
+                "Mesh \"{}\" -> \"{}\"",
+                node.name().unwrap_or_default(),
+                name.as_deref().unwrap_or_default()
+            );
+
             let bones = Self::read_bones(&node, &bufs);
             let transform = self.transform(&node);
 

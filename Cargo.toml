@@ -23,7 +23,7 @@ bmfont = { version = "0.3", default-features = false, optional = true }
 brotli = "3.3"
 glam = { version = "0.21", features = ["serde"] }
 glob = { version = "0.3.0", optional = true }
-gltf = "1.0"
+gltf = { version = "1.0", features = ["names"] }
 image = "0.24"
 log = "0.4"
 meshopt = "0.1"

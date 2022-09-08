@@ -25,9 +25,11 @@ use super::Writer;
 /// Holds a description of `.glb` or `.gltf` model animations.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Animation {
-    exclude: Option<Vec<String>>,
     name: Option<String>,
     src: PathBuf,
+
+    // Tables must follow values
+    exclude: Option<Vec<String>>,
 }
 
 impl Animation {
