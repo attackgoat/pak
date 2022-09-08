@@ -373,7 +373,7 @@ impl PakBuf {
                         let asset_path = asset_path.clone();
                         tasks.push(rt.spawn_blocking(move || {
                             Bitmap::new(&asset_path)
-                                .bake_from_source(&writer, src_dir, Some(asset_path))
+                                .bake_from_path(&writer, src_dir, Some(asset_path))
                                 .unwrap();
                         }));
                     }
@@ -393,7 +393,7 @@ impl PakBuf {
                                 tasks.push(rt.spawn_blocking(move || {
                                     bitmap.canonicalize(&src_dir, &asset_parent);
                                     bitmap
-                                        .bake_from_source(&writer, src_dir, Some(asset_path))
+                                        .bake_from_path(&writer, src_dir, Some(asset_path))
                                         .unwrap();
                                 }));
                             }

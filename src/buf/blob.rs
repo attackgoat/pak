@@ -60,14 +60,14 @@ impl Blob {
         &self,
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
-        src: impl AsRef<Path>,
+        path: impl AsRef<Path>,
     ) -> Result<BitmapFontId, Error> {
         // Early-out if we have already baked this blob
         if let Some(id) = writer.lock().ctx.get(&Asset::Blob(self.clone())) {
             return Ok(id.as_bitmap_font().unwrap());
         }
 
-        let key = file_key(&project_dir, &src);
+        let key = file_key(&project_dir, &path);
 
         info!("Baking bitmap font: {}", key);
 

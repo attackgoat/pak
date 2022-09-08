@@ -53,16 +53,16 @@ impl Bitmap {
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
     ) -> anyhow::Result<BitmapId> {
-        self.bake_from_source(writer, project_dir, None as Option<&'static str>)
+        self.bake_from_path(writer, project_dir, None as Option<&'static str>)
     }
 
     #[cfg(feature = "bake")]
     /// Reads and processes image source files into an existing `.pak` file buffer.
-    pub fn bake_from_source(
+    pub fn bake_from_path(
         &mut self,
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
-        src: Option<impl AsRef<Path>>,
+        path: Option<impl AsRef<Path>>,
     ) -> anyhow::Result<BitmapId> {
         // Early-out if we have already baked this bitmap
         let asset = self.clone().into();
@@ -70,7 +70,7 @@ impl Bitmap {
             return Ok(id.as_bitmap().unwrap());
         }
 
-        let key = src.as_ref().map(|src| file_key(&project_dir, src));
+        let key = path.as_ref().map(|path| file_key(&project_dir, path));
         if let Some(key) = &key {
             // This bitmap will be accessible using this key
             info!("Baking bitmap: {}", key);
@@ -85,21 +85,19 @@ impl Bitmap {
         // If format was not specified we guess (it is read as it is from disk; this
         // is just format represented in the .pak file and what you can retrieve it as)
         if self.format.is_none() {
-            if let Some(src) = &src {
-                self.format = match open(src).context("Unable to open bitmap file")? {
-                    DynamicImage::ImageLuma8(_) => Some(BitmapFormat::R),
-                    DynamicImage::ImageRgb8(_) => Some(BitmapFormat::Rgb),
-                    DynamicImage::ImageRgba8(img) => {
-                        if img.pixels().all(|pixel| pixel[3] == u8::MAX) {
-                            // The source image has alpha but we're going to discard it
-                            Some(BitmapFormat::Rgb)
-                        } else {
-                            Some(BitmapFormat::Rgba)
-                        }
+            self.format = match open(self.src()).context("Unable to open bitmap file")? {
+                DynamicImage::ImageLuma8(_) => Some(BitmapFormat::R),
+                DynamicImage::ImageRgb8(_) => Some(BitmapFormat::Rgb),
+                DynamicImage::ImageRgba8(img) => {
+                    if img.pixels().all(|pixel| pixel[3] == u8::MAX) {
+                        // The source image has alpha but we're going to discard it
+                        Some(BitmapFormat::Rgb)
+                    } else {
+                        Some(BitmapFormat::Rgba)
                     }
-                    _ => None,
-                };
-            }
+                }
+                _ => None,
+            };
         }
 
         let bitmap = self

@@ -38,13 +38,13 @@ impl Animation {
         &self,
         writer: &mut Writer,
         project_dir: impl AsRef<Path>,
-        src: impl AsRef<Path>,
+        path: impl AsRef<Path>,
     ) -> anyhow::Result<AnimationId> {
         if let Some(h) = writer.ctx.get(&self.clone().into()) {
             return Ok(h.as_animation().unwrap());
         }
 
-        let key = file_key(&project_dir, &src);
+        let key = file_key(&project_dir, &path);
         info!("Baking animation: {}", key);
 
         //let src_dir = src.as_ref().parent().unwrap();

@@ -312,7 +312,7 @@ impl Material {
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
         src_dir: impl AsRef<Path>,
-        src: Option<impl AsRef<Path>>,
+        path: Option<impl AsRef<Path>>,
     ) -> anyhow::Result<MaterialId> {
         // Early-out if we have already baked this material
         let asset = self.clone().into();
@@ -322,7 +322,7 @@ impl Material {
 
         // If a source is given it will be available as a key inside the .pak (sources are not
         // given if the asset is specified inline - those are only available in the .pak via ID)
-        let key = src.as_ref().map(|src| file_key(&project_dir, &src));
+        let key = path.as_ref().map(|path| file_key(&project_dir, &path));
         if let Some(key) = &key {
             // This material will be accessible using this key
             info!("Baking material: {}", key);
@@ -383,7 +383,7 @@ impl Material {
 
                 rt.spawn_blocking(move || {
                     bitmap
-                        .bake_from_source(&writer, &project_dir, Some(src))
+                        .bake_from_path(&writer, &project_dir, Some(src))
                         .context("Unable to bake color asset bitmap from path")
                         .unwrap()
                 })
@@ -440,7 +440,7 @@ impl Material {
                 rt.spawn_blocking(move || {
                     bitmap
                         .with_format(BitmapFormat::Rgb)
-                        .bake_from_source(&writer, &project_dir, Some(src))
+                        .bake_from_path(&writer, &project_dir, Some(src))
                         .context("Unable to bake normal asset bitmap from path")
                         .unwrap()
                 })
@@ -500,7 +500,7 @@ impl Material {
                     Some(
                         bitmap
                             .with_format(BitmapFormat::Rgb)
-                            .bake_from_source(&writer, &project_dir, Some(src))
+                            .bake_from_path(&writer, &project_dir, Some(src))
                             .context("Unable to bake emissive asset bitmap from path")
                             .unwrap(),
                     )

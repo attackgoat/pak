@@ -147,7 +147,7 @@ impl Model {
         &self,
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
-        src: Option<impl AsRef<Path>>,
+        path: Option<impl AsRef<Path>>,
     ) -> Result<ModelId, Error> {
         // Early-out if we have already baked this model
         let asset = self.clone().into();
@@ -155,9 +155,9 @@ impl Model {
             return Ok(id.as_model().unwrap());
         }
 
-        // If a source is given it will be available as a key inside the .pak (sources are not
+        // If a path is given it will be available as a key inside the .pak (paths are not
         // given if the asset is specified inline - those are only available in the .pak via ID)
-        let key = src.as_ref().map(|src| file_key(&project_dir, &src));
+        let key = path.as_ref().map(|path| file_key(&project_dir, &path));
         if let Some(key) = &key {
             // This model will be accessible using this key
             info!("Baking model: {}", key);

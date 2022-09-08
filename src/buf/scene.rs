@@ -110,7 +110,7 @@ impl Scene {
         rt: &Runtime,
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
-        src: impl AsRef<Path>,
+        path: impl AsRef<Path>,
     ) -> Result<SceneId, Error> {
         // Early-out if we have already baked this scene
         let asset = self.clone().into();
@@ -118,11 +118,11 @@ impl Scene {
             return Ok(h.as_scene().unwrap());
         }
 
-        let key = file_key(&project_dir, &src);
+        let key = file_key(&project_dir, &path);
 
         info!("Baking scene: {}", key);
 
-        let src_dir = parent(&src);
+        let src_dir = parent(&path);
 
         let mut refs = vec![];
         for scene_ref in self.refs() {
