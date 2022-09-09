@@ -575,7 +575,7 @@ impl Model {
                                     Mode::TriangleFan | Mode::TriangleStrip | Mode::Triangles => {
                                         trace!(
                                             "Reading mesh \"{}\"",
-                                            node.name().as_deref().unwrap_or_default()
+                                            node.name().unwrap_or_default()
                                         );
 
                                         // Read material and vertex data
@@ -663,10 +663,7 @@ impl Model {
             for (material, vertices) in mesh_primitives {
                 let mut levels = vec![];
                 let mut shadows = vec![];
-                let material = materials
-                    .get(&material)
-                    .map(|material| *material)
-                    .unwrap_or_default();
+                let material = materials.get(&material).copied().unwrap_or_default();
 
                 // Optimize the main mesh
                 let (indices, vertices_optimal, vertex_count, vertex_stride) =

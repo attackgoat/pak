@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Holds a `Bitmap` in a `.pak` file. For data transport only.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BitmapBuf {
     color: BitmapColor,
     fmt: BitmapFormat,

@@ -7,14 +7,14 @@ use {
     },
 };
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum IndexType {
     // U8, requires VK_EXT_index_type_uint8 which has 41% support
     U16,
     U32,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Detail {
     pub index_ty: IndexType,
     pub meshlets: Vec<Meshlet>,
@@ -29,7 +29,7 @@ pub struct Mesh {
     pub transform: Mat4,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Meshlet {
     pub triangle_count: u32,
 }
@@ -88,7 +88,7 @@ impl Debug for ModelBuf {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Primitive {
     pub levels: Vec<Detail>,
     pub material: u8,

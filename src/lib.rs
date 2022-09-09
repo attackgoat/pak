@@ -37,7 +37,7 @@ id_struct!(Model);
 id_struct!(Scene);
 
 /// Holds bitmap handles to match what was setup in the asset `.toml` file.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MaterialInfo {
     /// Three or four channel base color, aka albedo or diffuse, of the material.
     pub color: BitmapId,

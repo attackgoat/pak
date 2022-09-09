@@ -4,7 +4,7 @@ use {
 };
 
 /// Holds a `BitmapFont` in a `.pak` file. For data transport only.
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BitmapFontBuf {
     def: String,
     pages: Vec<BitmapBuf>,
