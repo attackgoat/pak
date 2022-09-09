@@ -207,12 +207,14 @@ impl Model {
         vertices: &[u8],
         vertex_stride: usize,
     ) -> Vec<Vec<u32>> {
-        let lod_target_error = self.lod_target_error.unwrap_or(OrderedFloat(0.05)).0;
-        let lod_threshold = 1.0 + lod_target_error;
-        let lod_min = self.lod_min.unwrap_or(64);
         let mut lods = vec![];
-        let mut triangle_count = indices.len() / 3;
+
         if self.lod.unwrap_or_default() {
+            let lod_target_error = self.lod_target_error.unwrap_or(OrderedFloat(0.05)).0;
+            let lod_threshold = 1.0 + lod_target_error;
+            let lod_min = self.lod_min.unwrap_or(64);
+            let mut triangle_count = indices.len() / 3;
+
             while triangle_count > lod_min {
                 let target_count = triangle_count >> 1;
                 let lod_indices = simplify(
@@ -393,9 +395,8 @@ impl Model {
             .map(|positions| positions.collect::<Vec<_>>())
             .unwrap_or_default();
 
-        let (restart_index, indices) = data
-            .read_indices()
-            .map(|indices| {
+        let (restart_index, indices) = {
+            let indices = data.read_indices().map(|indices| {
                 (
                     match indices {
                         ReadIndices::U8(_) => u8::MAX as u32,
@@ -404,28 +405,60 @@ impl Model {
                     },
                     indices.into_u32().collect::<Vec<_>>(),
                 )
-            })
-            .unwrap_or_else(|| (u32::MAX, (0..positions.len() as u32).collect()));
+            });
 
-        let mut tex_coords = data
-            .read_tex_coords(0)
-            .map(|data| data.into_f32())
-            .map(|tex_coords| tex_coords.collect::<Vec<_>>())
-            .unwrap_or_default();
-        tex_coords.resize(positions.len(), Default::default());
+            if indices.is_none() {
+                warn!("Missing indices!");
+            }
 
-        let mut normals = data
-            .read_normals()
-            .map(|normals| normals.collect::<Vec<_>>())
-            .unwrap_or_default();
-        normals.resize(positions.len(), Default::default());
+            indices.unwrap_or_else(|| (u32::MAX, (0..positions.len() as u32).collect()))
+        };
 
-        let mut tangents = data
-            .read_tangents()
-            .map(|tangents| tangents.collect::<Vec<_>>())
-            .unwrap_or_default();
-        tangents.resize(positions.len(), Default::default());
-        let tangents = tangents.into_iter().collect();
+        let tex_coords = {
+            let tex_coords = data
+                .read_tex_coords(0)
+                .map(|data| data.into_f32())
+                .map(|tex_coords| tex_coords.collect::<Vec<_>>());
+
+            if tex_coords.is_none() {
+                warn!("Missing texture coordinates!");
+            }
+
+            let mut tex_coords = tex_coords.unwrap_or_default();
+            tex_coords.resize(positions.len(), Default::default());
+
+            tex_coords
+        };
+
+        let normals = {
+            let normals = data
+                .read_normals()
+                .map(|normals| normals.collect::<Vec<_>>());
+
+            if normals.is_none() {
+                warn!("Missing normals!");
+            }
+
+            let mut normals = normals.unwrap_or_default();
+            normals.resize(positions.len(), Default::default());
+
+            normals
+        };
+
+        let tangents = {
+            let tangents = data
+                .read_tangents()
+                .map(|tangents| tangents.collect::<Vec<_>>());
+
+            if tangents.is_none() {
+                warn!("Missing tangents!");
+            }
+
+            let mut tangents = tangents.unwrap_or_default();
+            tangents.resize(positions.len(), Default::default());
+
+            tangents
+        };
 
         let joints = data
             .read_joints(0)
@@ -540,6 +573,11 @@ impl Model {
                             mesh.primitives()
                                 .filter_map(|primitive| match primitive.mode() {
                                     Mode::TriangleFan | Mode::TriangleStrip | Mode::Triangles => {
+                                        trace!(
+                                            "Reading mesh \"{}\"",
+                                            node.name().as_deref().unwrap_or_default()
+                                        );
+
                                         // Read material and vertex data
                                         let material =
                                             primitive.material().index().unwrap_or_default();
@@ -576,8 +614,6 @@ impl Model {
             })
             .collect::<Vec<_>>();
 
-        trace!("Document contains {} meshes", doc_meshes.len());
-
         // Figure out which unique materials are used on these target mesh primitives and convert
         // those to a map of "Mesh Local" material index from "Gltf File" material index
         // This makes the final materials used index as 0, 1, 2, etc
@@ -590,6 +626,14 @@ impl Model {
             .enumerate()
             .map(|(idx, material)| (material, idx as Material))
             .collect::<HashMap<_, _>>();
+
+        trace!(
+            "Document contains {} mesh{} ({} material{})",
+            doc_meshes.len(),
+            if doc_meshes.len() == 1 { "" } else { "es" },
+            materials.len(),
+            if materials.len() == 1 { "" } else { "s" },
+        );
 
         // Build the list of meshes from this document into index and vertex buffers, and mesh structs
         let shadow = self.shadow.unwrap_or_default();
@@ -619,9 +663,12 @@ impl Model {
             for (material, vertices) in mesh_primitives {
                 let mut levels = vec![];
                 let mut shadows = vec![];
-                let material = materials[&material];
+                let material = materials
+                    .get(&material)
+                    .map(|material| *material)
+                    .unwrap_or_default();
 
-                // Optimize and append the main mesh
+                // Optimize the main mesh
                 let (indices, vertices_optimal, vertex_count, vertex_stride) =
                     self.optimize_mesh(&vertices, false);
 

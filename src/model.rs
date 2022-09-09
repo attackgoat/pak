@@ -39,7 +39,7 @@ pub struct ModelBuf {
     #[serde(with = "serde_bytes")]
     indices: Vec<u8>,
 
-    pub meshes: Vec<Mesh>,
+    meshes: Vec<Mesh>,
 
     #[serde(with = "serde_bytes")]
     vertices: Vec<u8>,
@@ -71,6 +71,10 @@ impl ModelBuf {
 
     pub fn indices(&self) -> &[u8] {
         &self.indices
+    }
+
+    pub fn meshes(&self) -> &[Mesh] {
+        &self.meshes
     }
 
     pub fn vertices(&self) -> &[u8] {
