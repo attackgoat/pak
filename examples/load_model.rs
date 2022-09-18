@@ -36,12 +36,12 @@ fn main() {
     // from each model file. Notice how this file bakes each detail level into a single meshlet
     println!(
         "Regular model w/ baked shadow mesh:\n{:#?}\n",
-        default_model.meshes[0]
+        default_model.meshes()[0]
     );
 
     // Notice how this file has a bunch of meshlets for the geometry
     println!(
         "Meshlet model also w/ shadows:\n{:#?}\n",
-        meshlets_model.meshes[0]
+        meshlets_model.meshes()[0]
     );
 }

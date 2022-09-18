@@ -1,57 +1,40 @@
 use {
     super::{
-        super::{
-            model::{Detail, IndexType, Mesh, Meshlet, ModelBuf, Primitive},
-            ModelId,
-        },
-        file_key, re_run_if_changed, Canonicalize,
+        super::model::{Mesh, ModelBuf, Primitive, Vertex},
+        re_run_if_changed, Canonicalize,
     },
-    glam::{quat, vec3, Mat4, Vec3},
+    glam::{quat, vec3, EulerRot, Mat4, Quat, Vec3},
     gltf::{
         buffer::Data,
-        import,
         mesh::{util::ReadIndices, Mode, Reader},
         Buffer, Node,
     },
-    log::{info, trace, warn},
+    log::warn,
     meshopt::{
-        build_meshlets, generate_vertex_remap, optimize_overdraw_in_place,
-        optimize_vertex_cache_in_place, optimize_vertex_fetch_in_place, quantize_unorm,
-        remap_index_buffer, remap_vertex_buffer, simplify, unstripify, VertexDataAdapter,
+        generate_vertex_remap, optimize_overdraw_in_place, optimize_vertex_cache_in_place,
+        quantize_unorm, remap_index_buffer, simplify, unstripify, VertexDataAdapter,
     },
     ordered_float::OrderedFloat,
     serde::Deserialize,
     std::{
-        collections::{HashMap, HashSet},
-        io::Error,
-        mem::size_of,
+        collections::HashMap,
         path::{Path, PathBuf},
         u16,
     },
 };
 
 #[cfg(feature = "bake")]
-use {super::Writer, parking_lot::Mutex, std::sync::Arc};
-
-#[allow(dead_code)]
-type Bone = (String, Mat4);
-type Index = u32;
-type Joint = u32;
-type Material = u8;
-type Normal = [f32; 3];
-type Position = [f32; 3];
-type Tangent = [f32; 4];
-type TextureCoord = [f32; 2];
-type Weight = u32;
-
-fn into_u8_slice<T>(t: &[T]) -> &[u8]
-where
-    T: Sized,
-{
-    use std::slice::from_raw_parts;
-
-    unsafe { from_raw_parts(t.as_ptr() as *const _, t.len() * size_of::<T>()) }
-}
+use {
+    super::{file_key, ModelId, Writer},
+    gltf::import,
+    log::{info, trace},
+    parking_lot::Mutex,
+    std::{
+        collections::HashSet,
+        io::{Error, ErrorKind},
+        sync::Arc,
+    },
+};
 
 /// Holds a description of individual meshes within a `.glb` or `.gltf` 3D model.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
@@ -81,14 +64,12 @@ impl MeshRef {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Model {
     lod: Option<bool>,
-    lod_min: Option<usize>,
     lod_target_error: Option<OrderedFloat<f32>>,
-    meshlet_max_triangles: Option<usize>,
-    meshlet_max_vertices: Option<usize>,
-    meshlets: Option<bool>,
+    min_lod_triangles: Option<usize>,
     offset: Option<[OrderedFloat<f32>; 3]>,
     optimize: Option<bool>,
     overdraw_threshold: Option<OrderedFloat<f32>>,
+    rotation: Option<[OrderedFloat<f32>; 3]>,
     scale: Option<[OrderedFloat<f32>; 3]>,
     shadow: Option<bool>,
     src: PathBuf,
@@ -99,47 +80,22 @@ pub struct Model {
 }
 
 impl Model {
+    pub const DEFAULT_LOD_MIN: usize = 64;
+    pub const DEFAULT_LOD_TARGET_ERROR: f32 = 0.05;
+
     pub fn new(src: impl AsRef<Path>) -> Self {
         Self {
             lod: None,
             lod_target_error: None,
-            lod_min: None,
             meshes: None,
-            meshlet_max_triangles: None,
-            meshlet_max_vertices: None,
-            meshlets: None,
+            min_lod_triangles: None,
             offset: None,
             optimize: None,
             overdraw_threshold: None,
+            rotation: None,
             scale: None,
             shadow: None,
             src: src.as_ref().to_path_buf(),
-        }
-    }
-
-    fn append_mesh(
-        index_buf: &mut Vec<u8>,
-        vertex_buf: &mut Vec<u8>,
-        indices: &[u32],
-        mut vertices: Vec<u8>,
-    ) -> IndexType {
-        let (index_ty, mut indices) = if vertices.len() <= u16::MAX as usize {
-            (
-                IndexType::U16,
-                into_u8_slice(&indices.iter().map(|idx| *idx as u16).collect::<Vec<_>>()).to_vec(),
-            )
-        } else {
-            (IndexType::U32, into_u8_slice(indices).to_vec())
-        };
-        index_buf.append(&mut indices);
-        vertex_buf.append(&mut vertices);
-
-        index_ty
-    }
-
-    fn append_meshlets(index_buf: &mut Vec<u8>, meshlets: &[([[u8; 3]; 126], u32)]) {
-        for (indices, _) in meshlets {
-            index_buf.extend_from_slice(into_u8_slice(indices))
         }
     }
 
@@ -157,6 +113,8 @@ impl Model {
             return Ok(id.as_model().unwrap());
         }
 
+        self.re_run_if_changed();
+
         // If a path is given it will be available as a key inside the .pak (paths are not
         // given if the asset is specified inline - those are only available in the .pak via ID)
         let key = path.as_ref().map(|path| file_key(&project_dir, &path));
@@ -171,7 +129,9 @@ impl Model {
             );
         }
 
-        let model = self.to_model_buf();
+        let model = self
+            .to_model_buf()
+            .map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
 
         // Check again to see if we are the first one to finish this
         let mut writer = writer.lock();
@@ -182,64 +142,43 @@ impl Model {
         Ok(writer.push_model(model, key))
     }
 
-    fn build_meshlets(&self, indices: &[u32], vertex_count: usize) -> Vec<([[u8; 3]; 126], u32)> {
-        if !self.meshlets.unwrap_or_default() {
-            let triangle_count = indices.len() as u32 / 3;
-            let indices = [[0; 3]; 126];
-
-            return vec![(indices, triangle_count)];
-        }
-
-        let max_vertices = self.meshlet_max_vertices.unwrap_or(64);
-        let max_triangles = self.meshlet_max_triangles.unwrap_or(126);
-        let res = build_meshlets(indices, vertex_count, max_vertices, max_triangles);
-
-        assert!(!res.is_empty(), "Invalid meshlets");
-
-        res.iter()
-            .map(|meshlet| (meshlet.indices, meshlet.triangle_count as _))
-            .collect()
-    }
-
     fn calculate_lods(
         &self,
         indices: &[u32],
-        vertices: &[u8],
+        vertex_buf: &[u8],
         vertex_stride: usize,
     ) -> Vec<Vec<u32>> {
-        let mut lods = vec![];
+        let mut res = vec![Vec::from(indices)];
 
-        if self.lod.unwrap_or_default() {
-            let lod_target_error = self.lod_target_error.unwrap_or(OrderedFloat(0.05)).0;
-            let lod_threshold = 1.0 + lod_target_error;
-            let lod_min = self.lod_min.unwrap_or(64);
-            let mut triangle_count = indices.len() / 3;
-
-            while triangle_count > lod_min {
-                let target_count = triangle_count >> 1;
-                let lod_indices = simplify(
-                    indices,
-                    &Self::vertex_data_adapter(vertices, vertex_stride),
-                    target_count,
-                    lod_target_error,
-                );
-
-                let lod_triangle_count = lod_indices.len() / 3;
-                if lod_triangle_count >= triangle_count
-                    || lod_triangle_count as f32 / target_count as f32 > lod_threshold
-                {
-                    break;
-                }
-
-                lods.push(lod_indices);
-                triangle_count = lod_triangle_count;
-            }
+        if !self.lod() {
+            return res;
         }
 
-        lods
+        let target_error = self.lod_target_error();
+        let target_ratio = 1.0 + target_error;
+        let min_triangles = self.min_lod_triangles();
+        let vertices = VertexDataAdapter::new(vertex_buf, vertex_stride, 0).unwrap();
+
+        loop {
+            let target_count = (res.last().unwrap().len() / 3) >> 1;
+            if target_count < min_triangles {
+                break;
+            }
+
+            let lod = simplify(indices, &vertices, target_count, target_error);
+            let lod_count = lod.len() / 3;
+            let lod_ratio = lod_count as f32 / target_count as f32;
+            if lod_ratio > 1.0 || lod_ratio < target_ratio {
+                break;
+            }
+
+            res.push(lod);
+        }
+
+        res
     }
 
-    fn convert_triangle_fan_to_list(indices: &mut Vec<Index>) {
+    fn convert_triangle_fan_to_list(indices: &mut Vec<u32>) {
         if indices.is_empty() {
             return;
         }
@@ -252,8 +191,47 @@ impl Model {
         }
     }
 
-    fn convert_triangle_strip_to_list(indices: &mut Vec<Index>, restart_index: u32) {
+    fn convert_triangle_strip_to_list(indices: &mut Vec<u32>, restart_index: u32) {
         *indices = unstripify(indices, restart_index).expect("Unable to unstripify index buffer");
+    }
+
+    /// When `true` levels of detail will be generated for all meshes.
+    pub fn lod(&self) -> bool {
+        self.lod.unwrap_or_default()
+    }
+
+    /// The "fitting" value which levels of detail use to determine that further simplication will
+    /// not greatly change a mesh.
+    pub fn lod_target_error(&self) -> f32 {
+        self.lod_target_error
+            .unwrap_or(OrderedFloat(Self::DEFAULT_LOD_TARGET_ERROR))
+            .0
+    }
+
+    /// The number of triangles below which further level of details are not calculated.
+    ///
+    /// Note: The last level of detail may have no less than half this number of triangles.
+    pub fn min_lod_triangles(&self) -> usize {
+        self.min_lod_triangles
+            .unwrap_or(Self::DEFAULT_LOD_MIN)
+            .clamp(1, usize::MAX)
+    }
+
+    fn node_transform(&self, node: &Node) -> Option<Mat4> {
+        let (translation, rotation, scale) = node.transform().decomposed();
+        let rotation = quat(rotation[0], rotation[1], rotation[2], rotation[3]);
+        let scale = vec3(scale[0], scale[1], scale[2]);
+        let translation = vec3(translation[0], translation[1], translation[2]);
+
+        let transform =
+            Mat4::from_scale_rotation_translation(self.scale(), self.rotation(), self.offset())
+                * Mat4::from_scale_rotation_translation(scale, rotation, translation);
+
+        if transform == Mat4::IDENTITY {
+            Some(transform)
+        } else {
+            None
+        }
     }
 
     /// Translation of the model origin.
@@ -270,92 +248,102 @@ impl Model {
         self.optimize.unwrap_or(true)
     }
 
-    fn optimize_mesh(
-        &self,
-        vertices: &VertexData,
-        shadow: bool,
-    ) -> (Vec<Index>, Vec<u8>, usize, usize) {
-        if !shadow {
-            let positions = vertices.positions.iter().copied().enumerate();
-            if let Some((joints, weights)) = &vertices.skin {
-                self.optimize_vertices(
-                    &vertices.indices,
-                    &positions
-                        .map(|(idx, position)| {
-                            (
-                                position,
-                                vertices.tex_coords[idx],
-                                vertices.normals[idx],
-                                vertices.tangents[idx],
-                                joints[idx],
-                                weights[idx],
-                            )
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            } else {
-                self.optimize_vertices(
-                    &vertices.indices,
-                    &positions
-                        .map(|(idx, position)| {
-                            (
-                                position,
-                                vertices.tex_coords[idx],
-                                vertices.normals[idx],
-                                vertices.tangents[idx],
-                            )
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            }
-        } else if let Some((joints, weights)) = &vertices.skin {
-            self.optimize_vertices(
-                &vertices.indices,
-                &vertices
-                    .positions
-                    .iter()
-                    .copied()
-                    .enumerate()
-                    .map(|(idx, position)| (position, joints[idx], weights[idx]))
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            self.optimize_vertices(&vertices.indices, &vertices.positions)
-        }
-    }
-
     /// At the very least this function will re-index the vertices, and optionally may
     /// perform full meshopt optimization.
-    fn optimize_vertices<T>(
+    fn optimize_mesh(
         &self,
-        index_buf: &[u32],
-        vertex_buf: &[T],
-    ) -> (Vec<u32>, Vec<u8>, usize, usize)
-    where
-        T: Clone + Default,
-    {
-        let vertex_stride = size_of::<T>();
+        indices: &mut Vec<u32>,
+        vertex_buf: &mut Vec<u8>,
+        vertex_stride: usize,
+    ) {
+        // TODO: PR these functions
+        // HACK: Need to have a version of these functions which specify stride
+        mod hack {
+            pub fn generate_vertex_remap(
+                indices: &mut [u32],
+                vertex_buf: &mut [u8],
+                vertex_stride: usize,
+            ) -> (usize, Vec<u32>) {
+                let vertex_count = vertex_buf.len() / vertex_stride;
+                let mut remap: Vec<u32> = vec![0; vertex_count];
+                let remap_count = unsafe {
+                    meshopt::ffi::meshopt_generateVertexRemap(
+                        remap.as_mut_ptr().cast(),
+                        indices.as_ptr().cast(),
+                        indices.len(),
+                        vertex_buf.as_ptr().cast(),
+                        vertex_count,
+                        vertex_stride,
+                    )
+                };
+
+                (remap_count, remap)
+            }
+
+            pub fn optimize_vertex_fetch_in_place(
+                indices: &mut [u32],
+                vertex_buf: &mut [u8],
+                vertex_stride: usize,
+            ) {
+                let vertex_count = vertex_buf.len() / vertex_stride;
+
+                let res = unsafe {
+                    meshopt::ffi::meshopt_optimizeVertexFetch(
+                        vertex_buf.as_mut_ptr().cast(),
+                        indices.as_mut_ptr().cast(),
+                        indices.len(),
+                        vertex_buf.as_ptr().cast(),
+                        vertex_count,
+                        vertex_stride,
+                    )
+                };
+
+                // This should be true because we expect remapped (..unique..) vertices
+                assert_eq!(res, vertex_count);
+            }
+
+            pub fn remap_vertex_buffer(
+                vertex_buf: &[u8],
+                vertex_count: usize,
+                vertex_stride: usize,
+                remap: &[u32],
+            ) -> Vec<u8> {
+                let mut res = vec![0u8; vertex_count * vertex_stride];
+
+                unsafe {
+                    meshopt::ffi::meshopt_remapVertexBuffer(
+                        res.as_mut_ptr().cast(),
+                        vertex_buf.as_ptr().cast(),
+                        vertex_buf.len() / vertex_stride,
+                        vertex_stride,
+                        remap.as_ptr().cast(),
+                    );
+                }
+
+                res
+            }
+        }
 
         // Generate an index buffer from a naively indexed vertex buffer or reindex an existing one
-        let (vertex_count, vertex_remap) = generate_vertex_remap(vertex_buf, Some(index_buf));
-        let mut index_buf = remap_index_buffer(Some(index_buf), vertex_count, &vertex_remap);
-        let mut vertex_buf = remap_vertex_buffer(vertex_buf, vertex_count, &vertex_remap);
+        let (vertex_count, remap) = hack::generate_vertex_remap(indices, vertex_buf, vertex_stride);
+        *indices = remap_index_buffer(Some(indices), vertex_buf.len() / vertex_stride, &remap);
+        *vertex_buf = hack::remap_vertex_buffer(vertex_buf, vertex_count, vertex_stride, &remap);
+
+        assert_eq!(indices.len() % 3, 0);
+        assert_eq!(vertex_buf.len() % vertex_stride, 0);
+        assert_eq!(vertex_buf.len() / vertex_stride, vertex_count);
 
         // Run the suggested routines from meshopt: https://github.com/gwihlidal/meshopt-rs#pipeline
         if self.optimize() {
-            optimize_vertex_cache_in_place(&index_buf, vertex_count);
-            optimize_overdraw_in_place(
-                &index_buf,
-                &Self::vertex_data_adapter(&vertex_buf, vertex_stride),
-                self.overdraw_threshold(),
-            );
-            optimize_vertex_fetch_in_place(&mut index_buf, &mut vertex_buf);
+            let vertices = VertexDataAdapter::new(vertex_buf, vertex_stride, 0).unwrap();
+
+            // HACK: These functions take immutable borrows, BUT USES MUTABLE!
+            // See: https://github.com/gwihlidal/meshopt-rs/pull/26 not yet released
+            optimize_vertex_cache_in_place(indices, vertex_count);
+            optimize_overdraw_in_place(indices, &vertices, self.overdraw_threshold());
+
+            hack::optimize_vertex_fetch_in_place(indices, vertex_buf, vertex_stride);
         }
-
-        // Return the vertices as opaque bytes
-        let vertex_buf = into_u8_slice(&vertex_buf).to_vec();
-
-        (index_buf, vertex_buf, vertex_count, vertex_stride)
     }
 
     /// Determines how much the optimization algorithm can compromise the vertex cache hit ratio.
@@ -415,19 +403,29 @@ impl Model {
         };
 
         let tex_coords = {
-            let tex_coords = data
+            let tex_coords0 = data
                 .read_tex_coords(0)
                 .map(|data| data.into_f32())
                 .map(|tex_coords| tex_coords.collect::<Vec<_>>());
 
-            if tex_coords.is_none() {
+            if tex_coords0.is_none() {
                 warn!("Missing texture coordinates!");
             }
 
-            let mut tex_coords = tex_coords.unwrap_or_default();
-            tex_coords.resize(positions.len(), Default::default());
+            let mut tex_coords0 = tex_coords0.unwrap_or_default();
+            tex_coords0.resize(positions.len(), Default::default());
 
-            tex_coords
+            let mut tex_coords1 = data
+                .read_tex_coords(1)
+                .map(|data| data.into_f32())
+                .map(|tex_coords| tex_coords.collect::<Vec<_>>())
+                .unwrap_or_default();
+
+            if !tex_coords1.is_empty() {
+                tex_coords1.resize(positions.len(), Default::default());
+            }
+
+            (tex_coords0, tex_coords1)
         };
 
         let normals = {
@@ -512,6 +510,13 @@ impl Model {
         )
     }
 
+    /// Orientation of the model.
+    pub fn rotation(&self) -> Quat {
+        let rotation = self.rotation.unwrap_or_default();
+
+        Quat::from_euler(EulerRot::YXZ, rotation[0].0, rotation[1].0, rotation[2].0)
+    }
+
     /// Scaling of the model.
     pub fn scale(&self) -> Vec3 {
         self.scale
@@ -519,14 +524,20 @@ impl Model {
             .unwrap_or(Vec3::ONE)
     }
 
+    /// When `true` position-only shadow meshes will be generated.
+    ///
+    /// Note: Skinned meshes will contain position, joints, and weights.
+    pub fn shadow(&self) -> bool {
+        self.shadow.unwrap_or_default()
+    }
+
     /// The model file source.
     pub fn src(&self) -> &Path {
         self.src.as_path()
     }
 
-    fn to_model_buf(&self) -> ModelBuf {
-        let build_meshlets = self.meshlets.unwrap_or_default();
-
+    #[cfg(feature = "bake")]
+    fn to_model_buf(&self) -> gltf::Result<ModelBuf> {
         // Gather a map of the importable mesh names and the renamed name they should get
         let mut mesh_names = HashMap::<_, _>::default();
         if let Some(meshes) = &self.meshes {
@@ -546,18 +557,9 @@ impl Model {
                 .unwrap_or_default()
         );
 
-        // Watch the GLTF file for changes, only if we're in a cargo build
-        let src = self.src();
-        re_run_if_changed(&src);
-
-        // Just in case there is a GLTF bin file; also watch it for changes
-        let mut src_bin = src.to_path_buf();
-        src_bin.set_extension("bin");
-        re_run_if_changed(src_bin);
-
         // Load the mesh nodes from this GLTF file
-        let (doc, bufs, _) = import(self.src()).unwrap();
-        let doc_meshes = doc
+        let (doc, bufs, _) = import(self.src())?;
+        let meshes = doc
             .nodes()
             .filter(|node| {
                 mesh_names.is_empty()
@@ -586,7 +588,7 @@ impl Model {
                                                 bufs.get(buf.index()).map(|data| data.0.as_slice())
                                             }));
 
-                                        // Convert unsupported modes (meshopt requires triangle lists)
+                                        // Convert unsupported modes (meshopt requires triangles)
                                         match primitive.mode() {
                                             Mode::TriangleFan => {
                                                 Self::convert_triangle_fan_to_list(
@@ -617,30 +619,29 @@ impl Model {
         // Figure out which unique materials are used on these target mesh primitives and convert
         // those to a map of "Mesh Local" material index from "Gltf File" material index
         // This makes the final materials used index as 0, 1, 2, etc
-        let materials = doc_meshes
+        let materials = meshes
             .iter()
             .flat_map(|(primitives, ..)| primitives)
             .map(|(material, ..)| *material)
             .collect::<HashSet<_>>()
             .into_iter()
             .enumerate()
-            .map(|(idx, material)| (material, idx as Material))
+            .map(|(idx, material)| (material, idx as _))
             .collect::<HashMap<_, _>>();
 
         trace!(
             "Document contains {} mesh{} ({} material{})",
-            doc_meshes.len(),
-            if doc_meshes.len() == 1 { "" } else { "es" },
+            meshes.len(),
+            if meshes.len() == 1 { "" } else { "es" },
             materials.len(),
             if materials.len() == 1 { "" } else { "s" },
         );
 
-        // Build the list of meshes from this document into index and vertex buffers, and mesh structs
-        let shadow = self.shadow.unwrap_or_default();
-        let mut meshes = vec![];
-        let mut index_buf = vec![];
-        let mut vertex_buf = vec![];
-        for (mesh_primitives, node) in doc_meshes {
+        let shadow = self.shadow();
+
+        // Build a ModelBuf from the meshes in this document
+        let mut model = ModelBuf::default();
+        for (primitives, node) in meshes {
             let name = if mesh_names.is_empty() {
                 node.name().map(|name| name.to_owned())
             } else {
@@ -657,186 +658,77 @@ impl Model {
             );
 
             let bones = Self::read_bones(&node, &bufs);
-            let transform = self.transform(&node);
 
-            let mut primitives = vec![];
-            for (material, vertices) in mesh_primitives {
-                let mut levels = vec![];
-                let mut shadows = vec![];
+            // Build a MeshBuf from the primitives in this node
+            let mut mesh = Mesh::default();
+
+            if !bones.is_empty() {
+                mesh.set_bones(bones);
+            }
+
+            if let Some(name) = name {
+                mesh.set_name(name);
+            }
+
+            if let Some(transform) = self.node_transform(&node) {
+                mesh.set_transform(transform);
+            }
+
+            for (material, mut data) in primitives {
                 let material = materials.get(&material).copied().unwrap_or_default();
 
-                // Optimize the main mesh
-                let (indices, vertices_optimal, vertex_count, vertex_stride) =
-                    self.optimize_mesh(&vertices, false);
+                // Main mesh primitive
+                {
+                    let (vertex, mut vertex_buf) = data.to_vertex_buf();
+                    let vertex_stride = vertex.stride();
 
-                // Store optional shadow mesh (vertices are just positions)
-                if shadow {
-                    let (indices_shadow, vertices_shadow, vertex_count_shadow, _) =
-                        self.optimize_mesh(&vertices, true);
+                    self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride);
 
-                    // Either store the shadow mesh as-is OR store meshlets of it
-                    let meshlets = self.build_meshlets(&indices_shadow, vertex_count_shadow);
-                    let index_ty = if build_meshlets {
-                        Self::append_meshlets(&mut index_buf, &meshlets);
-                        Self::append_mesh(&mut index_buf, &mut vertex_buf, &[], vertices_shadow)
-                    } else {
-                        Self::append_mesh(
-                            &mut index_buf,
-                            &mut vertex_buf,
-                            &indices_shadow,
-                            vertices_shadow,
-                        )
-                    };
+                    let mut primitive = Primitive::new(material, &vertex_buf, vertex);
 
-                    shadows.push(Detail {
-                        index_ty,
-                        meshlets: if build_meshlets {
-                            meshlets
-                                .iter()
-                                .map(|(_, triangle_count)| Meshlet {
-                                    triangle_count: *triangle_count,
-                                })
-                                .collect()
-                        } else {
-                            vec![Meshlet {
-                                triangle_count: indices_shadow.len() as u32 / 3,
-                            }]
-                        },
-                        vertex_count: vertex_count_shadow as _,
-                    });
-                }
-
-                // Optionally calculate levels of detail: when disabled this returns empty
-                let lods = self.calculate_lods(&indices, &vertices_optimal, vertex_stride);
-
-                // Either store the mesh as-is OR store meshlets of the mesh
-                let meshlets = self.build_meshlets(&indices, vertex_count);
-                let index_ty = if build_meshlets {
-                    Self::append_meshlets(&mut index_buf, &meshlets);
-                    Self::append_mesh(&mut index_buf, &mut vertex_buf, &[], vertices_optimal)
-                } else {
-                    Self::append_mesh(&mut index_buf, &mut vertex_buf, &indices, vertices_optimal)
-                };
-
-                levels.push(Detail {
-                    index_ty,
-                    meshlets: if build_meshlets {
-                        meshlets
-                            .iter()
-                            .map(|(_, triangle_count)| Meshlet {
-                                triangle_count: *triangle_count,
-                            })
-                            .collect()
-                    } else {
-                        vec![Meshlet {
-                            triangle_count: indices.len() as u32 / 3,
-                        }]
-                    },
-                    vertex_count: vertices.positions.len() as _,
-                });
-
-                // Optimize and append the levels of detail
-                for _i_think_this_is_broken_indices in lods {
-                    let (indices, vertices_optimal, vertex_count, _) =
-                        self.optimize_mesh(&vertices, false);
-
-                    // Store optional shadow mesh (vertices are just positions)
-                    if shadow {
-                        let (indices_shadow, vertices_shadow, vertex_count_shadow, _) =
-                            self.optimize_mesh(&vertices, true);
-
-                        // Either store the shadow mesh as-is OR store meshlets of it
-                        let meshlets = self.build_meshlets(&indices_shadow, vertex_count_shadow);
-                        let index_ty = if build_meshlets {
-                            Self::append_meshlets(&mut index_buf, &meshlets);
-                            Self::append_mesh(&mut index_buf, &mut vertex_buf, &[], vertices_shadow)
-                        } else {
-                            Self::append_mesh(
-                                &mut index_buf,
-                                &mut vertex_buf,
-                                &indices_shadow,
-                                vertices_shadow,
-                            )
-                        };
-
-                        shadows.push(Detail {
-                            index_ty,
-                            meshlets: if build_meshlets {
-                                meshlets
-                                    .iter()
-                                    .map(|(_, triangle_count)| Meshlet {
-                                        triangle_count: *triangle_count,
-                                    })
-                                    .collect()
-                            } else {
-                                vec![Meshlet {
-                                    triangle_count: indices_shadow.len() as u32 / 3,
-                                }]
-                            },
-                            vertex_count: vertex_count_shadow as _,
-                        });
+                    for lod_indices in
+                        self.calculate_lods(&data.indices, &vertex_buf, vertex_stride)
+                    {
+                        primitive.push_lod(&lod_indices);
                     }
 
-                    // Either store the mesh as-is OR store meshlets of the mesh
-                    let meshlets = self.build_meshlets(&indices, vertex_count);
-                    let index_ty = if build_meshlets {
-                        Self::append_meshlets(&mut index_buf, &meshlets);
-                        Self::append_mesh(&mut index_buf, &mut vertex_buf, &[], vertices_optimal)
-                    } else {
-                        Self::append_mesh(
-                            &mut index_buf,
-                            &mut vertex_buf,
-                            &indices,
-                            vertices_optimal,
-                        )
-                    };
-
-                    levels.push(Detail {
-                        index_ty,
-                        meshlets: if build_meshlets {
-                            meshlets
-                                .iter()
-                                .map(|(_, triangle_count)| Meshlet {
-                                    triangle_count: *triangle_count,
-                                })
-                                .collect()
-                        } else {
-                            vec![Meshlet {
-                                triangle_count: indices.len() as u32 / 3,
-                            }]
-                        },
-                        vertex_count: vertices.positions.len() as _,
-                    });
+                    mesh.push_primitive(primitive);
                 }
 
-                primitives.push(Primitive {
-                    material,
-                    levels,
-                    shadows,
-                });
+                // Optional shadow mesh primitive
+                if shadow {
+                    let (vertex, mut vertex_buf) = data.to_shadow_buf();
+                    let vertex_stride = vertex.stride();
+
+                    self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride);
+
+                    let mut primitive = Primitive::new(material, &vertex_buf, vertex);
+
+                    for lod_indices in
+                        self.calculate_lods(&data.indices, &vertex_buf, vertex_stride)
+                    {
+                        primitive.push_lod(&lod_indices);
+                    }
+
+                    mesh.push_primitive(primitive);
+                }
             }
-            meshes.push(Mesh {
-                bones,
-                name,
-                primitives,
-                transform,
-            });
+
+            model.push_mesh(mesh);
         }
 
-        ModelBuf::new(meshes, index_buf, vertex_buf)
+        Ok(model)
     }
 
-    fn transform(&self, node: &Node) -> Mat4 {
-        let (translation, rotation, scale) = node.transform().decomposed();
-        let rotation = quat(rotation[0], rotation[1], rotation[2], rotation[3]);
-        let scale = vec3(scale[0], scale[1], scale[2]) * self.scale();
-        let translation = vec3(translation[0], translation[1], translation[2]) + self.offset();
+    fn re_run_if_changed(&self) {
+        // Watch the GLTF file for changes, only if we're in a cargo build
+        let src = self.src();
+        re_run_if_changed(&src);
 
-        Mat4::from_scale_rotation_translation(scale, rotation, translation)
-    }
-
-    fn vertex_data_adapter<T>(vertex_buf: &[T], vertex_stride: usize) -> VertexDataAdapter {
-        VertexDataAdapter::new(into_u8_slice(vertex_buf), vertex_stride, 0).unwrap()
+        // Just in case there is a GLTF bin file; also watch it for changes
+        let mut src_bin = src.to_path_buf();
+        src_bin.set_extension("bin");
+        re_run_if_changed(src_bin);
     }
 }
 
@@ -847,10 +739,99 @@ impl Canonicalize for Model {
 }
 
 struct VertexData {
-    indices: Vec<Index>,
-    normals: Vec<Normal>,
-    positions: Vec<Position>,
-    skin: Option<(Vec<Joint>, Vec<Weight>)>,
-    tangents: Vec<Tangent>,
-    tex_coords: Vec<TextureCoord>,
+    indices: Vec<u32>,
+    normals: Vec<[f32; 3]>,
+    positions: Vec<[f32; 3]>,
+    skin: Option<(Vec<u32>, Vec<u32>)>,
+    tangents: Vec<[f32; 4]>,
+    tex_coords: (Vec<[f32; 2]>, Vec<[f32; 2]>),
+}
+
+impl VertexData {
+    fn to_vertex_buf(&self) -> (Vertex, Vec<u8>) {
+        let mut vertex = Vertex::POSITION | Vertex::NORMAL_TANGENT_TEX_COORD0;
+
+        if self.skin.is_some() {
+            vertex |= Vertex::JOINTS_WEIGHTS;
+        }
+
+        if !self.tex_coords.1.is_empty() {
+            vertex |= Vertex::TEX_COORD1;
+        }
+
+        let vertex_stride = vertex.stride();
+        let buf_len = self.positions.len() * vertex_stride;
+        let mut buf = Vec::with_capacity(buf_len);
+
+        for idx in 0..self.positions.len() {
+            let position = self.positions[idx];
+            buf.extend_from_slice(&position[0].to_ne_bytes());
+            buf.extend_from_slice(&position[1].to_ne_bytes());
+            buf.extend_from_slice(&position[2].to_ne_bytes());
+
+            let tex_coord = self.tex_coords.0[idx];
+            buf.extend_from_slice(&tex_coord[0].to_ne_bytes());
+            buf.extend_from_slice(&tex_coord[1].to_ne_bytes());
+
+            if !self.tex_coords.1.is_empty() {
+                let tex_coord = self.tex_coords.1[idx];
+                buf.extend_from_slice(&tex_coord[0].to_ne_bytes());
+                buf.extend_from_slice(&tex_coord[1].to_ne_bytes());
+            }
+
+            let normal = self.normals[idx];
+            buf.extend_from_slice(&normal[0].to_ne_bytes());
+            buf.extend_from_slice(&normal[1].to_ne_bytes());
+            buf.extend_from_slice(&normal[2].to_ne_bytes());
+
+            let tangent = self.tangents[idx];
+            buf.extend_from_slice(&tangent[0].to_ne_bytes());
+            buf.extend_from_slice(&tangent[1].to_ne_bytes());
+            buf.extend_from_slice(&tangent[2].to_ne_bytes());
+            buf.extend_from_slice(&tangent[3].to_ne_bytes());
+
+            if let Some(skin) = &self.skin {
+                let joints = skin.0[idx];
+                buf.extend_from_slice(&joints.to_ne_bytes());
+
+                let weights = skin.1[idx];
+                buf.extend_from_slice(&weights.to_ne_bytes());
+            }
+
+            assert_eq!(buf.len() % vertex_stride, 0);
+        }
+
+        assert_eq!(buf.len(), buf_len);
+
+        (vertex, buf)
+    }
+
+    fn to_shadow_buf(&self) -> (Vertex, Vec<u8>) {
+        let mut vertex = Vertex::POSITION;
+
+        if self.skin.is_some() {
+            vertex |= Vertex::JOINTS_WEIGHTS;
+        }
+
+        let vertex_stride = vertex.stride();
+        let buf_len = self.positions.len() * vertex_stride;
+        let mut buf = Vec::with_capacity(buf_len);
+
+        for idx in 0..self.positions.len() {
+            let position = self.positions[idx];
+            buf.extend_from_slice(&position[0].to_ne_bytes());
+            buf.extend_from_slice(&position[1].to_ne_bytes());
+            buf.extend_from_slice(&position[2].to_ne_bytes());
+
+            if let Some(skin) = &self.skin {
+                let joints = skin.0[idx];
+                buf.extend_from_slice(&joints.to_ne_bytes());
+
+                let weights = skin.0[idx];
+                buf.extend_from_slice(&weights.to_ne_bytes());
+            }
+        }
+
+        (vertex, buf)
+    }
 }

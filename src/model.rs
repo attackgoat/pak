@@ -1,96 +1,308 @@
 use {
+    bitflags::bitflags,
     glam::Mat4,
     serde::{Deserialize, Serialize},
-    std::{
-        collections::HashMap,
-        fmt::{Debug, Error, Formatter},
-    },
+    std::collections::HashMap,
 };
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum IndexType {
-    // U8, requires VK_EXT_index_type_uint8 which has 41% support
+#[derive(Debug, Deserialize, Serialize)]
+enum Index {
+    U8,
     U16,
     U32,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Detail {
-    pub index_ty: IndexType,
-    pub meshlets: Vec<Meshlet>,
-    pub vertex_count: u32,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct Mesh {
-    pub bones: HashMap<String, Mat4>,
-    pub name: Option<String>,
-    pub primitives: Vec<Primitive>,
-    pub transform: Mat4,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Meshlet {
-    pub triangle_count: u32,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct ModelBuf {
+#[derive(Debug, Deserialize, Serialize)]
+pub struct IndexBuffer {
     #[serde(with = "serde_bytes")]
-    indices: Vec<u8>,
+    buf: Vec<u8>,
 
-    meshes: Vec<Mesh>,
-
-    #[serde(with = "serde_bytes")]
-    vertices: Vec<u8>,
+    ty: Index,
 }
 
-impl ModelBuf {
-    pub fn new(
-        meshes: impl Into<Vec<Mesh>>,
-        indices: impl Into<Vec<u8>>,
-        vertices: impl Into<Vec<u8>>,
-    ) -> Self {
-        let mut meshes = meshes.into();
-        let indices = indices.into();
-        let vertices = vertices.into();
+impl IndexBuffer {
+    fn new(indices: &[u32]) -> Self {
+        debug_assert!(indices.len() >= 3);
+        debug_assert_eq!(indices.len() % 3, 0);
 
-        assert!(!meshes.is_empty());
-        assert!(!indices.is_empty());
-        assert!(!vertices.is_empty());
+        let max_vertex = indices.iter().copied().max().unwrap_or_default();
 
-        // Filtering relies on meshes being sorted by name
-        meshes.sort_unstable_by(|lhs, rhs| lhs.name.cmp(&rhs.name));
+        debug_assert!(max_vertex <= u32::MAX as _);
 
-        Self {
-            indices,
-            meshes,
-            vertices,
+        if max_vertex <= u8::MAX as _ {
+            let mut buf = Vec::with_capacity(indices.len() << 1);
+            for &idx in indices {
+                buf.push(idx as u8);
+            }
+
+            Self { buf, ty: Index::U8 }
+        } else if max_vertex <= u16::MAX as _ {
+            let mut buf = Vec::with_capacity(indices.len() << 1);
+            for &idx in indices {
+                buf.extend_from_slice(&(idx as u16).to_ne_bytes());
+            }
+
+            Self {
+                buf,
+                ty: Index::U16,
+            }
+        } else {
+            let mut buf = Vec::with_capacity(indices.len() << 2);
+            for &idx in indices {
+                buf.extend_from_slice(&idx.to_ne_bytes());
+            }
+
+            Self {
+                buf,
+                ty: Index::U32,
+            }
         }
     }
 
-    pub fn indices(&self) -> &[u8] {
-        &self.indices
+    pub fn index_buffer(&self) -> Vec<u32> {
+        match self.ty {
+            Index::U8 => self.buf.iter().copied().map(|idx| idx as _).collect(),
+            Index::U16 => {
+                debug_assert_eq!(self.buf.len() % 2, 0);
+
+                let count = self.buf.len() >> 1;
+                let mut res = Vec::with_capacity(count);
+                for idx in 0..count {
+                    let idx = idx << 1;
+                    let data = &self.buf[idx..idx + 2];
+                    res.push(u16::from_ne_bytes([data[0], data[1]]) as _);
+                }
+
+                res
+            }
+            Index::U32 => {
+                debug_assert_eq!(self.buf.len() % 4, 0);
+
+                let count = self.buf.len() >> 2;
+                let mut res = Vec::with_capacity(count);
+                for idx in 0..count {
+                    let idx = idx << 2;
+                    let data = &self.buf[idx..idx + 4];
+                    res.push(u32::from_ne_bytes([data[0], data[1], data[2], data[3]]));
+                }
+
+                res
+            }
+        }
     }
 
+    pub fn index_count(&self) -> usize {
+        match self.ty {
+            Index::U8 => self.buf.len(),
+            Index::U16 => self.buf.len() >> 1,
+            Index::U32 => self.buf.len() >> 2,
+        }
+    }
+
+    pub fn triangle_count(&self) -> usize {
+        self.index_count() / 3
+    }
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct Mesh {
+    bones: HashMap<String, Mat4>,
+    name: Option<String>,
+    primitives: Vec<Primitive>,
+    transform: Option<Mat4>,
+}
+
+impl Mesh {
+    pub fn bones(&self) -> &HashMap<String, Mat4> {
+        &self.bones
+    }
+
+    pub fn name(&self) -> Option<&String> {
+        self.name.as_ref()
+    }
+
+    #[cfg(feature = "bake")]
+    pub fn push_primitive(&mut self, primitive: Primitive) {
+        self.primitives.push(primitive);
+    }
+
+    pub fn primitives(&self) -> &[Primitive] {
+        &self.primitives
+    }
+
+    #[cfg(feature = "bake")]
+    pub fn set_bones(&mut self, bones: HashMap<String, Mat4>) {
+        self.bones = bones;
+    }
+
+    #[cfg(feature = "bake")]
+    pub fn set_name(&mut self, name: impl AsRef<str>) {
+        self.name = Some(name.as_ref().to_owned());
+    }
+
+    #[cfg(feature = "bake")]
+    pub fn set_transform(&mut self, transform: Mat4) {
+        self.transform = Some(transform);
+    }
+
+    pub fn transform(&self) -> Option<Mat4> {
+        self.transform
+    }
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct ModelBuf {
+    meshes: Vec<Mesh>,
+}
+
+impl ModelBuf {
     pub fn meshes(&self) -> &[Mesh] {
         &self.meshes
     }
 
-    pub fn vertices(&self) -> &[u8] {
-        &self.vertices
+    #[cfg(feature = "bake")]
+    pub fn push_mesh(&mut self, mesh: Mesh) {
+        self.meshes.push(mesh);
     }
 }
 
-impl Debug for ModelBuf {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
-        f.write_str("ModelBuf")
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Primitive {
-    pub levels: Vec<Detail>,
-    pub material: u8,
-    pub shadows: Vec<Detail>,
+    lods: Vec<IndexBuffer>,
+    material: u8,
+
+    #[serde(with = "serde_bytes")]
+    vertex_buf: Vec<u8>,
+
+    vertex_ty: Vertex,
+}
+
+impl Primitive {
+    #[cfg(feature = "bake")]
+    pub fn new(material: u8, vertex_buf: &[u8], vertex_ty: Vertex) -> Self {
+        let res = Self {
+            lods: Default::default(),
+            material,
+            vertex_buf: vertex_buf.to_vec(),
+            vertex_ty,
+        };
+
+        debug_assert!(res.vertex_count() > 0);
+
+        res
+    }
+
+    pub fn lods(&self) -> &[IndexBuffer] {
+        &self.lods
+    }
+
+    pub fn material(&self) -> u8 {
+        self.material
+    }
+
+    #[cfg(feature = "bake")]
+    pub fn push_lod(&mut self, indices: &[u32]) {
+        self.lods.push(IndexBuffer::new(indices));
+    }
+
+    pub fn vertex(&self) -> Vertex {
+        self.vertex_ty
+    }
+
+    pub fn vertex_buffer(&self) -> &[u8] {
+        &self.vertex_buf
+    }
+
+    pub fn vertex_count(&self) -> usize {
+        let stride = self.vertex_ty.stride();
+        let buf_len = self.vertex_buf.len();
+
+        debug_assert_eq!(buf_len % stride, 0);
+
+        buf_len / stride
+    }
+}
+
+bitflags! {
+    #[derive(Deserialize, Serialize)]
+    pub struct Vertex: u8 {
+        const POSITION = 1 << 0;
+        const JOINTS_WEIGHTS = Self::POSITION.bits() | 1 << 1;
+        const NORMAL_TANGENT_TEX_COORD0 = Self::POSITION.bits() | 1 << 2;
+        const TEX_COORD1 = Self::NORMAL_TANGENT_TEX_COORD0.bits() | 1 << 3;
+    }
+}
+
+impl Vertex {
+    pub fn stride(&self) -> usize {
+        let mut res = 12;
+
+        debug_assert!(self.contains(Self::POSITION));
+
+        if self.contains(Self::JOINTS_WEIGHTS) {
+            res += 8;
+        }
+
+        if self.contains(Self::NORMAL_TANGENT_TEX_COORD0) {
+            res += 12;
+            res += 16;
+            res += 8;
+        }
+
+        if self.contains(Self::TEX_COORD1) {
+            res += 8;
+        }
+
+        res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::IndexBuffer;
+
+    #[test]
+    fn index_buffer_u8() {
+        let buf = IndexBuffer::new(&[0, 1, 2]);
+
+        assert_eq!(buf.triangle_count(), 1);
+        assert_eq!(buf.index_count(), 3);
+
+        let buf = buf.index_buffer();
+
+        assert_eq!(buf.len(), 3);
+        assert_eq!(buf[0], 0);
+        assert_eq!(buf[1], 1);
+        assert_eq!(buf[2], 2);
+    }
+
+    #[test]
+    fn index_buffer_u16() {
+        let buf = IndexBuffer::new(&[0, 1, 42_000]);
+
+        assert_eq!(buf.triangle_count(), 1);
+        assert_eq!(buf.index_count(), 3);
+
+        let buf = buf.index_buffer();
+
+        assert_eq!(buf.len(), 3);
+        assert_eq!(buf[0], 0);
+        assert_eq!(buf[1], 1);
+        assert_eq!(buf[2], 42_000);
+    }
+
+    #[test]
+    fn index_buffer_u32() {
+        let buf = IndexBuffer::new(&[0, 1, 100_000]);
+
+        assert_eq!(buf.triangle_count(), 1);
+        assert_eq!(buf.index_count(), 3);
+
+        let buf = buf.index_buffer();
+
+        assert_eq!(buf.len(), 3);
+        assert_eq!(buf[0], 0);
+        assert_eq!(buf[1], 1);
+        assert_eq!(buf[2], 100_000);
+    }
 }
