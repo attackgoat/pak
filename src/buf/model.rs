@@ -15,9 +15,17 @@ use {
         quantize_unorm, remap_index_buffer, simplify, unstripify, VertexDataAdapter,
     },
     ordered_float::OrderedFloat,
-    serde::Deserialize,
+    serde::{
+        de::{
+            value::{MapAccessDeserializer, SeqAccessDeserializer},
+            MapAccess, SeqAccess, Visitor,
+        },
+        Deserialize, Deserializer,
+    },
     std::{
         collections::HashMap,
+        fmt::Formatter,
+        num::FpCategory,
         path::{Path, PathBuf},
         u16,
     },
@@ -70,7 +78,10 @@ pub struct Model {
     optimize: Option<bool>,
     overdraw_threshold: Option<OrderedFloat<f32>>,
     rotation: Option<[OrderedFloat<f32>; 3]>,
-    scale: Option<[OrderedFloat<f32>; 3]>,
+
+    #[serde(default, deserialize_with = "Scale::de")]
+    scale: Option<Scale>,
+
     shadow: Option<bool>,
     src: PathBuf,
 
@@ -227,7 +238,7 @@ impl Model {
             Mat4::from_scale_rotation_translation(self.scale(), self.rotation(), self.offset())
                 * Mat4::from_scale_rotation_translation(scale, rotation, translation);
 
-        if transform == Mat4::IDENTITY {
+        if transform != Mat4::IDENTITY {
             Some(transform)
         } else {
             None
@@ -520,7 +531,10 @@ impl Model {
     /// Scaling of the model.
     pub fn scale(&self) -> Vec3 {
         self.scale
-            .map(|scale| vec3(scale[0].0, scale[1].0, scale[2].0))
+            .map(|scale| match scale {
+                Scale::Array(scale) => vec3(scale[0].0, scale[1].0, scale[2].0),
+                Scale::Value(scale) => vec3(scale.0, scale.0, scale.0),
+            })
             .unwrap_or(Vec3::ONE)
     }
 
@@ -735,6 +749,72 @@ impl Model {
 impl Canonicalize for Model {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
         self.src = Self::canonicalize_project_path(project_dir, src_dir, &self.src);
+    }
+}
+
+/// Three-axis scale array or a single value.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Scale {
+    /// An x-y-z scale array.
+    Array([OrderedFloat<f32>; 3]),
+
+    /// A single value.
+    Value(OrderedFloat<f32>),
+}
+
+impl Scale {
+    fn de<'de, D>(deserializer: D) -> Result<Option<Self>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ScaleVisitor;
+
+        impl<'de> Visitor<'de> for ScaleVisitor {
+            type Value = Option<Scale>;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                formatter.write_str("floating point sequence or value")
+            }
+
+            fn visit_f64<E>(self, val: f64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                let val = val as f32;
+                match val.classify() {
+                    FpCategory::Zero | FpCategory::Normal => (),
+                    _ => panic!("Unexpected scalar value"),
+                }
+
+                Ok(Some(Scale::Value(OrderedFloat(val))))
+            }
+
+            fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let val: Vec<f32> = Deserialize::deserialize(SeqAccessDeserializer::new(seq))?;
+
+                if val.len() != 3 {
+                    panic!("Unexpected sequence length");
+                }
+
+                for val in &val {
+                    match val.classify() {
+                        FpCategory::Zero | FpCategory::Normal => (),
+                        _ => panic!("Unexpected sequence value"),
+                    }
+                }
+
+                Ok(Some(Scale::Array([
+                    OrderedFloat(val[0]),
+                    OrderedFloat(val[1]),
+                    OrderedFloat(val[2]),
+                ])))
+            }
+        }
+
+        deserializer.deserialize_any(ScaleVisitor)
     }
 }
 
