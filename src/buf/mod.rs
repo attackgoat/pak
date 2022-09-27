@@ -123,11 +123,11 @@ fn parse_hex_color(val: &str) -> Option<[u8; 4]> {
         _ => return None,
     }
 
-    match len {
-        5 => res[3] = u8::from_str_radix(&val[4..5].repeat(2), 16).unwrap(),
-        9 => res[3] = u8::from_str_radix(&val[7..9], 16).unwrap(),
-        _ => unreachable!(),
-    }
+    res[3] = match len {
+        5 => u8::from_str_radix(&val[4..5].repeat(2), 16).unwrap(),
+        9 => u8::from_str_radix(&val[7..9], 16).unwrap(),
+        _ => u8::MAX,
+    };
 
     Some(res)
 }
