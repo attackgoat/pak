@@ -6,9 +6,15 @@ use serde::Deserialize;
 pub struct Content {
     compression: Option<CompressionType>,
 
-    // Brotli-specific compression parameters
+    // Brotli-specific compression parameter
+    #[serde(rename = "buffer-size")]
     buffer_size: Option<usize>,
+
+    // Brotli-specific compression parameter
     quality: Option<u32>,
+
+    // Brotli-specific compression parameter
+    #[serde(rename = "window-size")]
     window_size: Option<u32>,
 
     // Tables must follow values

@@ -267,6 +267,7 @@ pub struct Material {
     pub displacement: Option<ScalarRef>,
 
     /// Whether or not the model will be rendered with back faces also enabled.
+    #[serde(rename = "double-sided")]
     pub double_sided: Option<bool>,
 
     /// A `Bitmap` asset, `Bitmap` asset file, three channel image source file, or a single
