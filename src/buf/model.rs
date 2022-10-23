@@ -71,12 +71,25 @@ impl MeshRef {
 /// Holds a description of `.glb` or `.gltf` 3D models.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Model {
+    #[serde(rename = "bake-scale")]
+    bake_scale: Option<bool>,
+
+    #[serde(rename = "bake-tangent")]
+    bake_tangent: Option<bool>,
     lod: Option<bool>,
+
+    #[serde(rename = "lod-target-error")]
     lod_target_error: Option<OrderedFloat<f32>>,
+
+    #[serde(rename = "min-lod-triangles")]
     min_lod_triangles: Option<usize>,
+
     offset: Option<[OrderedFloat<f32>; 3]>,
     optimize: Option<bool>,
+
+    #[serde(rename = "overdraw-threshold")]
     overdraw_threshold: Option<OrderedFloat<f32>>,
+
     rotation: Option<[OrderedFloat<f32>; 3]>,
 
     #[serde(default, deserialize_with = "Scale::de")]
@@ -96,6 +109,8 @@ impl Model {
 
     pub fn new(src: impl AsRef<Path>) -> Self {
         Self {
+            bake_scale: None,
+            bake_tangent: None,
             lod: None,
             lod_target_error: None,
             meshes: None,
@@ -151,6 +166,17 @@ impl Model {
         }
 
         Ok(writer.push_model(model, key))
+    }
+
+    /// When `true` (the default) position values will be stored with scale pre-multiplied, and
+    /// scale will be stored as `1.0`.
+    pub fn bake_scale(&self) -> bool {
+        self.bake_scale.unwrap_or(true)
+    }
+
+    /// When `true` (the default) tangent values will be stored.
+    pub fn bake_tangent(&self) -> bool {
+        self.bake_tangent.unwrap_or(true)
     }
 
     fn calculate_lods(
@@ -231,7 +257,11 @@ impl Model {
     fn node_transform(&self, node: &Node) -> Option<Mat4> {
         let (translation, rotation, scale) = node.transform().decomposed();
         let rotation = quat(rotation[0], rotation[1], rotation[2], rotation[3]);
-        let scale = vec3(scale[0], scale[1], scale[2]);
+        let scale = if self.bake_scale() {
+            Vec3::ONE
+        } else {
+            vec3(scale[0], scale[1], scale[2])
+        };
         let translation = vec3(translation[0], translation[1], translation[2]);
 
         let transform =
@@ -413,58 +443,52 @@ impl Model {
             indices.unwrap_or_else(|| (u32::MAX, (0..positions.len() as u32).collect()))
         };
 
-        let tex_coords = {
-            let tex_coords0 = data
+        let textures = {
+            let mut texture0 = data
                 .read_tex_coords(0)
                 .map(|data| data.into_f32())
-                .map(|tex_coords| tex_coords.collect::<Vec<_>>());
+                .map(|tex_coords| tex_coords.collect::<Vec<_>>())
+                .unwrap_or_default();
 
-            if tex_coords0.is_none() {
-                warn!("Missing texture coordinates!");
+            if !texture0.is_empty() {
+                texture0.resize(positions.len(), Default::default());
             }
 
-            let mut tex_coords0 = tex_coords0.unwrap_or_default();
-            tex_coords0.resize(positions.len(), Default::default());
-
-            let mut tex_coords1 = data
+            let mut texture1 = data
                 .read_tex_coords(1)
                 .map(|data| data.into_f32())
                 .map(|tex_coords| tex_coords.collect::<Vec<_>>())
                 .unwrap_or_default();
 
-            if !tex_coords1.is_empty() {
-                tex_coords1.resize(positions.len(), Default::default());
+            if !texture1.is_empty() {
+                texture1.resize(positions.len(), Default::default());
             }
 
-            (tex_coords0, tex_coords1)
+            (texture0, texture1)
         };
 
         let normals = {
-            let normals = data
+            let mut normals = data
                 .read_normals()
-                .map(|normals| normals.collect::<Vec<_>>());
+                .map(|normals| normals.collect::<Vec<_>>())
+                .unwrap_or_default();
 
-            if normals.is_none() {
-                warn!("Missing normals!");
+            if !normals.is_empty() {
+                normals.resize(positions.len(), Default::default());
             }
-
-            let mut normals = normals.unwrap_or_default();
-            normals.resize(positions.len(), Default::default());
 
             normals
         };
 
         let tangents = {
-            let tangents = data
+            let mut tangents = data
                 .read_tangents()
-                .map(|tangents| tangents.collect::<Vec<_>>());
+                .map(|tangents| tangents.collect::<Vec<_>>())
+                .unwrap_or_default();
 
-            if tangents.is_none() {
-                warn!("Missing tangents!");
+            if !tangents.is_empty() {
+                tangents.resize(positions.len(), Default::default());
             }
-
-            let mut tangents = tangents.unwrap_or_default();
-            tangents.resize(positions.len(), Default::default());
 
             tangents
         };
@@ -516,7 +540,7 @@ impl Model {
                 positions,
                 skin,
                 tangents,
-                tex_coords,
+                textures,
             },
         )
     }
@@ -691,6 +715,19 @@ impl Model {
             for (material, mut data) in primitives {
                 let material = materials.get(&material).copied().unwrap_or_default();
 
+                if self.bake_scale() {
+                    let scale = self.scale();
+                    for [x, y, z] in &mut data.positions {
+                        *x *= scale.x;
+                        *y *= scale.y;
+                        *z *= scale.z;
+                    }
+                }
+
+                if !self.bake_tangent() {
+                    data.tangents.clear();
+                }
+
                 // Main mesh primitive
                 {
                     let (vertex, mut vertex_buf) = data.to_vertex_buf();
@@ -824,19 +861,31 @@ struct VertexData {
     positions: Vec<[f32; 3]>,
     skin: Option<(Vec<u32>, Vec<u32>)>,
     tangents: Vec<[f32; 4]>,
-    tex_coords: (Vec<[f32; 2]>, Vec<[f32; 2]>),
+    textures: (Vec<[f32; 2]>, Vec<[f32; 2]>),
 }
 
 impl VertexData {
     fn to_vertex_buf(&self) -> (Vertex, Vec<u8>) {
-        let mut vertex = Vertex::POSITION | Vertex::NORMAL_TANGENT_TEX_COORD0;
+        let mut vertex = Vertex::POSITION;
+
+        if !self.normals.is_empty() {
+            vertex |= Vertex::NORMAL;
+        }
 
         if self.skin.is_some() {
             vertex |= Vertex::JOINTS_WEIGHTS;
         }
 
-        if !self.tex_coords.1.is_empty() {
-            vertex |= Vertex::TEX_COORD1;
+        if !self.tangents.is_empty() {
+            vertex |= Vertex::TANGENT;
+        }
+
+        if !self.textures.0.is_empty() {
+            vertex |= Vertex::TEXTURE0;
+        }
+
+        if !self.textures.1.is_empty() {
+            vertex |= Vertex::TEXTURE1;
         }
 
         let vertex_stride = vertex.stride();
@@ -849,28 +898,36 @@ impl VertexData {
             buf.extend_from_slice(&position[1].to_ne_bytes());
             buf.extend_from_slice(&position[2].to_ne_bytes());
 
-            let tex_coord = self.tex_coords.0[idx];
-            buf.extend_from_slice(&tex_coord[0].to_ne_bytes());
-            buf.extend_from_slice(&tex_coord[1].to_ne_bytes());
-
-            if !self.tex_coords.1.is_empty() {
-                let tex_coord = self.tex_coords.1[idx];
-                buf.extend_from_slice(&tex_coord[0].to_ne_bytes());
-                buf.extend_from_slice(&tex_coord[1].to_ne_bytes());
+            if vertex.contains(Vertex::NORMAL) {
+                let normal = self.normals[idx];
+                buf.extend_from_slice(&normal[0].to_ne_bytes());
+                buf.extend_from_slice(&normal[1].to_ne_bytes());
+                buf.extend_from_slice(&normal[2].to_ne_bytes());
             }
 
-            let normal = self.normals[idx];
-            buf.extend_from_slice(&normal[0].to_ne_bytes());
-            buf.extend_from_slice(&normal[1].to_ne_bytes());
-            buf.extend_from_slice(&normal[2].to_ne_bytes());
+            if vertex.contains(Vertex::TEXTURE0) {
+                let textures = self.textures.0[idx];
+                buf.extend_from_slice(&textures[0].to_ne_bytes());
+                buf.extend_from_slice(&textures[1].to_ne_bytes());
+            }
 
-            let tangent = self.tangents[idx];
-            buf.extend_from_slice(&tangent[0].to_ne_bytes());
-            buf.extend_from_slice(&tangent[1].to_ne_bytes());
-            buf.extend_from_slice(&tangent[2].to_ne_bytes());
-            buf.extend_from_slice(&tangent[3].to_ne_bytes());
+            if vertex.contains(Vertex::TEXTURE1) {
+                let textures = self.textures.1[idx];
+                buf.extend_from_slice(&textures[0].to_ne_bytes());
+                buf.extend_from_slice(&textures[1].to_ne_bytes());
+            }
 
-            if let Some(skin) = &self.skin {
+            if vertex.contains(Vertex::TANGENT) {
+                let tangent = self.tangents[idx];
+                buf.extend_from_slice(&tangent[0].to_ne_bytes());
+                buf.extend_from_slice(&tangent[1].to_ne_bytes());
+                buf.extend_from_slice(&tangent[2].to_ne_bytes());
+                buf.extend_from_slice(&tangent[3].to_ne_bytes());
+            }
+
+            if vertex.contains(Vertex::JOINTS_WEIGHTS) {
+                let skin = self.skin.as_ref().unwrap();
+
                 let joints = skin.0[idx];
                 buf.extend_from_slice(&joints.to_ne_bytes());
 
@@ -903,7 +960,9 @@ impl VertexData {
             buf.extend_from_slice(&position[1].to_ne_bytes());
             buf.extend_from_slice(&position[2].to_ne_bytes());
 
-            if let Some(skin) = &self.skin {
+            if vertex.contains(Vertex::JOINTS_WEIGHTS) {
+                let skin = self.skin.as_ref().unwrap();
+
                 let joints = skin.0[idx];
                 buf.extend_from_slice(&joints.to_ne_bytes());
 

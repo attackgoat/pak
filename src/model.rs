@@ -91,6 +91,10 @@ impl IndexBuffer {
         }
     }
 
+    pub fn index_data(&self) -> &[u8] {
+        &self.buf
+    }
+
     pub fn index_count(&self) -> usize {
         match self.ty {
             Index::U8 => self.buf.len(),
@@ -163,6 +167,8 @@ impl ModelBuf {
     #[cfg(feature = "bake")]
     pub fn push_mesh(&mut self, mesh: Mesh) {
         self.meshes.push(mesh);
+        self.meshes
+            .sort_by(|lhs, rhs| lhs.name().cmp(&rhs.name()));
     }
 }
 
@@ -228,8 +234,10 @@ bitflags! {
     pub struct Vertex: u8 {
         const POSITION = 1 << 0;
         const JOINTS_WEIGHTS = Self::POSITION.bits() | 1 << 1;
-        const NORMAL_TANGENT_TEX_COORD0 = Self::POSITION.bits() | 1 << 2;
-        const TEX_COORD1 = Self::NORMAL_TANGENT_TEX_COORD0.bits() | 1 << 3;
+        const NORMAL = Self::POSITION.bits() | 1 << 2;
+        const TANGENT = Self::POSITION.bits() | 1 << 3;
+        const TEXTURE0 = Self::POSITION.bits() | 1 << 4;
+        const TEXTURE1 = Self::TEXTURE0.bits() | 1 << 5;
     }
 }
 
@@ -243,13 +251,21 @@ impl Vertex {
             res += 8;
         }
 
-        if self.contains(Self::NORMAL_TANGENT_TEX_COORD0) {
+        if self.contains(Self::NORMAL) {
             res += 12;
+        }
+
+
+        if self.contains(Self::TANGENT) {
             res += 16;
+        }
+
+
+        if self.contains(Self::TEXTURE0) {
             res += 8;
         }
 
-        if self.contains(Self::TEX_COORD1) {
+        if self.contains(Self::TEXTURE1) {
             res += 8;
         }
 
