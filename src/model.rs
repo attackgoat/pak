@@ -91,10 +91,6 @@ impl IndexBuffer {
         }
     }
 
-    pub fn index_data(&self) -> &[u8] {
-        &self.buf
-    }
-
     pub fn index_count(&self) -> usize {
         match self.ty {
             Index::U8 => self.buf.len(),
@@ -167,8 +163,7 @@ impl ModelBuf {
     #[cfg(feature = "bake")]
     pub fn push_mesh(&mut self, mesh: Mesh) {
         self.meshes.push(mesh);
-        self.meshes
-            .sort_by(|lhs, rhs| lhs.name().cmp(&rhs.name()));
+        self.meshes.sort_by(|lhs, rhs| lhs.name().cmp(&rhs.name()));
     }
 }
 
@@ -215,7 +210,7 @@ impl Primitive {
         self.vertex_ty
     }
 
-    pub fn vertex_buffer(&self) -> &[u8] {
+    pub fn vertex_data(&self) -> &[u8] {
         &self.vertex_buf
     }
 
@@ -255,11 +250,9 @@ impl Vertex {
             res += 12;
         }
 
-
         if self.contains(Self::TANGENT) {
             res += 16;
         }
-
 
         if self.contains(Self::TEXTURE0) {
             res += 8;
