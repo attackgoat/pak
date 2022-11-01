@@ -109,7 +109,6 @@ pub struct Mesh {
     bones: HashMap<String, Mat4>,
     name: Option<String>,
     primitives: Vec<Primitive>,
-    transform: Option<Mat4>,
 }
 
 impl Mesh {
@@ -135,14 +134,6 @@ impl Mesh {
 
     pub fn set_name(&mut self, name: impl AsRef<str>) {
         self.name = Some(name.as_ref().to_owned());
-    }
-
-    pub fn set_transform(&mut self, transform: Mat4) {
-        self.transform = Some(transform);
-    }
-
-    pub fn transform(&self) -> Option<Mat4> {
-        self.transform
     }
 }
 

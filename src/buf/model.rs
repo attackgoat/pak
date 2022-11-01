@@ -25,7 +25,7 @@ use {
         Deserialize, Deserializer,
     },
     std::{
-        collections::{HashMap, HashSet},
+        collections::{HashMap, HashSet, VecDeque},
         fmt::Formatter,
         io::{Error, ErrorKind},
         num::FpCategory,
@@ -62,9 +62,6 @@ impl MeshRef {
 /// Holds a description of `.glb` or `.gltf` 3D models.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Model {
-    #[serde(rename = "bake-scale")]
-    bake_scale: Option<bool>,
-
     #[serde(rename = "bake-tangent")]
     bake_tangent: Option<bool>,
     lod: Option<bool>,
@@ -100,7 +97,6 @@ impl Model {
 
     pub fn new(src: impl AsRef<Path>) -> Self {
         Self {
-            bake_scale: None,
             bake_tangent: None,
             lod: None,
             lod_target_error: None,
@@ -156,12 +152,6 @@ impl Model {
         }
 
         Ok(writer.push_model(model, key))
-    }
-
-    /// When `true` (the default) position values will be stored with scale pre-multiplied, and
-    /// scale will be stored as `1.0`.
-    pub fn bake_scale(&self) -> bool {
-        self.bake_scale.unwrap_or(true)
     }
 
     /// When `true` (the default) tangent values will be stored.
@@ -242,27 +232,6 @@ impl Model {
         self.min_lod_triangles
             .unwrap_or(Self::DEFAULT_LOD_MIN)
             .clamp(1, usize::MAX)
-    }
-
-    fn node_transform(&self, node: &Node) -> Option<Mat4> {
-        let (translation, rotation, scale) = node.transform().decomposed();
-        let rotation = quat(rotation[0], rotation[1], rotation[2], rotation[3]);
-        let scale = if self.bake_scale() {
-            Vec3::ONE
-        } else {
-            vec3(scale[0], scale[1], scale[2])
-        };
-        let translation = vec3(translation[0], translation[1], translation[2]);
-
-        let transform =
-            Mat4::from_scale_rotation_translation(self.scale(), self.rotation(), self.offset())
-                * Mat4::from_scale_rotation_translation(scale, rotation, translation);
-
-        if transform != Mat4::IDENTITY {
-            Some(transform)
-        } else {
-            None
-        }
     }
 
     /// Translation of the model origin.
@@ -539,7 +508,12 @@ impl Model {
     pub fn rotation(&self) -> Quat {
         let rotation = self.rotation.unwrap_or_default();
 
-        Quat::from_euler(EulerRot::YXZ, rotation[0].0, rotation[1].0, rotation[2].0)
+        Quat::from_euler(
+            EulerRot::YXZ,
+            rotation[0].0.to_radians(),
+            rotation[1].0.to_radians(),
+            rotation[2].0.to_radians(),
+        )
     }
 
     /// Scaling of the model.
@@ -586,62 +560,81 @@ impl Model {
 
         // Load the mesh nodes from this GLTF file
         let (doc, bufs, _) = import(self.src())?;
-        let meshes = doc
-            .nodes()
-            .filter(|node| {
-                mesh_names.is_empty()
-                    || node
-                        .name()
-                        .map(|name| mesh_names.contains_key(name))
-                        .unwrap_or_default()
-            })
-            .filter_map(|node| {
-                node.mesh()
-                    .map(|mesh| {
-                        (
-                            mesh.primitives()
-                                .filter_map(|primitive| match primitive.mode() {
-                                    Mode::TriangleFan | Mode::TriangleStrip | Mode::Triangles => {
-                                        trace!(
-                                            "Reading mesh \"{}\"",
-                                            node.name().unwrap_or_default()
-                                        );
+        let scene = doc
+            .default_scene()
+            .unwrap_or_else(|| doc.scenes().next().unwrap());
+        let mut nodes = VecDeque::from_iter(scene.nodes().map(|node| (node, Mat4::IDENTITY)));
+        let mut meshes = vec![];
 
-                                        // Read material and vertex data
-                                        let material =
-                                            primitive.material().index().unwrap_or_default();
-                                        let (restart_index, mut vertices) =
-                                            Self::read_vertices(primitive.reader(|buf| {
-                                                bufs.get(buf.index()).map(|data| data.0.as_slice())
-                                            }));
+        let model_transform =
+            Mat4::from_scale_rotation_translation(Vec3::ONE, self.rotation(), self.offset());
 
-                                        // Convert unsupported modes (meshopt requires triangles)
-                                        match primitive.mode() {
-                                            Mode::TriangleFan => {
-                                                Self::convert_triangle_fan_to_list(
-                                                    &mut vertices.indices,
-                                                )
-                                            }
-                                            Mode::TriangleStrip => {
-                                                Self::convert_triangle_strip_to_list(
-                                                    &mut vertices.indices,
-                                                    restart_index,
-                                                )
-                                            }
-                                            _ => (),
-                                        }
+        while !nodes.is_empty() {
+            let (node, parent_transform) = nodes.pop_front().unwrap();
 
-                                        Some((material, vertices))
+            if !mesh_names.is_empty() {
+                if let Some(name) = node.name() {
+                    if !mesh_names.contains_key(name) {
+                        continue;
+                    }
+                }
+            }
+
+            let transform = {
+                let (translation, rotation, scale) = node.transform().decomposed();
+                let translation = Vec3::from_array(translation);
+                let rotation = Quat::from_array(rotation);
+                let scale = Vec3::from_array(scale);
+
+                Mat4::from_scale_rotation_translation(scale, rotation, translation)
+                    * parent_transform
+            };
+
+            for child_node in node.children() {
+                nodes.push_back((child_node, transform));
+            }
+
+            let transform = model_transform * transform;
+
+            let primitives = node
+                .mesh()
+                .map(|mesh| {
+                    mesh.primitives()
+                        .filter_map(|primitive| match primitive.mode() {
+                            Mode::TriangleFan | Mode::TriangleStrip | Mode::Triangles => {
+                                trace!("Reading mesh \"{}\"", node.name().unwrap_or_default());
+
+                                // Read material and vertex data
+                                let material = primitive.material().index().unwrap_or_default();
+                                let (restart_index, mut vertices) =
+                                    Self::read_vertices(primitive.reader(|buf| {
+                                        bufs.get(buf.index()).map(|data| data.0.as_slice())
+                                    }));
+
+                                // Convert unsupported modes (meshopt requires triangles)
+                                match primitive.mode() {
+                                    Mode::TriangleFan => {
+                                        Self::convert_triangle_fan_to_list(&mut vertices.indices)
                                     }
-                                    _ => None,
-                                })
-                                .collect::<Vec<_>>(),
-                            node,
-                        )
-                    })
-                    .filter(|(primitives, ..)| !primitives.is_empty())
-            })
-            .collect::<Vec<_>>();
+                                    Mode::TriangleStrip => Self::convert_triangle_strip_to_list(
+                                        &mut vertices.indices,
+                                        restart_index,
+                                    ),
+                                    _ => (),
+                                }
+
+                                vertices.transform(transform);
+
+                                Some((material, vertices))
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            meshes.push((primitives, node));
+        }
 
         // Figure out which unique materials are used on these target mesh primitives and convert
         // those to a map of "Mesh Local" material index from "Gltf File" material index
@@ -697,21 +690,8 @@ impl Model {
                 mesh.set_name(name);
             }
 
-            if let Some(transform) = self.node_transform(&node) {
-                mesh.set_transform(transform);
-            }
-
             for (material, mut data) in primitives {
                 let material = materials.get(&material).copied().unwrap_or_default();
-
-                if self.bake_scale() {
-                    let scale = self.scale();
-                    for [x, y, z] in &mut data.positions {
-                        *x *= scale.x;
-                        *y *= scale.y;
-                        *z *= scale.z;
-                    }
-                }
 
                 if !self.bake_tangent() {
                     data.tangents.clear();
@@ -961,5 +941,18 @@ impl VertexData {
         }
 
         (vertex, buf)
+    }
+
+    fn transform(&mut self, transform: Mat4) {
+        let (_scale, rotation, _translation) = transform.to_scale_rotation_translation();
+
+        for position in &mut self.positions {
+            let position4 = Vec3::from_slice(position).extend(1.0);
+            position.copy_from_slice(&transform.mul_vec4(position4).to_array()[0..3]);
+        }
+
+        for normal in &mut self.normals {
+            *normal = rotation.mul_vec3(Vec3::from_array(*normal)).to_array();
+        }
     }
 }
