@@ -1,16 +1,18 @@
 use {
     super::{
         super::bitmap::{BitmapColor, BitmapFormat},
-        file_key, re_run_if_changed, BitmapBuf, BitmapId, Canonicalize,
+        file_key, re_run_if_changed, BitmapBuf, BitmapId, Canonicalize, Writer,
     },
     anyhow::Context,
     image::{buffer::ConvertBuffer, imageops::FilterType, open, DynamicImage, RgbaImage},
+    log::info,
+    parking_lot::Mutex,
     serde::Deserialize,
-    std::path::{Path, PathBuf},
+    std::{
+        path::{Path, PathBuf},
+        sync::Arc,
+    },
 };
-
-#[cfg(feature = "bake")]
-use {super::Writer, log::info, parking_lot::Mutex, std::sync::Arc};
 
 /// Holds a description of `.jpeg` and other regular images.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
@@ -46,7 +48,6 @@ impl Bitmap {
         self
     }
 
-    #[cfg(feature = "bake")]
     /// Reads and processes image source files into an existing `.pak` file buffer.
     pub fn bake(
         &mut self,
@@ -56,7 +57,6 @@ impl Bitmap {
         self.bake_from_path(writer, project_dir, None as Option<&'static str>)
     }
 
-    #[cfg(feature = "bake")]
     /// Reads and processes image source files into an existing `.pak` file buffer.
     pub fn bake_from_path(
         &mut self,

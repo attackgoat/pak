@@ -1,4 +1,4 @@
-use pak::{buf::PakBuf, Pak};
+use pak::PakBuf;
 
 fn main() -> anyhow::Result<()> {
     // Set RUST_LOG=trace in your environment variables to see log output

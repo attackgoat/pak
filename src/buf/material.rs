@@ -3,11 +3,12 @@ use {
         super::bitmap::{BitmapBuf, BitmapColor, BitmapFormat},
         bitmap::Bitmap,
         file_key, is_toml, parse_hex_color, parse_hex_scalar, Asset, Canonicalize, MaterialId,
-        MaterialInfo,
+        MaterialInfo, Writer,
     },
     anyhow::Context as _,
     image::{imageops::FilterType, DynamicImage, GenericImageView, GrayImage},
     log::info,
+    parking_lot::Mutex,
     serde::{
         de::{
             value::{MapAccessDeserializer, SeqAccessDeserializer},
@@ -19,11 +20,10 @@ use {
         fmt::Formatter,
         num::FpCategory,
         path::{Path, PathBuf},
+        sync::Arc,
     },
+    tokio::runtime::Runtime,
 };
-
-#[cfg(feature = "bake")]
-use {super::Writer, parking_lot::Mutex, std::sync::Arc, tokio::runtime::Runtime};
 
 /// A reference to a `Bitmap` asset, `Bitmap` asset file, three or four channel image source file,
 /// or single four channel color.
@@ -306,7 +306,6 @@ impl Material {
     }
 
     /// Reads and processes 3D model material source files into an existing `.pak` file buffer.
-    #[cfg(feature = "bake")]
     pub(super) fn bake(
         &mut self,
         rt: &Runtime,
@@ -342,7 +341,6 @@ impl Material {
         Ok(writer.push_material(material_info, key))
     }
 
-    #[cfg(feature = "bake")]
     fn as_material_info(
         &mut self,
         rt: &Runtime,

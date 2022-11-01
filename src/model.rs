@@ -121,7 +121,6 @@ impl Mesh {
         self.name.as_ref()
     }
 
-    #[cfg(feature = "bake")]
     pub fn push_primitive(&mut self, primitive: Primitive) {
         self.primitives.push(primitive);
     }
@@ -130,17 +129,14 @@ impl Mesh {
         &self.primitives
     }
 
-    #[cfg(feature = "bake")]
     pub fn set_bones(&mut self, bones: HashMap<String, Mat4>) {
         self.bones = bones;
     }
 
-    #[cfg(feature = "bake")]
     pub fn set_name(&mut self, name: impl AsRef<str>) {
         self.name = Some(name.as_ref().to_owned());
     }
 
-    #[cfg(feature = "bake")]
     pub fn set_transform(&mut self, transform: Mat4) {
         self.transform = Some(transform);
     }
@@ -160,7 +156,6 @@ impl ModelBuf {
         &self.meshes
     }
 
-    #[cfg(feature = "bake")]
     pub fn push_mesh(&mut self, mesh: Mesh) {
         self.meshes.push(mesh);
         self.meshes.sort_by(|lhs, rhs| lhs.name().cmp(&rhs.name()));
@@ -179,7 +174,6 @@ pub struct Primitive {
 }
 
 impl Primitive {
-    #[cfg(feature = "bake")]
     pub fn new(material: u8, vertex_buf: &[u8], vertex_ty: Vertex) -> Self {
         let res = Self {
             lods: Default::default(),
@@ -201,7 +195,6 @@ impl Primitive {
         self.material
     }
 
-    #[cfg(feature = "bake")]
     pub fn push_lod(&mut self, indices: &[u32]) {
         self.lods.push(IndexBuffer::new(indices));
     }

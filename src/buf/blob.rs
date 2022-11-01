@@ -1,24 +1,21 @@
 use {
     super::{
-        super::bitmap::BitmapFormat, bitmap::Bitmap, file_key, re_run_if_changed, Asset, BitmapBuf,
-        BitmapFontBuf, BitmapFontId, BlobId, Canonicalize,
+        super::bitmap::{BitmapColor, BitmapFormat},
+        bitmap::Bitmap,
+        file_key, re_run_if_changed, Asset, BitmapBuf, BitmapFontBuf, BitmapFontId, BlobId,
+        Canonicalize, Writer,
     },
+    bmfont::{BMFont, OrdinateOrientation},
     log::info,
+    parking_lot::Mutex,
     serde::Deserialize,
     std::{
         fs::read_to_string,
         fs::File,
         io::{Cursor, Error, Read},
         path::{Path, PathBuf},
+        sync::Arc,
     },
-};
-
-#[cfg(feature = "bake")]
-use {
-    super::{super::bitmap::BitmapColor, Writer},
-    bmfont::{BMFont, OrdinateOrientation},
-    parking_lot::Mutex,
-    std::sync::Arc,
 };
 
 /// Holds a description of any generic file.
@@ -30,7 +27,6 @@ pub struct Blob {
 
 impl Blob {
     /// Reads and processes arbitrary binary source files into an existing `.pak` file buffer.
-    #[cfg(feature = "bake")]
     pub fn bake(
         &self,
         writer: &Arc<Mutex<Writer>>,
@@ -55,7 +51,6 @@ impl Blob {
     }
 
     /// Reads and processes bitmapped font source files into an existing `.pak` file buffer.
-    #[cfg(feature = "bake")]
     pub(super) fn bake_bitmap_font(
         &self,
         writer: &Arc<Mutex<Writer>>,

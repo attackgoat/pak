@@ -1,20 +1,22 @@
 use {
     super::{
         super::model::{Mesh, ModelBuf, Primitive, Vertex},
-        re_run_if_changed, Canonicalize,
+        file_key, re_run_if_changed, Canonicalize, ModelId, Writer,
     },
     glam::{quat, vec3, EulerRot, Mat4, Quat, Vec3},
+    gltf::import,
     gltf::{
         buffer::Data,
         mesh::{util::ReadIndices, Mode, Reader},
         Buffer, Node,
     },
-    log::warn,
+    log::{info, trace, warn},
     meshopt::{
         generate_vertex_remap, optimize_overdraw_in_place, optimize_vertex_cache_in_place,
         quantize_unorm, remap_index_buffer, simplify, unstripify, VertexDataAdapter,
     },
     ordered_float::OrderedFloat,
+    parking_lot::Mutex,
     serde::{
         de::{
             value::{MapAccessDeserializer, SeqAccessDeserializer},
@@ -23,24 +25,13 @@ use {
         Deserialize, Deserializer,
     },
     std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         fmt::Formatter,
+        io::{Error, ErrorKind},
         num::FpCategory,
         path::{Path, PathBuf},
-        u16,
-    },
-};
-
-#[cfg(feature = "bake")]
-use {
-    super::{file_key, ModelId, Writer},
-    gltf::import,
-    log::{info, trace},
-    parking_lot::Mutex,
-    std::{
-        collections::HashSet,
-        io::{Error, ErrorKind},
         sync::Arc,
+        u16,
     },
 };
 
@@ -126,7 +117,6 @@ impl Model {
     }
 
     /// Reads and processes 3D model source files into an existing `.pak` file buffer.
-    #[cfg(feature = "bake")]
     pub fn bake(
         &self,
         writer: &Arc<Mutex<Writer>>,
@@ -574,7 +564,6 @@ impl Model {
         self.src.as_path()
     }
 
-    #[cfg(feature = "bake")]
     fn to_model_buf(&self) -> gltf::Result<ModelBuf> {
         // Gather a map of the importable mesh names and the renamed name they should get
         let mut mesh_names = HashMap::<_, _>::default();

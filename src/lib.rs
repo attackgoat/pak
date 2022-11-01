@@ -3,20 +3,131 @@
 pub mod anim;
 pub mod bitmap;
 pub mod bitmap_font;
-pub mod buf;
 pub mod compression;
 pub mod model;
 pub mod scene;
 
+#[cfg(feature = "bake")]
+pub mod buf;
+
 use {
     self::{
-        anim::AnimationBuf, bitmap::BitmapBuf, bitmap_font::BitmapFontBuf, model::ModelBuf,
-        scene::SceneBuf,
+        anim::AnimationBuf, bitmap::BitmapBuf, bitmap_font::BitmapFontBuf,
+        compression::Compression, model::ModelBuf, scene::SceneBuf,
     },
+    log::{trace, warn},
     paste::paste,
-    serde::{Deserialize, Serialize},
-    std::io::{Error, ErrorKind},
+    serde::{de::DeserializeOwned, Deserialize, Serialize},
+    std::{
+        collections::HashMap,
+        fmt::{Debug, Formatter},
+        fs::File,
+        io::{BufReader, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},
+        ops::Range,
+        path::{Path, PathBuf},
+    },
 };
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct Data {
+    // These fields are handled by bincode serialization as-is
+    ids: HashMap<String, Id>,
+    materials: Vec<MaterialInfo>,
+
+    // These fields are loaded on demand
+    anims: Vec<DataRef<AnimationBuf>>,
+    bitmap_fonts: Vec<DataRef<BitmapFontBuf>>,
+    bitmaps: Vec<DataRef<BitmapBuf>>,
+    blobs: Vec<DataRef<Vec<u8>>>,
+    models: Vec<DataRef<ModelBuf>>,
+    scenes: Vec<DataRef<SceneBuf>>,
+}
+
+#[derive(Deserialize, PartialEq, Serialize)]
+enum DataRef<T> {
+    Data(T),
+    Ref(Range<u32>),
+}
+
+impl<T> DataRef<T> {
+    fn as_data(&self) -> Option<&T> {
+        match self {
+            Self::Data(ref t) => Some(t),
+            _ => {
+                warn!("Expected data but found position and length");
+
+                None
+            }
+        }
+    }
+
+    fn pos_len(&self) -> Option<(u64, usize)> {
+        match self {
+            Self::Ref(range) => Some((range.start as _, (range.end - range.start) as _)),
+            _ => {
+                warn!("Expected position and length but found data");
+
+                None
+            }
+        }
+    }
+}
+
+impl<T> DataRef<T>
+where
+    T: Serialize,
+{
+    fn serialize(&self) -> Result<Vec<u8>, Error> {
+        let mut buf = vec![];
+        bincode::serialize_into(&mut buf, &self.as_data().unwrap())
+            .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+
+        Ok(buf)
+    }
+}
+
+impl<T> Debug for DataRef<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Data(_) => "Data",
+            Self::Ref(_) => "DataRef",
+        })
+    }
+}
+
+macro_rules! id_enum {
+    ($($variant:ident),*) => {
+        paste::paste! {
+            #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+            enum Id {
+                $(
+                    $variant([<$variant Id>]),
+                )*
+            }
+
+            impl Id {
+                $(
+                    fn [<as_ $variant:snake>](&self) -> Option<[<$variant Id>]> {
+                        match self {
+                            Self::$variant(id) => Some(*id),
+                            _ => None,
+                        }
+                    }
+                )*
+            }
+
+            $(
+                impl From<[<$variant Id>]> for Id {
+                    fn from(id: [<$variant Id>]) -> Self {
+                        Self::$variant(id)
+                    }
+                }
+            )*
+        }
+    };
+}
+
+id_enum!(Animation, Bitmap, BitmapFont, Blob, Material, Model, Scene);
 
 macro_rules! id_struct {
     ($name: ident) => {
@@ -158,5 +269,235 @@ pub trait Pak {
         } else {
             Err(Error::from(ErrorKind::InvalidInput))
         }
+    }
+}
+
+/// Main serialization container for the `.pak` file format.
+#[derive(Debug)]
+pub struct PakBuf {
+    compression: Option<Compression>,
+    data: Data,
+    reader: Box<dyn Stream>,
+}
+
+impl PakBuf {
+    fn deserialize<T>(&mut self, pos: u64, len: usize) -> Result<T, Error>
+    where
+        T: DeserializeOwned,
+    {
+        trace!("Read data: {len} bytes");
+
+        // Create a zero-filled buffer
+        let mut buf = vec![0; len];
+
+        // Read the data into our buffer
+        self.reader.seek(SeekFrom::Start(pos))?;
+        self.reader.read_exact(&mut buf)?;
+        let data = buf.as_slice();
+
+        // Optionally create a compression reader (or just use the one we have)
+        if let Some(compressed) = self.compression {
+            bincode::deserialize_from(compressed.new_reader(data))
+        } else {
+            bincode::deserialize_from(data)
+        }
+        .map_err(|_| Error::from(ErrorKind::InvalidData))
+    }
+
+    pub fn from_stream(mut stream: impl Stream + 'static) -> Result<Self, Error> {
+        // Read the number of bytes we must 'skip' in order to read the main data
+        let skip = {
+            let mut buf: [u8; 4] = Default::default();
+            stream.read_exact(&mut buf)?;
+            u32::from_ne_bytes(buf)
+        };
+        let compression: Option<Compression> = bincode::deserialize_from(&mut stream)
+            .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+
+        // Read the compressed main data
+        stream.seek(SeekFrom::Start(skip as _))?;
+        let data: Data = {
+            let mut compressed = if let Some(compressed) = compression {
+                compressed.new_reader(&mut stream)
+            } else {
+                Box::new(&mut stream)
+            };
+            bincode::deserialize_from(&mut compressed)
+                .map_err(|_| Error::from(ErrorKind::InvalidData))?
+        };
+
+        trace!(
+            "Read header: {} bytes ({} keys)",
+            stream.stream_position()? - skip as u64,
+            data.ids.len()
+        );
+
+        Ok(Self {
+            compression,
+            data,
+            reader: Box::new(stream),
+        })
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &str> {
+        self.data.ids.keys().map(|key| key.as_str())
+    }
+
+    /// Opens the given path and decodes a `Pak`.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
+        let path = path.as_ref().to_path_buf();
+        let file = File::open(&path)?;
+        let buf = BufReader::new(file);
+
+        Self::from_stream(PakFile { buf, path })
+    }
+}
+
+impl Pak for PakBuf {
+    /// Gets the pak-unique `AnimationId` corresponding to the given key, if one exsits.
+    fn animation_id(&self, key: impl AsRef<str>) -> Option<AnimationId> {
+        self.data
+            .ids
+            .get(key.as_ref())
+            .and_then(|id| id.as_animation())
+    }
+
+    /// Gets the pak-unique `BitmapFontId` corresponding to the given key, if one exsits.
+    fn bitmap_font_id(&self, key: impl AsRef<str>) -> Option<BitmapFontId> {
+        self.data
+            .ids
+            .get(key.as_ref())
+            .and_then(|id| id.as_bitmap_font())
+    }
+
+    /// Gets the pak-unique `BitmapId` corresponding to the given key, if one exsits.
+    fn bitmap_id(&self, key: impl AsRef<str>) -> Option<BitmapId> {
+        self.data
+            .ids
+            .get(key.as_ref())
+            .and_then(|id| id.as_bitmap())
+    }
+
+    /// Gets the pak-unique `BlobId` corresponding to the given key, if one exsits.
+    fn blob_id(&self, key: impl AsRef<str>) -> Option<BlobId> {
+        self.data.ids.get(key.as_ref()).and_then(|id| id.as_blob())
+    }
+
+    /// Gets the pak-unique `MaterialId` corresponding to the given key, if one exsits.
+    fn material_id(&self, key: impl AsRef<str>) -> Option<MaterialId> {
+        self.data
+            .ids
+            .get(key.as_ref())
+            .and_then(|id| id.as_material())
+    }
+
+    /// Gets the pak-unique `ModelId` corresponding to the given key, if one exsits.
+    fn model_id(&self, key: impl AsRef<str>) -> Option<ModelId> {
+        self.data.ids.get(key.as_ref()).and_then(|id| id.as_model())
+    }
+
+    /// Gets the pak-unique `SceneId` corresponding to the given key, if one exsits.
+    fn scene_id(&mut self, key: impl AsRef<str>) -> Option<SceneId> {
+        self.data.ids.get(key.as_ref()).and_then(|id| id.as_scene())
+    }
+
+    /// Gets the corresponding animation for the given ID.
+    fn read_animation_id(&mut self, id: AnimationId) -> Result<AnimationBuf, Error> {
+        let (pos, len) = self.data.anims[id.0]
+            .pos_len()
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
+        self.deserialize(pos, len)
+    }
+
+    /// Reads the corresponding bitmap for the given ID.
+    fn read_bitmap_font_id(&mut self, id: BitmapFontId) -> Result<BitmapFontBuf, Error> {
+        let (pos, len) = self.data.bitmap_fonts[id.0]
+            .pos_len()
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
+        self.deserialize(pos, len)
+    }
+
+    /// Reads the corresponding bitmap for the given ID.
+    fn read_bitmap_id(&mut self, id: BitmapId) -> Result<BitmapBuf, Error> {
+        let (pos, len) = self.data.bitmaps[id.0]
+            .pos_len()
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
+        self.deserialize(pos, len)
+    }
+
+    /// Gets the corresponding blob for the given ID.
+    fn read_blob_id(&mut self, id: BlobId) -> Result<Vec<u8>, Error> {
+        let (pos, len) = self.data.blobs[id.0]
+            .pos_len()
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
+        self.deserialize(pos, len)
+    }
+
+    /// Gets the material for the given ID.
+    fn read_material_id(&self, id: MaterialId) -> Option<MaterialInfo> {
+        self.data.materials.get(id.0).copied()
+    }
+
+    /// Gets the corresponding animation for the given ID.
+    fn read_model_id(&mut self, id: ModelId) -> Result<ModelBuf, Error> {
+        let (pos, len) = self.data.models[id.0]
+            .pos_len()
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
+        self.deserialize(pos, len)
+    }
+
+    /// Gets the corresponding animation for the given ID.
+    fn read_scene_id(&mut self, id: SceneId) -> Result<SceneBuf, Error> {
+        let (pos, len) = self.data.scenes[id.0]
+            .pos_len()
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
+        self.deserialize(pos, len)
+    }
+}
+
+#[derive(Debug)]
+struct PakFile {
+    buf: BufReader<File>,
+    path: PathBuf,
+}
+
+impl From<&'static [u8]> for PakBuf {
+    fn from(data: &'static [u8]) -> Self {
+        // This is infalliable for the given input so unwrap is aok
+        Self::from_stream(Cursor::new(data)).unwrap()
+    }
+}
+
+pub trait Stream: Debug + Read + Seek + Send {
+    fn open(&self) -> Result<Box<dyn Stream>, Error>;
+}
+
+impl Stream for PakFile {
+    fn open(&self) -> Result<Box<dyn Stream>, Error> {
+        let file = File::open(&self.path)?;
+        let buf = BufReader::new(file);
+
+        Ok(Box::new(PakFile {
+            buf,
+            path: self.path.clone(),
+        }))
+    }
+}
+
+impl Read for PakFile {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.buf.read(buf)
+    }
+}
+
+impl Seek for PakFile {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.buf.seek(pos)
+    }
+}
+
+impl Stream for Cursor<&'static [u8]> {
+    fn open(&self) -> Result<Box<dyn Stream>, Error> {
+        Ok(Box::new(Cursor::new(*self.get_ref())))
     }
 }

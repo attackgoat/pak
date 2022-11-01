@@ -1,11 +1,12 @@
 use {
     super::{
         super::scene::SceneRefData, file_key, is_toml, material::Material, model::Model, parent,
-        Asset, Canonicalize, SceneBuf, SceneId,
+        Asset, Canonicalize, SceneBuf, SceneId, Writer,
     },
     glam::{vec3, EulerRot, Quat, Vec3},
     log::info,
     ordered_float::OrderedFloat,
+    parking_lot::Mutex,
     serde::{
         de::{value::MapAccessDeserializer, MapAccess, Visitor},
         Deserialize, Deserializer,
@@ -16,11 +17,10 @@ use {
         io::Error,
         marker::PhantomData,
         path::{Path, PathBuf},
+        sync::Arc,
     },
+    tokio::runtime::Runtime,
 };
-
-#[cfg(feature = "bake")]
-use {super::Writer, parking_lot::Mutex, std::sync::Arc, tokio::runtime::Runtime};
 
 /// A reference to a model asset or model source file.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -107,7 +107,6 @@ pub struct Scene {
 
 impl Scene {
     /// Reads and processes scene source files into an existing `.pak` file buffer.
-    #[cfg(feature = "bake")]
     pub fn bake(
         &self,
         rt: &Runtime,

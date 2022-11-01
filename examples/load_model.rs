@@ -1,4 +1,4 @@
-use pak::{buf::PakBuf, Pak};
+use pak::{Pak, PakBuf};
 
 // A .pak file "ModelBuf" has the following basic structure:
 //   Model -> Mesh[] -> Primitive[] -> LevelOfDetail[] -> Meshlet[]

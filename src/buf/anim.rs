@@ -1,7 +1,7 @@
 use {
     super::{
         super::anim::{AnimationBuf, Channel},
-        file_key, AnimationId, Asset, Canonicalize,
+        file_key, AnimationId, Asset, Canonicalize, Writer,
     },
     glam::{quat, Quat, Vec3},
     gltf::{
@@ -19,9 +19,6 @@ use {
     },
 };
 
-#[cfg(feature = "bake")]
-use super::Writer;
-
 /// Holds a description of `.glb` or `.gltf` model animations.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Animation {
@@ -33,7 +30,6 @@ pub struct Animation {
 }
 
 impl Animation {
-    #[cfg(feature = "bake")]
     /// Reads and processes animation source files into an existing `.pak` file buffer.
     #[allow(unused)]
     pub(super) fn bake(

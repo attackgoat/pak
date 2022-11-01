@@ -1,9 +1,10 @@
 use {
     super::{
         super::compression::Compression, AnimationBuf, AnimationId, Asset, BitmapBuf,
-        BitmapFontBuf, BitmapFontId, BitmapId, BlobId, Data, DataRef, Id, MaterialId, MaterialInfo,
-        ModelBuf, ModelId, SceneBuf, SceneId,
+        BitmapFontBuf, BitmapFontId, BitmapId, BlobId, MaterialId, MaterialInfo, ModelBuf, ModelId,
+        SceneBuf, SceneId,
     },
+    crate::{Data, DataRef, Id},
     log::trace,
     serde::Serialize,
     std::{
