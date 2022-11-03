@@ -182,24 +182,22 @@ trait Canonicalize {
             }
 
             temp.canonicalize().unwrap_or_else(|_| {
-                error!(
-                    "Unable to canonicalize {} with {} ({})",
+                panic!(
+                    "{} not found, unable to canonicalize absolute path using {} with {}",
+                    temp.display(),
                     project_dir.as_ref().display(),
                     src.as_ref().display(),
-                    temp.display(),
                 );
-                panic!("{} not found", temp.display());
             })
         } else {
             let temp = src_dir.as_ref().join(&src);
             temp.canonicalize().unwrap_or_else(|_| {
-                error!(
-                    "Unable to canonicalize {} with {} ({})",
+                panic!(
+                    "{} not found, unable to canonicalize relative path using {} with {}",
+                    temp.display(),
                     src_dir.as_ref().display(),
                     src.as_ref().display(),
-                    temp.display(),
                 );
-                panic!("{} not found", temp.display());
             })
         }
     }

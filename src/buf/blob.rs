@@ -32,8 +32,10 @@ impl Blob {
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
     ) -> anyhow::Result<BlobId> {
+        let asset = self.clone().into();
+
         // Early-out if we have already baked this blob
-        if let Some(id) = writer.lock().ctx.get(&Asset::Blob(self.clone())) {
+        if let Some(id) = writer.lock().ctx.get(&asset) {
             return Ok(id.as_blob().unwrap());
         }
 
@@ -47,7 +49,15 @@ impl Blob {
         let mut value = vec![];
         file.read_to_end(&mut value).unwrap();
 
-        Ok(writer.lock().push_blob(value, Some(key)))
+        let mut writer = writer.lock();
+        if let Some(id) = writer.ctx.get(&asset) {
+            return Ok(id.as_blob().unwrap());
+        }
+
+        let id = writer.push_blob(value, Some(key));
+        writer.ctx.insert(asset, id.into());
+
+        Ok(id)
     }
 
     /// Reads and processes bitmapped font source files into an existing `.pak` file buffer.
@@ -57,8 +67,10 @@ impl Blob {
         project_dir: impl AsRef<Path>,
         path: impl AsRef<Path>,
     ) -> Result<BitmapFontId, Error> {
+        let asset = self.clone().into();
+
         // Early-out if we have already baked this blob
-        if let Some(id) = writer.lock().ctx.get(&Asset::Blob(self.clone())) {
+        if let Some(id) = writer.lock().ctx.get(&asset) {
             return Ok(id.as_bitmap_font().unwrap());
         }
 
@@ -78,16 +90,16 @@ impl Blob {
                 let path = def_parent.join(page);
 
                 // Bake the pixels
-                Bitmap::read_pixels(path, BitmapFormat::Rgb, None)
+                Bitmap::read_pixels(path, BitmapFormat::Rgba, None)
             })
             .filter(|res| res.is_ok()) // TODO: Horrible!
             .map(|res| res.unwrap())
             .map(|(width, pixels)| {
                 let mut better_pixels = Vec::with_capacity(pixels.len());
-                for y in 0..pixels.len() / 3 / width as usize {
+                for y in 0..pixels.len() / 4 / width as usize {
                     for x in 0..width as usize {
-                        let g = pixels[y * width as usize * 3 + x * 3 + 1];
-                        let r = pixels[y * width as usize * 3 + x * 3];
+                        let g = pixels[y * width as usize * 4 + x * 4 + 1];
+                        let r = pixels[y * width as usize * 4 + x * 4 + 3];
                         if 0xff == r {
                             better_pixels.push(0xff);
                             better_pixels.push(0x00);
@@ -128,9 +140,15 @@ impl Blob {
             })
             .collect();
 
-        Ok(writer
-            .lock()
-            .push_bitmap_font(BitmapFontBuf::new(def_file, page_bufs), Some(key)))
+        let mut writer = writer.lock();
+        if let Some(id) = writer.ctx.get(&asset) {
+            return Ok(id.as_bitmap_font().unwrap());
+        }
+
+        let id = writer.push_bitmap_font(BitmapFontBuf::new(def_file, page_bufs), Some(key));
+        writer.ctx.insert(asset, id.into());
+
+        Ok(id)
     }
 }
 

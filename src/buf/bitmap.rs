@@ -109,7 +109,10 @@ impl Bitmap {
             return Ok(id.as_bitmap().unwrap());
         }
 
-        Ok(writer.push_bitmap(bitmap, key))
+        let id = writer.push_bitmap(bitmap, key);
+        writer.ctx.insert(asset, id.into());
+
+        Ok(id)
     }
 
     pub fn as_bitmap_buf(&self) -> anyhow::Result<BitmapBuf> {

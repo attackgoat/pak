@@ -338,7 +338,10 @@ impl Material {
             return Ok(id.as_material().unwrap());
         }
 
-        Ok(writer.push_material(material_info, key))
+        let id = writer.push_material(material_info, key);
+        writer.ctx.insert(asset, id.into());
+
+        Ok(id)
     }
 
     fn as_material_info(

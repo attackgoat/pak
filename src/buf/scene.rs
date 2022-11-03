@@ -3,6 +3,7 @@ use {
         super::scene::SceneRefData, file_key, is_toml, material::Material, model::Model, parent,
         Asset, Canonicalize, SceneBuf, SceneId, Writer,
     },
+    anyhow::Context,
     glam::{vec3, EulerRot, Quat, Vec3},
     log::info,
     ordered_float::OrderedFloat,
@@ -113,7 +114,7 @@ impl Scene {
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
         path: impl AsRef<Path>,
-    ) -> Result<SceneId, Error> {
+    ) -> anyhow::Result<SceneId> {
         // Early-out if we have already baked this scene
         let asset = self.clone().into();
         if let Some(h) = writer.lock().ctx.get(&asset) {
@@ -142,15 +143,18 @@ impl Scene {
                 .map(|material| match material {
                     AssetRef::Asset(material) => {
                         // Material asset specified inline
-                        let mut material = material.clone();
-                        material.canonicalize(&project_dir, &src_dir);
+                        let material = material.clone();
                         (None, material)
                     }
                     AssetRef::Path(src) => {
-                        let src = Material::canonicalize_project_path(&project_dir, &src_dir, src);
                         if is_toml(&src) {
                             // Asset file reference
-                            let mut material = Asset::read(&src).unwrap().into_material().unwrap(); // TODO: UNWRAP!
+                            let mut material = Asset::read(&src)
+                                .context("Reading material asset")
+                                .expect("Unable to read material asset")
+                                .into_material()
+                                .expect("Not a material");
+                            let src_dir = parent(src);
                             material.canonicalize(&project_dir, &src_dir);
                             (Some(src), material)
                         } else {
@@ -170,15 +174,18 @@ impl Scene {
                 .map(|model| match model {
                     AssetRef::Asset(model) => {
                         // Model asset specified inline
-                        let mut model = model.clone();
-                        model.canonicalize(&project_dir, &src_dir);
+                        let model = model.clone();
                         (None, model)
                     }
                     AssetRef::Path(src) => {
-                        let src = Model::canonicalize_project_path(&project_dir, &src_dir, src);
                         if is_toml(&src) {
                             // Asset file reference
-                            let mut model = Asset::read(&src).unwrap().into_model().expect("model");
+                            let mut model = Asset::read(&src)
+                                .context("Reading model asset")
+                                .expect("Unable to read model asset")
+                                .into_model()
+                                .expect("Not a model");
+                            let src_dir = parent(src);
                             model.canonicalize(&project_dir, &src_dir);
                             (Some(src), model)
                         } else {
@@ -206,7 +213,10 @@ impl Scene {
             return Ok(h.as_scene().unwrap());
         }
 
-        Ok(writer.push_scene(scene, key))
+        let id = writer.push_scene(scene, key);
+        writer.ctx.insert(asset, id.into());
+
+        Ok(id)
     }
 
     /// Individual references within a scene.

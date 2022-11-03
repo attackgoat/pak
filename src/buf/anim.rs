@@ -12,10 +12,12 @@ use {
         import,
     },
     log::{info, warn},
+    parking_lot::Mutex,
     serde::Deserialize,
     std::{
         collections::{hash_map::RandomState, HashSet},
         path::{Path, PathBuf},
+        sync::Arc,
     },
 };
 
@@ -34,16 +36,18 @@ impl Animation {
     #[allow(unused)]
     pub(super) fn bake(
         &self,
-        writer: &mut Writer,
+        writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
         path: impl AsRef<Path>,
     ) -> anyhow::Result<AnimationId> {
-        if let Some(h) = writer.ctx.get(&self.clone().into()) {
+        let asset = self.clone().into();
+
+        if let Some(h) = writer.lock().ctx.get(&asset) {
             return Ok(h.as_animation().unwrap());
         }
 
         let key = file_key(&project_dir, &path);
-        info!("Baking animation: {}", key);
+        info!("Baking animation: {}", &key);
 
         //let src_dir = src.as_ref().parent().unwrap();
         let src = self.src(); // TODO get_path(&dir, asset.src(), project_dir);
@@ -161,8 +165,15 @@ impl Animation {
         // Sort channels by name (they are all rotations)
         channels.sort_unstable_by(|a, b| a.target().cmp(b.target()));
 
-        // Pak this asset
-        Ok(writer.push_animation(AnimationBuf { channels }, Some(key)))
+        let mut writer = writer.lock();
+        if let Some(id) = writer.ctx.get(&asset) {
+            return Ok(id.as_animation().unwrap());
+        }
+
+        let id = writer.push_animation(AnimationBuf { channels }, Some(key));
+        writer.ctx.insert(asset, id.into());
+
+        Ok(id)
     }
 
     /// The bones which were excluded when reading the animation file.

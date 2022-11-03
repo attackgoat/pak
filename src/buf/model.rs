@@ -1,3 +1,5 @@
+use anyhow::Context;
+
 use {
     super::{
         super::model::{Mesh, ModelBuf, Primitive, Vertex},
@@ -118,9 +120,10 @@ impl Model {
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
         path: Option<impl AsRef<Path>>,
-    ) -> Result<ModelId, Error> {
+    ) -> anyhow::Result<ModelId> {
         // Early-out if we have already baked this model
         let asset = self.clone().into();
+
         if let Some(id) = writer.lock().ctx.get(&asset) {
             return Ok(id.as_model().unwrap());
         }
@@ -143,7 +146,8 @@ impl Model {
 
         let model = self
             .to_model_buf()
-            .map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
+            .map_err(|err| Error::new(ErrorKind::InvalidData, err))
+            .context("Creating model buffer")?;
 
         // Check again to see if we are the first one to finish this
         let mut writer = writer.lock();
@@ -151,7 +155,10 @@ impl Model {
             return Ok(id.as_model().unwrap());
         }
 
-        Ok(writer.push_model(model, key))
+        let id = writer.push_model(model, key);
+        writer.ctx.insert(asset, id.into());
+
+        Ok(id)
     }
 
     /// When `true` (the default) tangent values will be stored.
@@ -538,7 +545,7 @@ impl Model {
         self.src.as_path()
     }
 
-    fn to_model_buf(&self) -> gltf::Result<ModelBuf> {
+    fn to_model_buf(&self) -> anyhow::Result<ModelBuf> {
         // Gather a map of the importable mesh names and the renamed name they should get
         let mut mesh_names = HashMap::<_, _>::default();
         if let Some(meshes) = &self.meshes {
@@ -559,10 +566,12 @@ impl Model {
         );
 
         // Load the mesh nodes from this GLTF file
-        let (doc, bufs, _) = import(self.src())?;
+        let (doc, bufs, _) = import(self.src())
+            .with_context(|| format!("Importing model {}", self.src().display()))?;
         let scene = doc
             .default_scene()
-            .unwrap_or_else(|| doc.scenes().next().unwrap());
+            .or_else(|| doc.scenes().next())
+            .expect("No scene found");
         let mut nodes = VecDeque::from_iter(scene.nodes().map(|node| (node, Mat4::IDENTITY)));
         let mut meshes = vec![];
 

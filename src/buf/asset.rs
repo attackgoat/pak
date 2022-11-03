@@ -8,6 +8,7 @@ use {
         model::Model,
         scene::Scene,
     },
+    anyhow::{bail, Context},
     serde::Deserialize,
     std::{
         fs::read_to_string,
@@ -48,10 +49,9 @@ pub enum Asset {
 
 impl Asset {
     /// Reads an asset file from disk.
-    #[allow(unused)]
-    pub fn read(filename: impl AsRef<Path>) -> Result<Self, Error> {
-        let str = read_to_string(&filename)?;
-        let val: Schema = toml::from_str(&str)?;
+    pub fn read(filename: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let str = read_to_string(&filename).context("Reading asset file as a string")?;
+        let val: Schema = toml::from_str(&str).context("Parsing asset toml")?;
         let res = if let Some(val) = val.anim {
             Self::Animation(val)
         } else if let Some(val) = val.bitmap {
@@ -67,14 +67,13 @@ impl Asset {
         } else if let Some(val) = val.scene {
             Self::Scene(val)
         } else {
-            return Err(Error::from(ErrorKind::InvalidData));
+            bail!(Error::from(ErrorKind::InvalidData));
         };
 
         Ok(res)
     }
 
     /// Attempts to extract a `Bitmap` asset from this collection type.
-    #[allow(unused)]
     pub fn into_bitmap(self) -> Option<Bitmap> {
         match self {
             Self::Bitmap(bitmap) => Some(bitmap),
@@ -83,7 +82,6 @@ impl Asset {
     }
 
     /// Attempts to extract a `Content` asset from this collection type.
-    #[allow(unused)]
     pub fn into_content(self) -> Option<Content> {
         match self {
             Self::Content(content) => Some(content),
@@ -92,7 +90,6 @@ impl Asset {
     }
 
     /// Attempts to extract a `Material` asset from this collection type.
-    #[allow(unused)]
     pub fn into_material(self) -> Option<Material> {
         match self {
             Self::Material(material) => Some(material),
@@ -101,7 +98,6 @@ impl Asset {
     }
 
     /// Attempts to extract a `Model` asset from this collection type.
-    #[allow(unused)]
     pub fn into_model(self) -> Option<Model> {
         match self {
             Self::Model(model) => Some(model),
@@ -113,6 +109,12 @@ impl Asset {
 impl From<Bitmap> for Asset {
     fn from(val: Bitmap) -> Self {
         Self::Bitmap(val)
+    }
+}
+
+impl From<Blob> for Asset {
+    fn from(val: Blob) -> Self {
+        Self::Blob(val)
     }
 }
 

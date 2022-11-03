@@ -150,8 +150,8 @@ struct SceneRef {
 #[derive(Default)]
 pub struct SceneRefData {
     pub id: Option<String>,
-    pub material: Option<MaterialId>, // TODO: MAKE VEC!
-    pub model: Option<ModelId>,       // TODO: MAKE VEC!
+    pub material: Option<MaterialId>,
+    pub model: Option<ModelId>,
     pub position: Vec3,
     pub rotation: Quat,
     pub tags: Vec<String>,
