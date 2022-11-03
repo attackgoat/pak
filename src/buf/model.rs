@@ -37,6 +37,33 @@ use {
     },
 };
 
+/// Euler rotation sequences.
+///
+/// The angles are applied starting from the right. E.g. XYZ will first apply the z-axis rotation.
+///
+/// YXZ can be used for yaw (y-axis), pitch (x-axis), roll (z-axis).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
+pub enum Euler {
+    /// Intrinsic three-axis rotation XYZ
+    #[serde(rename = "xyz")]
+    XYZ,
+    /// Intrinsic three-axis rotation XZY
+    #[serde(rename = "xzy")]
+    XZY,
+    /// Intrinsic three-axis rotation YXZ
+    #[serde(rename = "yxz")]
+    YXZ,
+    /// Intrinsic three-axis rotation YZX
+    #[serde(rename = "yzx")]
+    YZX,
+    /// Intrinsic three-axis rotation ZXY
+    #[serde(rename = "zxy")]
+    ZXY,
+    /// Intrinsic three-axis rotation ZYX
+    #[serde(rename = "zyx")]
+    ZYX,
+}
+
 /// Holds a description of individual meshes within a `.glb` or `.gltf` 3D model.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct MeshRef {
@@ -66,6 +93,7 @@ impl MeshRef {
 pub struct Model {
     #[serde(rename = "bake-tangent")]
     bake_tangent: Option<bool>,
+    euler: Option<Euler>,
     lod: Option<bool>,
 
     #[serde(rename = "lod-target-error")]
@@ -100,6 +128,7 @@ impl Model {
     pub fn new(src: impl AsRef<Path>) -> Self {
         Self {
             bake_tangent: None,
+            euler: None,
             lod: None,
             lod_target_error: None,
             meshes: None,
@@ -516,11 +545,23 @@ impl Model {
         let rotation = self.rotation.unwrap_or_default();
 
         Quat::from_euler(
-            EulerRot::YXZ,
+            self.euler(),
             rotation[0].0.to_radians(),
             rotation[1].0.to_radians(),
             rotation[2].0.to_radians(),
         )
+    }
+
+    /// Euler ordering of the model orientation.
+    pub fn euler(&self) -> EulerRot {
+        match self.euler.unwrap_or(Euler::XYZ) {
+            Euler::XYZ => EulerRot::XYZ,
+            Euler::XZY => EulerRot::XZY,
+            Euler::YXZ => EulerRot::YXZ,
+            Euler::YZX => EulerRot::YZX,
+            Euler::ZXY => EulerRot::ZXY,
+            Euler::ZYX => EulerRot::ZYX,
+        }
     }
 
     /// Scaling of the model.
