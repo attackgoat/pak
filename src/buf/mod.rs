@@ -268,8 +268,15 @@ impl PakBuf {
                         let asset_parent = parent(&asset_path);
 
                         match asset {
-                            Asset::Animation(_anim) => {
-                                todo!();
+                            Asset::Animation(mut anim) => {
+                                let writer = Arc::clone(&writer);
+                                let src_dir = src_dir.clone();
+                                let asset_path = asset_path.clone();
+                                let asset_parent = asset_parent.clone();
+                                tasks.push(rt.spawn_blocking(move || {
+                                    anim.canonicalize(&src_dir, &asset_parent);
+                                    anim.bake(&writer, src_dir, asset_path).unwrap();
+                                }));
                             }
                             Asset::Bitmap(mut bitmap) => {
                                 let writer = Arc::clone(&writer);

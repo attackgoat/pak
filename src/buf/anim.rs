@@ -11,7 +11,7 @@ use {
         },
         import,
     },
-    log::{info, warn},
+    log::{debug, info, warn},
     parking_lot::Mutex,
     serde::Deserialize,
     std::{
@@ -54,6 +54,11 @@ impl Animation {
 
         let name = self.name();
         let (doc, bufs, _) = import(src).unwrap();
+
+        for anim in doc.animations() {
+            debug!("Found animation '{}'", anim.name().unwrap_or_default());
+        }
+
         let mut anim = doc.animations().find(|anim| name == anim.name());
         if anim.is_none() && name.is_none() && doc.animations().count() > 0 {
             anim = doc.animations().next();
@@ -164,6 +169,8 @@ impl Animation {
 
         // Sort channels by name (they are all rotations)
         channels.sort_unstable_by(|a, b| a.target().cmp(b.target()));
+
+        //debug!("Channels: {:#?}", &channels);
 
         let mut writer = writer.lock();
         if let Some(id) = writer.ctx.get(&asset) {

@@ -34,6 +34,7 @@ impl Writer {
 
         if let Some(key) = key {
             assert!(self.data.ids.get(&key).is_none());
+
             self.data.ids.insert(key, id.into());
         }
 
@@ -140,22 +141,54 @@ impl Writer {
 
         // Update these items with the refs we created; saving with bincode was very
         // slow when serializing the byte vectors - that is why those are saved raw.
-        trace!("Writing animations");
+        trace!(
+            "Writing {} animation{}",
+            self.data.anims.len(),
+            if self.data.anims.len() == 1 { "" } else { "s" }
+        );
         Self::write_refs(self.compression, &mut writer, &mut self.data.anims)?;
 
-        trace!("Writing bitmaps");
+        trace!(
+            "Writing {} bitmap{}",
+            self.data.bitmaps.len(),
+            if self.data.bitmaps.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
         Self::write_refs(self.compression, &mut writer, &mut self.data.bitmaps)?;
 
-        trace!("Writing blobs");
+        trace!(
+            "Writing {} blob{}",
+            self.data.blobs.len(),
+            if self.data.blobs.len() == 1 { "" } else { "s" }
+        );
         Self::write_refs(self.compression, &mut writer, &mut self.data.blobs)?;
 
-        trace!("Writing bitmap fonts");
+        trace!(
+            "Writing {} bitmap font{}",
+            self.data.bitmap_fonts.len(),
+            if self.data.bitmap_fonts.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
         Self::write_refs(self.compression, &mut writer, &mut self.data.bitmap_fonts)?;
 
-        trace!("Writing models");
+        trace!(
+            "Writing {} model{}",
+            self.data.models.len(),
+            if self.data.models.len() == 1 { "" } else { "s" }
+        );
         Self::write_refs(self.compression, &mut writer, &mut self.data.models)?;
 
-        trace!("Writing scenes");
+        trace!(
+            "Writing {} scene{}",
+            self.data.scenes.len(),
+            if self.data.scenes.len() == 1 { "" } else { "s" }
+        );
         Self::write_refs(self.compression, &mut writer, &mut self.data.scenes)?;
 
         // Write the data portion and then re-seek to the beginning to write the skip header
@@ -202,7 +235,7 @@ impl Writer {
             // Push a ref
             let end = current_pos(&mut writer)?;
 
-            trace!("Index {idx} = {} bytes", end - start);
+            trace!("Index {idx} = {} bytes ({start}..{end})", end - start);
 
             res.push(DataRef::<T>::Ref(start..end));
             start = end;

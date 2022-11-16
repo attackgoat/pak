@@ -285,7 +285,7 @@ impl PakBuf {
     where
         T: DeserializeOwned,
     {
-        trace!("Read data: {len} bytes");
+        trace!("Read data: {len} bytes ({pos}..{})", pos + len as u64);
 
         // Create a zero-filled buffer
         let mut buf = vec![0; len];
@@ -301,7 +301,11 @@ impl PakBuf {
         } else {
             bincode::deserialize_from(data)
         }
-        .map_err(|_| Error::from(ErrorKind::InvalidData))
+        .map_err(|err| {
+            warn!("Unable to deserialize: {}", err);
+
+            Error::from(ErrorKind::InvalidData)
+        })
     }
 
     pub fn from_stream(mut stream: impl Stream + 'static) -> Result<Self, Error> {
