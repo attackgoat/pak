@@ -1,18 +1,17 @@
-use anyhow::Context;
-
 use {
     super::{
-        super::model::{Mesh, ModelBuf, Primitive, Vertex},
+        super::model::{Joint, Mesh, ModelBuf, Primitive, Skin, Vertex},
         file_key, re_run_if_changed, Canonicalize, ModelId, Writer,
     },
-    glam::{quat, vec3, EulerRot, Mat4, Quat, Vec3},
+    anyhow::Context,
+    glam::{quat, vec3, EulerRot, Mat4, Quat, Vec3, Vec4},
     gltf::import,
     gltf::{
         buffer::Data,
         mesh::{util::ReadIndices, Mode, Reader},
         Buffer, Node,
     },
-    log::{info, trace, warn},
+    log::{debug, info, trace, warn},
     meshopt::{
         generate_vertex_remap, optimize_overdraw_in_place, optimize_vertex_cache_in_place,
         quantize_unorm, remap_index_buffer, simplify, unstripify, VertexDataAdapter,
@@ -36,6 +35,15 @@ use {
         u16,
     },
 };
+
+fn extract_transform(node: &Node) -> Mat4 {
+    let (translation, rotation, scale) = node.transform().decomposed();
+    let translation = Vec3::from_array(translation);
+    let rotation = Quat::from_array(rotation);
+    let scale = Vec3::from_array(scale);
+
+    Mat4::from_scale_rotation_translation(scale, rotation, translation)
+}
 
 /// Euler rotation sequences.
 ///
@@ -390,22 +398,107 @@ impl Model {
         self.overdraw_threshold.unwrap_or(OrderedFloat(1.05)).0
     }
 
-    fn read_bones(node: &Node, bufs: &[Data]) -> HashMap<String, Mat4> {
+    fn read_skin(node: &Node, bufs: &[Data]) -> Option<Skin> {
         node.skin()
             .map(|skin| {
-                let joints = skin
-                    .joints()
-                    .map(|node| node.name().unwrap_or_default().to_owned());
-                let inv_binds = skin
+                let inverse_binds = skin
                     .reader(|buf| bufs.get(buf.index()).map(|data| data.0.as_slice()))
                     .read_inverse_bind_matrices()
-                    .map(|ibp| {
-                        ibp.map(|ibp| Mat4::from_cols_array_2d(&ibp))
-                            .collect::<Vec<_>>()
+                    .map(|data| {
+                        let mut res = Vec::with_capacity(data.len());
+                        res.extend(data.map(|matrix| Mat4::from_cols_array_2d(&matrix)));
+
+                        res
                     })
                     .unwrap_or_default();
 
-                joints.zip(inv_binds).into_iter().collect()
+                if inverse_binds.is_empty() {
+                    warn!("Unable to read inverse bind matrices");
+
+                    return None;
+                }
+
+                let gltf_joints = skin.joints().collect::<Box<_>>();
+
+                if inverse_binds.len() != gltf_joints.len() {
+                    warn!("Incompatible joints found");
+
+                    return None;
+                }
+
+                if gltf_joints.iter().any(|joint| joint.name().is_none()) {
+                    warn!("Unnamed joints found");
+
+                    return None;
+                }
+
+                let mut joint_names = HashSet::new();
+                for joint_name in gltf_joints.iter().map(|joint| joint.name().unwrap()) {
+                    if !joint_names.insert(joint_name) {
+                        warn!("Duplicate joint names found");
+
+                        return None;
+                    }
+                }
+
+                let gltf_joints = {
+                    let mut res = Vec::with_capacity(gltf_joints.len());
+                    res.extend(
+                        gltf_joints
+                            .iter()
+                            .cloned()
+                            .zip(inverse_binds.iter().copied()),
+                    );
+                    res.sort_unstable_by_key(|(node, _)| node.index());
+                    res
+                };
+
+                let mut child_indices = Vec::with_capacity(gltf_joints.len());
+                for (node, _) in gltf_joints.iter() {
+                    for child in node.children() {
+                        child_indices.push(child.index());
+                    }
+                }
+
+                child_indices.sort_unstable();
+
+                let mut nodes = VecDeque::default();
+                for (node, inverse_bind) in gltf_joints.iter() {
+                    if child_indices.binary_search(&node.index()).is_err() {
+                        nodes.push_front((nodes.len(), node.clone(), *inverse_bind));
+                    }
+                }
+
+                let mut joints = Vec::with_capacity(gltf_joints.len());
+                while let Some((parent_index, node, inverse_bind)) = nodes.pop_back() {
+                    for child in node.children() {
+                        let (_, inverse_bind) = &gltf_joints[gltf_joints
+                            .binary_search_by_key(&child.index(), |(node, _)| node.index())
+                            .unwrap()];
+                        nodes.push_front((joints.len(), child, *inverse_bind));
+                    }
+
+                    joints.push(Joint {
+                        inverse_bind,
+                        name: node.name().unwrap().to_string(),
+                        parent_index,
+                        transform: extract_transform(&node),
+                    });
+                }
+
+                for (
+                    index,
+                    Joint {
+                        parent_index, name, ..
+                    },
+                ) in joints.iter().enumerate()
+                {
+                    trace!("Joint: {parent_index}->{index} {}", &name);
+                }
+
+                debug_assert_eq!(joints.len(), gltf_joints.len());
+
+                Some(Skin::new(joints))
             })
             .unwrap_or_default()
     }
@@ -494,6 +587,11 @@ impl Model {
                 let mut res = joints
                     .into_u16()
                     .map(|joints| {
+                        #[cfg(debug_assertions)]
+                        for joint in joints {
+                            assert!(joint <= u8::MAX as u16)
+                        }
+
                         joints[0] as u32
                             | (joints[1] as u32) << 8
                             | (joints[2] as u32) << 16
@@ -509,7 +607,16 @@ impl Model {
             .map(|weights| {
                 let mut res = weights
                     .into_f32()
-                    .map(|weights| {
+                    .map(|mut weights| {
+                        weights = Vec4::from_array(weights).normalize().to_array();
+
+                        #[cfg(debug_assertions)]
+                        for weight in weights {
+                            let weight = quantize_unorm(weight, 8);
+                            assert!(weight <= u8::MAX as i32);
+                            assert!(weight >= u8::MIN as i32);
+                        }
+
                         (quantize_unorm(weights[0], 8)
                             | (quantize_unorm(weights[1], 8) << 8)
                             | (quantize_unorm(weights[2], 8) << 16)
@@ -613,7 +720,19 @@ impl Model {
             .default_scene()
             .or_else(|| doc.scenes().next())
             .expect("No scene found");
-        let mut nodes = VecDeque::from_iter(scene.nodes().map(|node| (node, Mat4::IDENTITY)));
+        let mut nodes = VecDeque::from_iter(scene.nodes().filter_map(|node| {
+            if !mesh_names.is_empty() {
+                if let Some(name) = node.name() {
+                    if !mesh_names.contains_key(name) {
+                        debug!("Ignoring mesh {}", name);
+
+                        return None;
+                    }
+                }
+            }
+
+            Some((node, Mat4::IDENTITY))
+        }));
         let mut meshes = vec![];
 
         let model_transform =
@@ -622,23 +741,9 @@ impl Model {
         while !nodes.is_empty() {
             let (node, parent_transform) = nodes.pop_front().unwrap();
 
-            if !mesh_names.is_empty() {
-                if let Some(name) = node.name() {
-                    if !mesh_names.contains_key(name) {
-                        continue;
-                    }
-                }
-            }
+            debug!("Loading mesh {}", node.name().unwrap_or_default());
 
-            let transform = {
-                let (translation, rotation, scale) = node.transform().decomposed();
-                let translation = Vec3::from_array(translation);
-                let rotation = Quat::from_array(rotation);
-                let scale = Vec3::from_array(scale);
-
-                Mat4::from_scale_rotation_translation(scale, rotation, translation)
-                    * parent_transform
-            };
+            let transform = extract_transform(&node) * parent_transform;
 
             for child_node in node.children() {
                 nodes.push_back((child_node, transform));
@@ -727,18 +832,9 @@ impl Model {
                 name.as_deref().unwrap_or_default()
             );
 
-            let bones = Self::read_bones(&node, &bufs);
-
-            // Build a MeshBuf from the primitives in this node
-            let mut mesh = Mesh::default();
-
-            if !bones.is_empty() {
-                mesh.set_bones(bones);
-            }
-
-            if let Some(name) = name {
-                mesh.set_name(name);
-            }
+            let skin = Self::read_skin(&node, &bufs);
+            let mut mesh_primitives =
+                Vec::with_capacity(primitives.len() + (primitives.len() * shadow as usize));
 
             for (material, mut data) in primitives {
                 let material = materials.get(&material).copied().unwrap_or_default();
@@ -762,7 +858,7 @@ impl Model {
                         primitive.push_lod(&lod_indices);
                     }
 
-                    mesh.push_primitive(primitive);
+                    mesh_primitives.push(primitive);
                 }
 
                 // Optional shadow mesh primitive
@@ -780,11 +876,12 @@ impl Model {
                         primitive.push_lod(&lod_indices);
                     }
 
-                    mesh.push_primitive(primitive);
+                    mesh_primitives.push(primitive);
                 }
             }
 
-            model.push_mesh(mesh);
+            // Build a MeshBuf from the primitives in this node
+            model.push_mesh(Mesh::new(name, mesh_primitives, skin));
         }
 
         Ok(model)

@@ -60,7 +60,7 @@ impl Animation {
         }
 
         let mut anim = doc.animations().find(|anim| name == anim.name());
-        if anim.is_none() && name.is_none() && doc.animations().count() > 0 {
+        if anim.is_none() && name.is_none() {
             anim = doc.animations().next();
         }
 
@@ -118,13 +118,15 @@ impl Animation {
             }
 
             // Assure increasing sort
-            let mut input = inputs[0];
-            for val in inputs.iter().skip(1) {
-                if *val > input {
-                    input = *val
-                } else {
-                    warn!("Unsorted input data");
-                    continue 'channel;
+            {
+                let mut input = inputs[0];
+                for val in inputs.iter().skip(1).copied() {
+                    if val > input {
+                        input = val
+                    } else {
+                        warn!("Unsorted input data");
+                        continue 'channel;
+                    }
                 }
             }
 
@@ -167,10 +169,11 @@ impl Animation {
             // println!(")");
         }
 
-        // Sort channels by name (they are all rotations)
-        channels.sort_unstable_by(|a, b| a.target().cmp(b.target()));
-
         //debug!("Channels: {:#?}", &channels);
+
+        for channel in &channels {
+            debug!("{}", channel.target());
+        }
 
         let mut writer = writer.lock();
         if let Some(id) = writer.ctx.get(&asset) {

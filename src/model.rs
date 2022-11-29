@@ -5,6 +5,45 @@ use {
     std::collections::HashMap,
 };
 
+// #[derive(Debug, Deserialize, Serialize)]
+// pub struct Joint {
+//     children: Vec<Self>,
+//     inverse_bind: Mat4,
+//     name: String,
+//     transform: Mat4,
+// }
+
+// impl Joint {
+//     pub(super) fn new(name: String, inverse_bind: Mat4, transform: Mat4) -> Self {
+//         Self {
+//             children: vec![],
+//             inverse_bind,
+//             name,
+//             transform,
+//         }
+//     }
+
+//     pub fn children(&self) -> &[Self] {
+//         &self.children
+//     }
+
+//     pub fn inverse_bind(&self) -> Mat4 {
+//         self.inverse_bind
+//     }
+
+//     pub fn name(&self) -> &str {
+//         &self.name
+//     }
+
+//     pub(super) fn push_child(&mut self, child: Self) {
+//         self.children.push(child);
+//     }
+
+//     pub fn transform(&self) -> Mat4 {
+//         self.transform
+//     }
+// }
+
 #[derive(Debug, Deserialize, Serialize)]
 enum Index {
     U8,
@@ -104,36 +143,44 @@ impl IndexBuffer {
     }
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Joint {
+    pub inverse_bind: Mat4,
+    pub name: String,
+    pub parent_index: usize,
+    pub transform: Mat4,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Mesh {
-    bones: HashMap<String, Mat4>,
     name: Option<String>,
     primitives: Vec<Primitive>,
+    skin: Option<Skin>,
 }
 
 impl Mesh {
-    pub fn bones(&self) -> &HashMap<String, Mat4> {
-        &self.bones
+    pub(super) fn new(
+        name: Option<String>,
+        primitives: Vec<Primitive>,
+        skin: Option<Skin>,
+    ) -> Self {
+        Self {
+            name,
+            primitives,
+            skin,
+        }
     }
 
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
 
-    pub fn push_primitive(&mut self, primitive: Primitive) {
-        self.primitives.push(primitive);
-    }
-
     pub fn primitives(&self) -> &[Primitive] {
         &self.primitives
     }
 
-    pub fn set_bones(&mut self, bones: HashMap<String, Mat4>) {
-        self.bones = bones;
-    }
-
-    pub fn set_name(&mut self, name: impl AsRef<str>) {
-        self.name = Some(name.as_ref().to_owned());
+    pub fn skin(&self) -> Option<&Skin> {
+        self.skin.as_ref()
     }
 }
 
@@ -205,6 +252,21 @@ impl Primitive {
         debug_assert_eq!(buf_len % stride, 0);
 
         buf_len / stride
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Skin {
+    joints: Vec<Joint>,
+}
+
+impl Skin {
+    pub(super) fn new(joints: Vec<Joint>) -> Self {
+        Self { joints }
+    }
+
+    pub fn joints(&self) -> &[Joint] {
+        &self.joints
     }
 }
 

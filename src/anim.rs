@@ -56,6 +56,14 @@ impl Channel {
         }
     }
 
+    pub fn interpolation(&self) -> Interpolation {
+        self.interpolation
+    }
+
+    pub fn rotations(&self) -> &[Quat] {
+        &self.rotations
+    }
+
     /// The target joint/bone.
     pub fn target(&self) -> &str {
         &self.target
