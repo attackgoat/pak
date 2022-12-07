@@ -5,45 +5,6 @@ use {
     std::collections::HashMap,
 };
 
-// #[derive(Debug, Deserialize, Serialize)]
-// pub struct Joint {
-//     children: Vec<Self>,
-//     inverse_bind: Mat4,
-//     name: String,
-//     transform: Mat4,
-// }
-
-// impl Joint {
-//     pub(super) fn new(name: String, inverse_bind: Mat4, transform: Mat4) -> Self {
-//         Self {
-//             children: vec![],
-//             inverse_bind,
-//             name,
-//             transform,
-//         }
-//     }
-
-//     pub fn children(&self) -> &[Self] {
-//         &self.children
-//     }
-
-//     pub fn inverse_bind(&self) -> Mat4 {
-//         self.inverse_bind
-//     }
-
-//     pub fn name(&self) -> &str {
-//         &self.name
-//     }
-
-//     pub(super) fn push_child(&mut self, child: Self) {
-//         self.children.push(child);
-//     }
-
-//     pub fn transform(&self) -> Mat4 {
-//         self.transform
-//     }
-// }
-
 #[derive(Debug, Deserialize, Serialize)]
 enum Index {
     U8,
@@ -145,10 +106,17 @@ impl IndexBuffer {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Joint {
+    /// Index which is referenced by the JOINTS and WEIGHTS vertex attributes.
+    pub index: usize,
+
+    /// A matrix which transform the mesh into the local space of the joint.
     pub inverse_bind: Mat4,
+
+    /// Name of the joint/bone.
     pub name: String,
+
+    /// Index into the skin joints to the parent of this joint.
     pub parent_index: usize,
-    pub transform: Mat4,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

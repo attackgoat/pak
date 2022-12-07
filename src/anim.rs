@@ -1,48 +1,49 @@
 use {
-    glam::Quat,
+    glam::{Quat, Vec3},
     gltf::animation::Interpolation as GltfInterpolation,
     serde::{Deserialize, Serialize},
+    std::time::Duration,
 };
 
 /// Holds an `Animation` in a `.pak` file. For data transport only.
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct AnimationBuf {
+    channels: Vec<Channel>,
+}
+
+impl AnimationBuf {
+    pub(super) fn new(channels: Vec<Channel>) -> Self {
+        Self { channels }
+    }
+
     /// The channels (joints/bones) of movement used in this `Animation`.
-    pub channels: Vec<Channel>,
+    pub fn channels(&self) -> &[Channel] {
+        &self.channels
+    }
 }
 
 /// Describes the animation of one joint.
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Channel {
-    inputs: Vec<f32>,
+    inputs: Vec<u32>,
     interpolation: Interpolation,
-    rotations: Vec<Quat>,
+    outputs: Outputs,
     target: String,
 }
 
 impl Channel {
     #[allow(unused)]
-    pub(crate) fn new<T: AsRef<str>, I: IntoIterator<Item = f32>, R: IntoIterator<Item = Quat>>(
+    pub(crate) fn new<T: AsRef<str>, I: IntoIterator<Item = u32>>(
         target: T,
         interpolation: GltfInterpolation,
         inputs: I,
-        rotations: R,
+        outputs: Outputs,
     ) -> Self {
         let inputs = inputs.into_iter().collect::<Vec<_>>();
-        let rotations = rotations.into_iter().collect::<Vec<_>>();
         let target = target.as_ref().to_owned();
 
         assert!(!target.is_empty());
         assert_ne!(inputs.len(), 0);
-
-        match interpolation {
-            GltfInterpolation::Linear | GltfInterpolation::Step => {
-                assert_eq!(inputs.len(), rotations.len());
-            }
-            GltfInterpolation::CubicSpline => {
-                assert_eq!(inputs.len() * 3, rotations.len());
-            }
-        }
 
         Self {
             inputs,
@@ -51,17 +52,21 @@ impl Channel {
                 GltfInterpolation::Linear => Interpolation::Linear,
                 GltfInterpolation::Step => Interpolation::Step,
             },
-            rotations,
+            outputs,
             target,
         }
+    }
+
+    pub fn inputs(&self) -> &[u32] {
+        &self.inputs
     }
 
     pub fn interpolation(&self) -> Interpolation {
         self.interpolation
     }
 
-    pub fn rotations(&self) -> &[Quat] {
-        &self.rotations
+    pub fn outputs(&self) -> &Outputs {
+        &self.outputs
     }
 
     /// The target joint/bone.
@@ -97,4 +102,11 @@ pub enum Interpolation {
     /// in-tangent, a spline vertex, and an out-tangent. There must be at least two
     /// keyframes when using this interpolation
     CubicSpline,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub enum Outputs {
+    Rotations(Vec<Quat>),
+    Scales(Vec<Vec3>),
+    Translations(Vec<Vec3>),
 }

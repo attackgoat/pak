@@ -432,29 +432,37 @@ impl Model {
                     return None;
                 }
 
-                let mut joint_names = HashSet::new();
-                for joint_name in gltf_joints.iter().map(|joint| joint.name().unwrap()) {
-                    if !joint_names.insert(joint_name) {
-                        warn!("Duplicate joint names found");
+                {
+                    let mut joint_names = HashSet::new();
+                    for joint_name in gltf_joints.iter().map(|joint| joint.name().unwrap()) {
+                        if !joint_names.insert(joint_name) {
+                            warn!("Duplicate joint names found");
 
-                        return None;
+                            return None;
+                        }
                     }
                 }
 
+                // Create a list of GLTF joints sorted by file index where we store:
+                // 0: The JOINTS vertex attribute index of this joint
+                // 1: The node for this joint
+                // 2: The IBP matrix
                 let gltf_joints = {
                     let mut res = Vec::with_capacity(gltf_joints.len());
                     res.extend(
                         gltf_joints
                             .iter()
                             .cloned()
-                            .zip(inverse_binds.iter().copied()),
+                            .zip(inverse_binds.iter().copied())
+                            .enumerate()
+                            .map(|(index, (node, inverse_bind))| (index, node, inverse_bind)),
                     );
-                    res.sort_unstable_by_key(|(node, _)| node.index());
+                    res.sort_unstable_by_key(|(_, node, _)| node.index());
                     res
                 };
 
                 let mut child_indices = Vec::with_capacity(gltf_joints.len());
-                for (node, _) in gltf_joints.iter() {
+                for (_, node, _) in gltf_joints.iter() {
                     for child in node.children() {
                         child_indices.push(child.index());
                     }
@@ -462,38 +470,30 @@ impl Model {
 
                 child_indices.sort_unstable();
 
+                // Find the root node(s)
                 let mut nodes = VecDeque::default();
-                for (node, inverse_bind) in gltf_joints.iter() {
+                for (index, node, inverse_bind) in gltf_joints.iter() {
                     if child_indices.binary_search(&node.index()).is_err() {
-                        nodes.push_front((nodes.len(), node.clone(), *inverse_bind));
+                        nodes.push_front((*index, nodes.len(), node.clone(), *inverse_bind));
                     }
                 }
 
                 let mut joints = Vec::with_capacity(gltf_joints.len());
-                while let Some((parent_index, node, inverse_bind)) = nodes.pop_back() {
+                while let Some((index, parent_index, node, inverse_bind)) = nodes.pop_back() {
                     for child in node.children() {
-                        let (_, inverse_bind) = &gltf_joints[gltf_joints
-                            .binary_search_by_key(&child.index(), |(node, _)| node.index())
-                            .unwrap()];
-                        nodes.push_front((joints.len(), child, *inverse_bind));
+                        let child_index = gltf_joints
+                            .binary_search_by_key(&child.index(), |(_, node, _)| node.index())
+                            .unwrap();
+                        let (index, _, inverse_bind) = gltf_joints[child_index];
+                        nodes.push_front((index, joints.len(), child, inverse_bind));
                     }
 
                     joints.push(Joint {
+                        index,
                         inverse_bind,
                         name: node.name().unwrap().to_string(),
                         parent_index,
-                        transform: extract_transform(&node),
                     });
-                }
-
-                for (
-                    index,
-                    Joint {
-                        parent_index, name, ..
-                    },
-                ) in joints.iter().enumerate()
-                {
-                    trace!("Joint: {parent_index}->{index} {}", &name);
                 }
 
                 debug_assert_eq!(joints.len(), gltf_joints.len());
@@ -589,7 +589,7 @@ impl Model {
                     .map(|joints| {
                         #[cfg(debug_assertions)]
                         for joint in joints {
-                            assert!(joint <= u8::MAX as u16)
+                            assert!(joint <= u8::MAX as u16);
                         }
 
                         joints[0] as u32
@@ -607,12 +607,14 @@ impl Model {
             .map(|weights| {
                 let mut res = weights
                     .into_f32()
-                    .map(|mut weights| {
-                        weights = Vec4::from_array(weights).normalize().to_array();
-
+                    .map(|weights| {
                         #[cfg(debug_assertions)]
                         for weight in weights {
+                            assert!(weight >= 0.0);
+                            assert!(weight <= 1.0);
+
                             let weight = quantize_unorm(weight, 8);
+
                             assert!(weight <= u8::MAX as i32);
                             assert!(weight >= u8::MIN as i32);
                         }
