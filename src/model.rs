@@ -122,29 +122,21 @@ pub struct Joint {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Mesh {
     name: Option<String>,
-    primitives: Vec<Primitive>,
+    parts: Vec<MeshPart>,
     skin: Option<Skin>,
 }
 
 impl Mesh {
-    pub(super) fn new(
-        name: Option<String>,
-        primitives: Vec<Primitive>,
-        skin: Option<Skin>,
-    ) -> Self {
-        Self {
-            name,
-            primitives,
-            skin,
-        }
+    pub(super) fn new(name: Option<String>, parts: Vec<MeshPart>, skin: Option<Skin>) -> Self {
+        Self { name, parts, skin }
     }
 
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
 
-    pub fn primitives(&self) -> &[Primitive] {
-        &self.primitives
+    pub fn parts(&self) -> &[MeshPart] {
+        &self.parts
     }
 
     pub fn skin(&self) -> Option<&Skin> {
@@ -169,7 +161,7 @@ impl ModelBuf {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct Primitive {
+pub struct MeshPart {
     lods: Vec<IndexBuffer>,
     material: u8,
 
@@ -179,7 +171,7 @@ pub struct Primitive {
     vertex_ty: Vertex,
 }
 
-impl Primitive {
+impl MeshPart {
     pub fn new(material: u8, vertex_buf: &[u8], vertex_ty: Vertex) -> Self {
         let res = Self {
             lods: Default::default(),

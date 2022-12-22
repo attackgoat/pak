@@ -1,6 +1,6 @@
 use {
     super::{
-        super::model::{Joint, Mesh, ModelBuf, Primitive, Skin, Vertex},
+        super::model::{Joint, Mesh, MeshPart, ModelBuf, Skin, Vertex},
         file_key, re_run_if_changed, Canonicalize, ModelId, Writer,
     },
     anyhow::Context,
@@ -753,7 +753,7 @@ impl Model {
 
             let transform = model_transform * transform;
 
-            let primitives = node
+            let parts = node
                 .mesh()
                 .map(|mesh| {
                     mesh.primitives()
@@ -790,7 +790,7 @@ impl Model {
                 })
                 .unwrap_or_default();
 
-            meshes.push((primitives, node));
+            meshes.push((parts, node));
         }
 
         // Figure out which unique materials are used on these target mesh primitives and convert
@@ -798,7 +798,7 @@ impl Model {
         // This makes the final materials used index as 0, 1, 2, etc
         let materials = meshes
             .iter()
-            .flat_map(|(primitives, ..)| primitives)
+            .flat_map(|(parts, ..)| parts)
             .map(|(material, ..)| *material)
             .collect::<HashSet<_>>()
             .into_iter()
@@ -818,7 +818,7 @@ impl Model {
 
         // Build a ModelBuf from the meshes in this document
         let mut model = ModelBuf::default();
-        for (primitives, node) in meshes {
+        for (parts, node) in meshes {
             let name = if mesh_names.is_empty() {
                 node.name().map(|name| name.to_owned())
             } else {
@@ -835,55 +835,54 @@ impl Model {
             );
 
             let skin = Self::read_skin(&node, &bufs);
-            let mut mesh_primitives =
-                Vec::with_capacity(primitives.len() + (primitives.len() * shadow as usize));
+            let mut mesh_parts = Vec::with_capacity(parts.len() + (parts.len() * shadow as usize));
 
-            for (material, mut data) in primitives {
+            for (material, mut data) in parts {
                 let material = materials.get(&material).copied().unwrap_or_default();
 
                 if !self.bake_tangent() {
                     data.tangents.clear();
                 }
 
-                // Main mesh primitive
+                // Main mesh part
                 {
                     let (vertex, mut vertex_buf) = data.to_vertex_buf();
                     let vertex_stride = vertex.stride();
 
                     self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride);
 
-                    let mut primitive = Primitive::new(material, &vertex_buf, vertex);
+                    let mut part = MeshPart::new(material, &vertex_buf, vertex);
 
                     for lod_indices in
                         self.calculate_lods(&data.indices, &vertex_buf, vertex_stride)
                     {
-                        primitive.push_lod(&lod_indices);
+                        part.push_lod(&lod_indices);
                     }
 
-                    mesh_primitives.push(primitive);
+                    mesh_parts.push(part);
                 }
 
-                // Optional shadow mesh primitive
+                // Optional shadow mesh part
                 if shadow {
                     let (vertex, mut vertex_buf) = data.to_shadow_buf();
                     let vertex_stride = vertex.stride();
 
                     self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride);
 
-                    let mut primitive = Primitive::new(material, &vertex_buf, vertex);
+                    let mut part = MeshPart::new(material, &vertex_buf, vertex);
 
                     for lod_indices in
                         self.calculate_lods(&data.indices, &vertex_buf, vertex_stride)
                     {
-                        primitive.push_lod(&lod_indices);
+                        part.push_lod(&lod_indices);
                     }
 
-                    mesh_primitives.push(primitive);
+                    mesh_parts.push(part);
                 }
             }
 
-            // Build a MeshBuf from the primitives in this node
-            model.push_mesh(Mesh::new(name, mesh_primitives, skin));
+            // Build a MeshBuf from the parts in this node
+            model.push_mesh(Mesh::new(name, mesh_parts, skin));
         }
 
         Ok(model)
