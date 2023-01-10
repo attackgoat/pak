@@ -4,6 +4,7 @@ pub mod anim;
 pub mod bitmap;
 pub mod bitmap_font;
 pub mod compression;
+pub mod index;
 pub mod model;
 pub mod scene;
 

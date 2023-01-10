@@ -1,5 +1,5 @@
 use {
-    super::{MaterialId, ModelId},
+    super::{index::IndexBuffer, MaterialId, ModelId},
     glam::{Quat, Vec3},
     serde::{Deserialize, Serialize},
     std::collections::HashMap,
@@ -7,16 +7,41 @@ use {
 
 type Idx = u16;
 
-/// A container for scene references.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Geometry {
+    id: Option<Idx>,
+    index_buf: IndexBuffer,
+    position: Vec3,
+    rotation: Quat,
+    tags: Vec<Idx>,
+
+    #[serde(with = "serde_bytes")]
+    vertex_buf: Vec<u8>,
+}
+
+pub struct GeometryData {
+    pub id: Option<String>,
+    pub indices: Vec<u32>,
+    pub vertices: Vec<u8>,
+    pub position: Vec3,
+    pub rotation: Quat,
+    pub tags: Vec<String>,
+}
+
+/// A container for scene entities.
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SceneBuf {
+    geometries: Vec<Geometry>,
     refs: Vec<SceneRef>,
     strs: Vec<String>,
 }
 
 impl SceneBuf {
-    pub(crate) fn new<D: Iterator<Item = SceneRefData>>(data: D) -> Self {
-        let mut refs = vec![];
+    pub(crate) fn new<G, R>(geometry_data: G, ref_data: R) -> Self
+    where
+        G: Iterator<Item = GeometryData>,
+        R: Iterator<Item = SceneRefData>,
+    {
         let mut strs = vec![];
 
         // Use a string table
@@ -29,7 +54,20 @@ impl SceneBuf {
             })
         };
 
-        for mut data in data {
+        let mut geometries = vec![];
+        for mut data in geometry_data {
+            geometries.push(Geometry {
+                id: data.id.map(&mut idx),
+                index_buf: IndexBuffer::new(&data.indices),
+                position: data.position,
+                rotation: data.rotation,
+                vertex_buf: data.vertices,
+                tags: data.tags.drain(..).map(&mut idx).collect(),
+            });
+        }
+
+        let mut refs = vec![];
+        for mut data in ref_data {
             refs.push(SceneRef {
                 id: data.id.map(&mut idx),
                 model: data.model,
@@ -40,7 +78,19 @@ impl SceneBuf {
             });
         }
 
-        Self { refs, strs }
+        Self {
+            geometries,
+            refs,
+            strs,
+        }
+    }
+
+    /// Gets an iterator of the `Geometry` items stored in this `Scene`.
+    pub fn geometries(&self) -> impl Iterator<Item = SceneBufGeometry<'_>> {
+        SceneBufGeometryIter {
+            idx: 0,
+            scene: self,
+        }
     }
 
     /// Gets an iterator of the `Ref` items stored in this `Scene`.
@@ -48,6 +98,89 @@ impl SceneBuf {
         SceneBufRefIter {
             idx: 0,
             scene: self,
+        }
+    }
+
+    fn scene_str<I: Into<usize>>(&self, idx: I) -> &str {
+        self.strs[idx.into()].as_str()
+    }
+}
+
+/// An individual `Scene` geometry.
+#[derive(Debug)]
+pub struct SceneBufGeometry<'a> {
+    idx: usize,
+    scene: &'a SceneBuf,
+}
+
+impl SceneBufGeometry<'_> {
+    /// Returns `true` if the geometry contains the given tag.
+    pub fn has_tag<T: AsRef<str>>(&self, tag: T) -> bool {
+        let tag = tag.as_ref();
+        self.geometry()
+            .tags
+            .binary_search_by(|probe| self.scene.scene_str(*probe).cmp(tag))
+            .is_ok()
+    }
+
+    /// Returns `id`, if set.
+    pub fn id(&self) -> Option<&str> {
+        self.scene.refs[self.idx]
+            .id
+            .map(|idx| self.scene.strs[idx as usize].as_str())
+    }
+
+    pub fn index_buf(&self) -> &IndexBuffer {
+        &self.geometry().index_buf
+    }
+
+    /// Returns `position` or the zero vector.
+    pub fn position(&self) -> Vec3 {
+        self.geometry().position
+    }
+
+    /// Returns `rotation` or the identity quaternion.
+    pub fn rotation(&self) -> Quat {
+        self.geometry().rotation
+    }
+
+    fn geometry(&self) -> &Geometry {
+        &self.scene.geometries[self.idx]
+    }
+
+    /// Returns an `Iterator` of tags.
+    pub fn tags(&self) -> impl Iterator<Item = &str> {
+        self.geometry()
+            .tags
+            .iter()
+            .map(move |idx| self.scene.scene_str(*idx))
+    }
+
+    pub fn vertex_data(&self) -> &[u8] {
+        &self.geometry().vertex_buf
+    }
+}
+
+/// An `Iterator` of [`Geometry`] items.
+#[derive(Debug)]
+struct SceneBufGeometryIter<'a> {
+    idx: usize,
+    scene: &'a SceneBuf,
+}
+
+impl<'a> Iterator for SceneBufGeometryIter<'a> {
+    type Item = SceneBufGeometry<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx < self.scene.refs.len() {
+            let res = SceneBufGeometry {
+                scene: self.scene,
+                idx: self.idx,
+            };
+            self.idx += 1;
+            Some(res)
+        } else {
+            None
         }
     }
 }
@@ -60,12 +193,12 @@ pub struct SceneBufRef<'a> {
 }
 
 impl SceneBufRef<'_> {
-    /// Returns `true` if the scene contains the given tag.
+    /// Returns `true` if the ref contains the given tag.
     pub fn has_tag<T: AsRef<str>>(&self, tag: T) -> bool {
         let tag = tag.as_ref();
         self.scene_ref()
             .tags
-            .binary_search_by(|probe| self.scene_str(*probe).cmp(tag))
+            .binary_search_by(|probe| self.scene.scene_str(*probe).cmp(tag))
             .is_ok()
     }
 
@@ -100,16 +233,12 @@ impl SceneBufRef<'_> {
         &self.scene.refs[self.idx]
     }
 
-    fn scene_str<I: Into<usize>>(&self, idx: I) -> &str {
-        self.scene.strs[idx.into()].as_str()
-    }
-
     /// Returns an `Iterator` of tags.
     pub fn tags(&self) -> impl Iterator<Item = &str> {
         self.scene_ref()
             .tags
             .iter()
-            .map(move |idx| self.scene_str(*idx))
+            .map(move |idx| self.scene.scene_str(*idx))
     }
 }
 

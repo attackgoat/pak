@@ -126,7 +126,7 @@ pub struct Model {
 
     // Tables must follow values
     #[serde(rename = "mesh")]
-    meshes: Option<Vec<MeshRef>>,
+    meshes: Option<Box<[MeshRef]>>,
 }
 
 impl Model {
@@ -699,7 +699,7 @@ impl Model {
         // Gather a map of the importable mesh names and the renamed name they should get
         let mut mesh_names = HashMap::<_, _>::default();
         if let Some(meshes) = &self.meshes {
-            for mesh in meshes {
+            for mesh in meshes.iter() {
                 mesh_names
                     .entry(mesh.name())
                     .and_modify(|_| warn!("Duplicate mesh name: {}", mesh.name()))

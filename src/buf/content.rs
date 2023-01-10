@@ -19,7 +19,7 @@ pub struct Content {
 
     // Tables must follow values
     #[serde(rename = "group")]
-    groups: Vec<Group>,
+    groups: Box<[Group]>,
 }
 
 impl Content {

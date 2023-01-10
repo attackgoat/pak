@@ -1,7 +1,10 @@
 use {
     super::{
-        super::scene::SceneRefData, file_key, is_toml, material::Material, model::Model, parent,
-        Asset, Canonicalize, SceneBuf, SceneId, Writer,
+        super::scene::{GeometryData, SceneRefData},
+        file_key, is_toml,
+        material::Material,
+        model::Model,
+        parent, Asset, Canonicalize, SceneBuf, SceneId, Writer,
     },
     anyhow::Context,
     glam::{vec3, EulerRot, Quat, Vec3},
@@ -96,14 +99,65 @@ where
     }
 }
 
-/// Holds a description of position/orientation/scale and tagged data specific to each program.
+/// Holds a description of indexed triangle geometries.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
+pub struct Geometry {
+    id: Option<String>,
+
+    indices: Box<[u32]>,
+    vertices: Box<[OrderedFloat<f32>]>,
+    position: Option<[OrderedFloat<f32>; 3]>,
+    rotation: Option<[OrderedFloat<f32>; 3]>,
+
+    // Tables must follow values
+    tags: Option<Box<[String]>>,
+}
+
+impl Geometry {
+    /// Main identifier of a geometry, not required to be unique.
+    pub fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+
+    /// Any 3D position or position-like data.
+    pub fn position(&self) -> Vec3 {
+        self.position
+            .map(|position| vec3(position[0].0, position[1].0, position[2].0))
+            .unwrap_or(Vec3::ZERO)
+    }
+
+    /// Any 3D orientation or orientation-like data.
+    pub fn rotation(&self) -> Quat {
+        let rotation = self
+            .rotation
+            .map(|rotation| vec3(rotation[0].0, rotation[1].0, rotation[2].0))
+            .unwrap_or(Vec3::ZERO)
+            * PI
+            / 180.0;
+
+        // x = pitch
+        // y = yaw
+        // z = roll
+        Quat::from_euler(EulerRot::XYZ, rotation.x, rotation.y, rotation.z)
+    }
+
+    /// An arbitrary collection of program-specific strings.
+    pub fn tags(&self) -> &[String] {
+        self.tags.as_deref().unwrap_or_default()
+    }
+}
+
+/// Holds a description of scene entities and tagged data.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Scene {
     // (Values here)
 
     // Tables must follow values
+    #[serde(rename = "geometry")]
+    geometries: Option<Box<[Geometry]>>,
+
     #[serde(rename = "ref")]
-    refs: Vec<SceneRef>,
+    refs: Option<Box<[SceneRef]>>,
 }
 
 impl Scene {
@@ -127,7 +181,47 @@ impl Scene {
 
         let src_dir = parent(&path);
 
-        let mut refs = vec![];
+        let mut geometries = Vec::with_capacity(
+            self.geometries
+                .as_ref()
+                .map(|geometries| geometries.len())
+                .unwrap_or_default(),
+        );
+        for geometry in self.geometries() {
+            // all tags must be lower case (no localized text!)
+            let mut tags = vec![];
+            for tag in geometry.tags() {
+                let baked = tag.as_str().trim().to_lowercase();
+                if let Err(idx) = tags.binary_search(&baked) {
+                    tags.insert(idx, baked);
+                }
+            }
+
+            let mut vertices = Vec::with_capacity(geometry.vertices.len() * 4);
+            for vertex in geometry.vertices.iter().copied() {
+                let vertex = vertex.0.to_ne_bytes();
+                vertices.push(vertex[0]);
+                vertices.push(vertex[1]);
+                vertices.push(vertex[2]);
+                vertices.push(vertex[3]);
+            }
+
+            geometries.push(GeometryData {
+                id: geometry.id().map(|id| id.to_owned()),
+                indices: geometry.indices.to_vec(),
+                vertices,
+                position: geometry.position(),
+                rotation: geometry.rotation(),
+                tags,
+            });
+        }
+
+        let mut refs = Vec::with_capacity(
+            self.refs
+                .as_ref()
+                .map(|refs| refs.len())
+                .unwrap_or_default(),
+        );
         for scene_ref in self.refs() {
             // all tags must be lower case (no localized text!)
             let mut tags = vec![];
@@ -206,7 +300,7 @@ impl Scene {
             });
         }
 
-        let scene = SceneBuf::new(refs.into_iter());
+        let scene = SceneBuf::new(geometries.into_iter(), refs.into_iter());
 
         let mut writer = writer.lock();
         if let Some(h) = writer.ctx.get(&asset) {
@@ -219,16 +313,24 @@ impl Scene {
         Ok(id)
     }
 
+    /// Individual geometries within a scene.
+    #[allow(unused)]
+    pub fn geometries(&self) -> &[Geometry] {
+        self.geometries.as_deref().unwrap_or_default()
+    }
+
     /// Individual references within a scene.
     #[allow(unused)]
     pub fn refs(&self) -> &[SceneRef] {
-        &self.refs
+        self.refs.as_deref().unwrap_or_default()
     }
 }
 
 impl Canonicalize for Scene {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
         self.refs
+            .as_deref_mut()
+            .unwrap_or_default()
             .iter_mut()
             .for_each(|scene_ref| scene_ref.canonicalize(&project_dir, &src_dir));
     }
@@ -307,7 +409,7 @@ impl SceneRef {
     /// An arbitrary collection of program-specific strings.
     #[allow(unused)]
     pub fn tags(&self) -> &[String] {
-        self.tags.as_deref().unwrap_or(&[])
+        self.tags.as_deref().unwrap_or_default()
     }
 }
 
