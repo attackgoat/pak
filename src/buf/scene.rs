@@ -12,7 +12,10 @@ use {
     ordered_float::OrderedFloat,
     parking_lot::Mutex,
     serde::{
-        de::{value::MapAccessDeserializer, MapAccess, Visitor},
+        de::{
+            value::{MapAccessDeserializer, SeqAccessDeserializer},
+            MapAccess, SeqAccess, Visitor,
+        },
         Deserialize, Deserializer,
     },
     std::{
@@ -26,13 +29,13 @@ use {
     tokio::runtime::Runtime,
 };
 
-/// A reference to a model asset or model source file.
+/// A reference to an asset or source file.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum AssetRef<T> {
-    /// A `Model` asset specified inline.
+    /// A `T` asset specified inline.
     Asset(T),
 
-    /// A `Model` asset file or model source file.
+    /// A `T` asset file or `T` source file.
     Path(PathBuf),
 }
 
@@ -45,10 +48,10 @@ where
     /// src of file.gltf:
     /// .. = "file.gltf"
     ///
-    /// src of file.toml which must be a Model asset:
+    /// src of file.toml which must be a `T` asset:
     /// .. = "file.toml"
     ///
-    /// src of a Model asset:
+    /// src of a `T` asset:
     /// .. = { src = "file.gltf" }
     fn de<D>(deserializer: D) -> Result<Option<Self>, D::Error>
     where
@@ -63,7 +66,7 @@ where
             type Value = Option<AssetRef<T>>;
 
             fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-                formatter.write_str("path string or model asset")
+                formatter.write_str("path string or asset")
             }
 
             fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>
@@ -84,6 +87,18 @@ where
         }
 
         deserializer.deserialize_any(AssetRefVisitor(PhantomData))
+    }
+}
+
+impl<'de, T> Deserialize<'de> for AssetRef<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        AssetRef::<T>::de(deserializer).transpose().unwrap()
     }
 }
 
@@ -232,8 +247,9 @@ impl Scene {
                 }
             }
 
-            let material = scene_ref
-                .material()
+            let materials = scene_ref
+                .materials()
+                .iter()
                 .map(|material| match material {
                     AssetRef::Asset(material) => {
                         // Material asset specified inline
@@ -261,7 +277,8 @@ impl Scene {
                     material
                         .bake(rt, writer, &project_dir, &src_dir, src)
                         .expect("material")
-                });
+                })
+                .collect();
 
             let model = scene_ref
                 .model()
@@ -292,7 +309,7 @@ impl Scene {
 
             refs.push(SceneRefData {
                 id: scene_ref.id().map(|id| id.to_owned()),
-                material,
+                materials,
                 model,
                 position: scene_ref.position(),
                 rotation: scene_ref.rotation(),
@@ -340,9 +357,7 @@ impl Canonicalize for Scene {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct SceneRef {
     id: Option<String>,
-
-    #[serde(default, deserialize_with = "AssetRef::<Material>::de")]
-    material: Option<AssetRef<Material>>,
+    materials: Option<Vec<AssetRef<Material>>>,
 
     #[serde(default, deserialize_with = "AssetRef::<Model>::de")]
     model: Option<AssetRef<Model>>,
@@ -373,13 +388,13 @@ impl SceneRef {
         self.model.as_ref()
     }
 
-    /// Optional direct reference to a material asset file.
+    /// Optional direct reference to a material asset files.
     ///
-    /// If specified, the material asset does not need to be referenced in any content file. If the
+    /// If specified, the material assets do not need to be referenced in any content file. If the
     /// material is referenced in a content file it will not be duplicated or cause any problems.
     #[allow(unused)]
-    pub fn material(&self) -> Option<&AssetRef<Material>> {
-        self.material.as_ref()
+    pub fn materials(&self) -> &[AssetRef<Material>] {
+        self.materials.as_deref().unwrap_or_default()
     }
 
     /// Any 3D position or position-like data.
@@ -415,8 +430,10 @@ impl SceneRef {
 
 impl Canonicalize for SceneRef {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
-        if let Some(material) = self.material.as_mut() {
-            material.canonicalize(&project_dir, &src_dir);
+        if let Some(materials) = self.materials.as_mut() {
+            for material in materials {
+                material.canonicalize(&project_dir, &src_dir);
+            }
         }
 
         if let Some(model) = self.model.as_mut() {

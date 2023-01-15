@@ -71,7 +71,7 @@ impl SceneBuf {
             refs.push(SceneRef {
                 id: data.id.map(&mut idx),
                 model: data.model,
-                material: data.material,
+                materials: data.materials,
                 position: data.position,
                 rotation: data.rotation,
                 tags: data.tags.drain(..).map(&mut idx).collect(),
@@ -210,8 +210,8 @@ impl SceneBufRef<'_> {
     }
 
     /// Returns `material`, if set.
-    pub fn material(&self) -> Option<MaterialId> {
-        self.scene_ref().material
+    pub fn materials(&self) -> &[MaterialId] {
+        &self.scene_ref().materials
     }
 
     /// Returns `model`, if set.
@@ -269,7 +269,7 @@ impl<'a> Iterator for SceneBufRefIter<'a> {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 struct SceneRef {
     id: Option<Idx>,
-    material: Option<MaterialId>,
+    materials: Vec<MaterialId>,
     model: Option<ModelId>,
     position: Vec3,
     rotation: Quat,
@@ -279,7 +279,7 @@ struct SceneRef {
 #[derive(Default)]
 pub struct SceneRefData {
     pub id: Option<String>,
-    pub material: Option<MaterialId>,
+    pub materials: Vec<MaterialId>,
     pub model: Option<ModelId>,
     pub position: Vec3,
     pub rotation: Quat,

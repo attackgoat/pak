@@ -1,0 +1,6 @@
+[model]
+bake-tangent = true
+lod = false
+optimize = false
+shadow = false
+src = 'cube.glb'
