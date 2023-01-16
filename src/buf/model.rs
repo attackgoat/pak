@@ -849,6 +849,10 @@ impl Model {
                     let (vertex, mut vertex_buf) = data.to_vertex_buf();
                     let vertex_stride = vertex.stride();
 
+                    if self.bake_tangent() && !vertex.contains(Vertex::TANGENT) {
+                        warn!("Tangent data requested but not found: {}", self.src().display())
+                    }
+
                     self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride);
 
                     let mut part = MeshPart::new(material, &vertex_buf, vertex);

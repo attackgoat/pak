@@ -217,6 +217,8 @@ pub trait Pak {
 
     /// Gets the material corresponding to the given key, if one exsits.
     fn read_material(&self, key: impl AsRef<str>) -> Option<MaterialInfo> {
+        trace!("Reading material {}", key.as_ref());
+
         if let Some(id) = self.material_id(key) {
             self.read_material_id(id)
         } else {
@@ -225,6 +227,8 @@ pub trait Pak {
     }
 
     fn read_animation(&mut self, key: impl AsRef<str>) -> Result<AnimationBuf, Error> {
+        trace!("Reading animation {}", key.as_ref());
+
         if let Some(h) = self.animation_id(key) {
             self.read_animation_id(h)
         } else {
@@ -233,6 +237,8 @@ pub trait Pak {
     }
 
     fn read_bitmap_font(&mut self, key: impl AsRef<str>) -> Result<BitmapFontBuf, Error> {
+        trace!("Reading bitmap font {}", key.as_ref());
+
         if let Some(h) = self.bitmap_font_id(key) {
             self.read_bitmap_font_id(h)
         } else {
@@ -241,6 +247,8 @@ pub trait Pak {
     }
 
     fn read_bitmap(&mut self, key: impl AsRef<str>) -> Result<BitmapBuf, Error> {
+        trace!("Reading bitmap {}", key.as_ref());
+
         if let Some(h) = self.bitmap_id(key) {
             self.read_bitmap_id(h)
         } else {
@@ -249,6 +257,8 @@ pub trait Pak {
     }
 
     fn read_blob(&mut self, key: impl AsRef<str>) -> Result<Vec<u8>, Error> {
+        trace!("Reading blob {}", key.as_ref());
+
         if let Some(h) = self.blob_id(key) {
             self.read_blob_id(h)
         } else {
@@ -257,6 +267,8 @@ pub trait Pak {
     }
 
     fn read_model(&mut self, key: impl AsRef<str>) -> Result<ModelBuf, Error> {
+        trace!("Reading model {}", key.as_ref());
+
         if let Some(h) = self.model_id(key) {
             self.read_model_id(h)
         } else {
@@ -265,6 +277,8 @@ pub trait Pak {
     }
 
     fn read_scene(&mut self, key: impl AsRef<str>) -> Result<SceneBuf, Error> {
+        trace!("Reading scene {}", key.as_ref());
+
         if let Some(h) = self.scene_id(key) {
             self.read_scene_id(h)
         } else {
@@ -408,6 +422,8 @@ impl Pak for PakBuf {
 
     /// Gets the corresponding animation for the given ID.
     fn read_animation_id(&mut self, id: AnimationId) -> Result<AnimationBuf, Error> {
+        trace!("Deserializing animation {}", id.0);
+
         let (pos, len) = self.data.anims[id.0]
             .pos_len()
             .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
@@ -416,6 +432,8 @@ impl Pak for PakBuf {
 
     /// Reads the corresponding bitmap for the given ID.
     fn read_bitmap_font_id(&mut self, id: BitmapFontId) -> Result<BitmapFontBuf, Error> {
+        trace!("Deserializing bitmap font {}", id.0);
+
         let (pos, len) = self.data.bitmap_fonts[id.0]
             .pos_len()
             .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
@@ -424,6 +442,8 @@ impl Pak for PakBuf {
 
     /// Reads the corresponding bitmap for the given ID.
     fn read_bitmap_id(&mut self, id: BitmapId) -> Result<BitmapBuf, Error> {
+        trace!("Deserializing bitmap {}", id.0);
+
         let (pos, len) = self.data.bitmaps[id.0]
             .pos_len()
             .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
@@ -432,6 +452,8 @@ impl Pak for PakBuf {
 
     /// Gets the corresponding blob for the given ID.
     fn read_blob_id(&mut self, id: BlobId) -> Result<Vec<u8>, Error> {
+        trace!("Deserializing blob {}", id.0);
+
         let (pos, len) = self.data.blobs[id.0]
             .pos_len()
             .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
@@ -445,6 +467,8 @@ impl Pak for PakBuf {
 
     /// Gets the corresponding animation for the given ID.
     fn read_model_id(&mut self, id: ModelId) -> Result<ModelBuf, Error> {
+        trace!("Deserializing model {}", id.0);
+
         let (pos, len) = self.data.models[id.0]
             .pos_len()
             .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
@@ -453,6 +477,8 @@ impl Pak for PakBuf {
 
     /// Gets the corresponding animation for the given ID.
     fn read_scene_id(&mut self, id: SceneId) -> Result<SceneBuf, Error> {
+        trace!("Deserializing scene {}", id.0);
+
         let (pos, len) = self.data.scenes[id.0]
             .pos_len()
             .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
