@@ -125,7 +125,7 @@ impl SceneBufGeometry<'_> {
 
     /// Returns `id`, if set.
     pub fn id(&self) -> Option<&str> {
-        self.scene.refs[self.idx]
+        self.geometry()
             .id
             .map(|idx| self.scene.strs[idx as usize].as_str())
     }
@@ -172,7 +172,7 @@ impl<'a> Iterator for SceneBufGeometryIter<'a> {
     type Item = SceneBufGeometry<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.idx < self.scene.refs.len() {
+        if self.idx < self.scene.geometries.len() {
             let res = SceneBufGeometry {
                 scene: self.scene,
                 idx: self.idx,
