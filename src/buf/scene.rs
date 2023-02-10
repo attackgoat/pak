@@ -4,7 +4,7 @@ use {
         file_key, is_toml,
         material::Material,
         model::Model,
-        parent, Asset, Canonicalize, Euler, SceneBuf, SceneId, Writer,
+        parent, Asset, Canonicalize, Euler, Rotation, SceneBuf, SceneId, Writer,
     },
     anyhow::Context,
     glam::{vec3, EulerRot, Quat, Vec3},
@@ -123,7 +123,7 @@ pub struct Geometry {
     indices: Box<[u32]>,
     vertices: Box<[OrderedFloat<f32>]>,
     position: Option<[OrderedFloat<f32>; 3]>,
-    rotation: Option<[OrderedFloat<f32>; 3]>,
+    rotation: Option<Rotation>,
 
     // Tables must follow values
     tags: Option<Box<[String]>>,
@@ -156,14 +156,18 @@ impl Geometry {
 
     /// Any 3D orientation or orientation-like data.
     pub fn rotation(&self) -> Quat {
-        let rotation = self
-            .rotation
-            .map(|rotation| vec3(rotation[0].0, rotation[1].0, rotation[2].0))
-            .unwrap_or(Vec3::ZERO)
-            * PI
-            / 180.0;
-
-        Quat::from_euler(self.euler(), rotation.x, rotation.y, rotation.z)
+        match self.rotation {
+            Some(Rotation::Euler(rotation)) => Quat::from_euler(
+                self.euler(),
+                rotation[0].0.to_radians(),
+                rotation[1].0.to_radians(),
+                rotation[2].0.to_radians(),
+            ),
+            Some(Rotation::Quaternion(rotation)) => {
+                Quat::from_array([rotation[0].0, rotation[1].0, rotation[2].0, rotation[3].0])
+            }
+            None => Quat::IDENTITY,
+        }
     }
 
     /// An arbitrary collection of program-specific strings.
@@ -374,7 +378,7 @@ pub struct SceneRef {
     model: Option<AssetRef<Model>>,
 
     position: Option<[OrderedFloat<f32>; 3]>,
-    rotation: Option<[OrderedFloat<f32>; 3]>,
+    rotation: Option<Rotation>,
 
     // Tables must follow values
     tags: Option<Vec<String>>,
@@ -431,14 +435,18 @@ impl SceneRef {
     /// Any 3D orientation or orientation-like data.
     #[allow(unused)]
     pub fn rotation(&self) -> Quat {
-        let rotation = self
-            .rotation
-            .map(|rotation| vec3(rotation[0].0, rotation[1].0, rotation[2].0))
-            .unwrap_or(Vec3::ZERO)
-            * PI
-            / 180.0;
-
-        Quat::from_euler(self.euler(), rotation.x, rotation.y, rotation.z)
+        match self.rotation {
+            Some(Rotation::Euler(rotation)) => Quat::from_euler(
+                self.euler(),
+                rotation[0].0.to_radians(),
+                rotation[1].0.to_radians(),
+                rotation[2].0.to_radians(),
+            ),
+            Some(Rotation::Quaternion(rotation)) => {
+                Quat::from_array([rotation[0].0, rotation[1].0, rotation[2].0, rotation[3].0])
+            }
+            None => Quat::IDENTITY,
+        }
     }
 
     /// An arbitrary collection of program-specific strings.

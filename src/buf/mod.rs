@@ -23,14 +23,22 @@ use {
     anyhow::Context,
     glob::glob,
     log::{error, info, trace, warn},
+    ordered_float::OrderedFloat,
     parking_lot::Mutex,
-    serde::{de::DeserializeOwned, Deserialize, Serialize},
+    serde::{
+        de::{
+            value::{MapAccessDeserializer, SeqAccessDeserializer},
+            DeserializeOwned, MapAccess, SeqAccess, Visitor,
+        },
+        Deserialize, Deserializer, Serialize,
+    },
     std::{
         collections::HashMap,
         env::var,
         fmt::{Debug, Formatter},
         fs::{create_dir_all, File},
         io::{BufReader, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},
+        num::FpCategory,
         ops::Range,
         path::{Path, PathBuf},
         sync::Arc,
@@ -401,5 +409,83 @@ impl PakBuf {
         });
 
         Ok(())
+    }
+}
+
+/// A rotation stored as either a euler or quaternion.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Rotation {
+    /// A three component euler rotation.
+    Euler([OrderedFloat<f32>; 3]),
+
+    /// A four component quaternion rotation.
+    Quaternion([OrderedFloat<f32>; 4]),
+}
+
+impl<'de> Rotation {
+    /// Deserialize from any of absent or:
+    ///
+    /// euler xyz:
+    /// .. = [1.0, 2.0, 3.0]
+    ///
+    /// quaternion xyzw:
+    /// .. = [1.0, 2.0, 3.0, 0.0]
+    fn de<D>(deserializer: D) -> Result<Option<Self>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct RotationVisitor;
+
+        impl<'de> Visitor<'de> for RotationVisitor {
+            type Value = Option<Rotation>;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                formatter.write_str("floating point sequence of length 3 or 4")
+            }
+
+            fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let val: Vec<f32> = Deserialize::deserialize(SeqAccessDeserializer::new(seq))?;
+
+                if !matches!(val.len(), 3 | 4) {
+                    panic!("Unexpected sequence length");
+                }
+
+                for val in &val {
+                    match val.classify() {
+                        FpCategory::Zero | FpCategory::Normal => (),
+                        _ => panic!("Unexpected sequence value"),
+                    }
+                }
+
+                Ok(Some(if val.len() == 3 {
+                    Rotation::Euler([
+                        OrderedFloat(val[0]),
+                        OrderedFloat(val[1]),
+                        OrderedFloat(val[2]),
+                    ])
+                } else {
+                    Rotation::Quaternion([
+                        OrderedFloat(val[0]),
+                        OrderedFloat(val[1]),
+                        OrderedFloat(val[2]),
+                        OrderedFloat(val[3]),
+                    ])
+                }))
+            }
+        }
+
+        deserializer.deserialize_seq(RotationVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for Rotation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Rotation::de(deserializer).transpose().unwrap()
     }
 }

@@ -1,7 +1,7 @@
 use {
     super::{
         super::model::{Joint, Mesh, MeshPart, ModelBuf, Skin, Vertex},
-        file_key, re_run_if_changed, Canonicalize, Euler, ModelId, Writer,
+        file_key, re_run_if_changed, Canonicalize, Euler, ModelId, Rotation, Writer,
     },
     anyhow::Context,
     glam::{quat, vec3, EulerRot, Mat4, Quat, Vec3, Vec4},
@@ -89,7 +89,7 @@ pub struct Model {
     #[serde(rename = "overdraw-threshold")]
     overdraw_threshold: Option<OrderedFloat<f32>>,
 
-    rotation: Option<[OrderedFloat<f32>; 3]>,
+    rotation: Option<Rotation>,
 
     #[serde(default, deserialize_with = "Scale::de")]
     scale: Option<Scale>,
@@ -624,14 +624,18 @@ impl Model {
 
     /// Orientation of the model.
     pub fn rotation(&self) -> Quat {
-        let rotation = self.rotation.unwrap_or_default();
-
-        Quat::from_euler(
-            self.euler(),
-            rotation[0].0.to_radians(),
-            rotation[1].0.to_radians(),
-            rotation[2].0.to_radians(),
-        )
+        match self.rotation {
+            Some(Rotation::Euler(rotation)) => Quat::from_euler(
+                self.euler(),
+                rotation[0].0.to_radians(),
+                rotation[1].0.to_radians(),
+                rotation[2].0.to_radians(),
+            ),
+            Some(Rotation::Quaternion(rotation)) => {
+                Quat::from_array([rotation[0].0, rotation[1].0, rotation[2].0, rotation[3].0])
+            }
+            None => Quat::IDENTITY,
+        }
     }
 
     /// Euler ordering of the model orientation.
