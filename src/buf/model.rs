@@ -1,7 +1,7 @@
 use {
     super::{
         super::model::{Joint, Mesh, MeshPart, ModelBuf, Skin, Vertex},
-        file_key, re_run_if_changed, Canonicalize, ModelId, Writer,
+        file_key, re_run_if_changed, Canonicalize, Euler, ModelId, Writer,
     },
     anyhow::Context,
     glam::{quat, vec3, EulerRot, Mat4, Quat, Vec3, Vec4},
@@ -43,33 +43,6 @@ fn extract_transform(node: &Node) -> Mat4 {
     let scale = Vec3::from_array(scale);
 
     Mat4::from_scale_rotation_translation(scale, rotation, translation)
-}
-
-/// Euler rotation sequences.
-///
-/// The angles are applied starting from the right. E.g. XYZ will first apply the z-axis rotation.
-///
-/// YXZ can be used for yaw (y-axis), pitch (x-axis), roll (z-axis).
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
-pub enum Euler {
-    /// Intrinsic three-axis rotation XYZ
-    #[serde(rename = "xyz")]
-    XYZ,
-    /// Intrinsic three-axis rotation XZY
-    #[serde(rename = "xzy")]
-    XZY,
-    /// Intrinsic three-axis rotation YXZ
-    #[serde(rename = "yxz")]
-    YXZ,
-    /// Intrinsic three-axis rotation YZX
-    #[serde(rename = "yzx")]
-    YZX,
-    /// Intrinsic three-axis rotation ZXY
-    #[serde(rename = "zxy")]
-    ZXY,
-    /// Intrinsic three-axis rotation ZYX
-    #[serde(rename = "zyx")]
-    ZYX,
 }
 
 /// Holds a description of individual meshes within a `.glb` or `.gltf` 3D model.
@@ -850,7 +823,10 @@ impl Model {
                     let vertex_stride = vertex.stride();
 
                     if self.bake_tangent() && !vertex.contains(Vertex::TANGENT) {
-                        warn!("Tangent data requested but not found: {}", self.src().display())
+                        warn!(
+                            "Tangent data requested but not found: {}",
+                            self.src().display()
+                        )
                     }
 
                     self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride);

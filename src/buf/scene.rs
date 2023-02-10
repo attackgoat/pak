@@ -4,7 +4,7 @@ use {
         file_key, is_toml,
         material::Material,
         model::Model,
-        parent, Asset, Canonicalize, SceneBuf, SceneId, Writer,
+        parent, Asset, Canonicalize, Euler, SceneBuf, SceneId, Writer,
     },
     anyhow::Context,
     glam::{vec3, EulerRot, Quat, Vec3},
@@ -117,6 +117,7 @@ where
 /// Holds a description of indexed triangle geometries.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Geometry {
+    euler: Option<Euler>,
     id: Option<String>,
 
     indices: Box<[u32]>,
@@ -129,6 +130,18 @@ pub struct Geometry {
 }
 
 impl Geometry {
+    /// Euler ordering of the model orientation.
+    pub fn euler(&self) -> EulerRot {
+        match self.euler.unwrap_or(Euler::XYZ) {
+            Euler::XYZ => EulerRot::XYZ,
+            Euler::XZY => EulerRot::XZY,
+            Euler::YXZ => EulerRot::YXZ,
+            Euler::YZX => EulerRot::YZX,
+            Euler::ZXY => EulerRot::ZXY,
+            Euler::ZYX => EulerRot::ZYX,
+        }
+    }
+
     /// Main identifier of a geometry, not required to be unique.
     pub fn id(&self) -> Option<&str> {
         self.id.as_deref()
@@ -150,10 +163,7 @@ impl Geometry {
             * PI
             / 180.0;
 
-        // x = pitch
-        // y = yaw
-        // z = roll
-        Quat::from_euler(EulerRot::XYZ, rotation.x, rotation.y, rotation.z)
+        Quat::from_euler(self.euler(), rotation.x, rotation.y, rotation.z)
     }
 
     /// An arbitrary collection of program-specific strings.
@@ -356,6 +366,7 @@ impl Canonicalize for Scene {
 /// Holds a description of one scene reference.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct SceneRef {
+    euler: Option<Euler>,
     id: Option<String>,
     materials: Option<Vec<AssetRef<Material>>>,
 
@@ -370,6 +381,18 @@ pub struct SceneRef {
 }
 
 impl SceneRef {
+    /// Euler ordering of the model orientation.
+    pub fn euler(&self) -> EulerRot {
+        match self.euler.unwrap_or(Euler::XYZ) {
+            Euler::XYZ => EulerRot::XYZ,
+            Euler::XZY => EulerRot::XZY,
+            Euler::YXZ => EulerRot::YXZ,
+            Euler::YZX => EulerRot::YZX,
+            Euler::ZXY => EulerRot::ZXY,
+            Euler::ZYX => EulerRot::ZYX,
+        }
+    }
+
     /// Main identifier of a reference, not required to be unique.
     #[allow(unused)]
     pub fn id(&self) -> Option<&str> {
@@ -415,10 +438,7 @@ impl SceneRef {
             * PI
             / 180.0;
 
-        // x = pitch
-        // y = yaw
-        // z = roll
-        Quat::from_euler(EulerRot::XYZ, rotation.x, rotation.y, rotation.z)
+        Quat::from_euler(self.euler(), rotation.x, rotation.y, rotation.z)
     }
 
     /// An arbitrary collection of program-specific strings.

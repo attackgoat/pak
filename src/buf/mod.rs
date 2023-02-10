@@ -144,6 +144,33 @@ fn re_run_if_changed(p: impl AsRef<Path>) {
     }
 }
 
+/// Euler rotation sequences.
+///
+/// The angles are applied starting from the right. E.g. XYZ will first apply the z-axis rotation.
+///
+/// YXZ can be used for yaw (y-axis), pitch (x-axis), roll (z-axis).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
+pub enum Euler {
+    /// Intrinsic three-axis rotation XYZ
+    #[serde(rename = "xyz")]
+    XYZ,
+    /// Intrinsic three-axis rotation XZY
+    #[serde(rename = "xzy")]
+    XZY,
+    /// Intrinsic three-axis rotation YXZ
+    #[serde(rename = "yxz")]
+    YXZ,
+    /// Intrinsic three-axis rotation YZX
+    #[serde(rename = "yzx")]
+    YZX,
+    /// Intrinsic three-axis rotation ZXY
+    #[serde(rename = "zxy")]
+    ZXY,
+    /// Intrinsic three-axis rotation ZYX
+    #[serde(rename = "zyx")]
+    ZYX,
+}
+
 trait Canonicalize {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>);
 
