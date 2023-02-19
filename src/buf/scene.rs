@@ -23,6 +23,7 @@ use {
         fmt::Formatter,
         io::Error,
         marker::PhantomData,
+        mem::size_of,
         path::{Path, PathBuf},
         sync::Arc,
     },
@@ -119,13 +120,10 @@ where
 pub struct Geometry {
     euler: Option<Euler>,
     id: Option<String>,
-
     indices: Box<[u32]>,
     vertices: Box<[OrderedFloat<f32>]>,
     position: Option<[OrderedFloat<f32>; 3]>,
     rotation: Option<Rotation>,
-
-    // Tables must follow values
     tags: Option<Box<[String]>>,
 }
 
@@ -147,14 +145,14 @@ impl Geometry {
         self.id.as_deref()
     }
 
-    /// Any 3D position or position-like data.
+    /// World location of a geometry.
     pub fn position(&self) -> Vec3 {
         self.position
             .map(|position| vec3(position[0].0, position[1].0, position[2].0))
             .unwrap_or(Vec3::ZERO)
     }
 
-    /// Any 3D orientation or orientation-like data.
+    /// Orientation of a geometry.
     pub fn rotation(&self) -> Quat {
         match self.rotation {
             Some(Rotation::Euler(rotation)) => Quat::from_euler(
@@ -226,14 +224,12 @@ impl Scene {
                 }
             }
 
-            let mut vertices = Vec::with_capacity(geometry.vertices.len() * 4);
-            for vertex in geometry.vertices.iter().copied() {
-                let vertex = vertex.0.to_ne_bytes();
-                vertices.push(vertex[0]);
-                vertices.push(vertex[1]);
-                vertices.push(vertex[2]);
-                vertices.push(vertex[3]);
-            }
+            let mut vertices = Vec::with_capacity(geometry.vertices.len() * size_of::<f32>());
+            geometry
+                .vertices
+                .iter()
+                .map(|vertex| vertex.0.to_ne_bytes())
+                .for_each(|vertex| vertices.extend_from_slice(&vertex));
 
             geometries.push(GeometryData {
                 id: geometry.id().map(|id| id.to_owned()),
