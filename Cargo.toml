@@ -1,6 +1,6 @@
 [package]
 name = "pak"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["John Wells <john@attackgoat.com>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -24,7 +24,7 @@ bmfont = { version = "0.3", default-features = false, optional = true }
 brotli = "3.3"
 glam = { version = "0.24", features = ["serde"] }
 glob = { version = "0.3", optional = true }
-gltf = { version = "1.1", features = ["names"] }
+gltf = { version = "1.2", features = ["names"] }
 image = "0.24"
 log = "0.4"
 meshopt = "0.1"
