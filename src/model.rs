@@ -133,7 +133,7 @@ impl Skin {
 }
 
 bitflags! {
-    #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
     pub struct Vertex: u8 {
         const POSITION = 1 << 0;
         const JOINTS_WEIGHTS = Self::POSITION.bits() | 1 << 1;
