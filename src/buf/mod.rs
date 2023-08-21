@@ -13,7 +13,15 @@ mod scene;
 mod writer;
 
 use {
-    self::{asset::Asset, bitmap::Bitmap, blob::Blob, model::Model, writer::Writer},
+    self::{
+        asset::Asset,
+        bitmap::Bitmap,
+        blob::Blob,
+        material::{ColorRef, EmissiveRef, Material, NormalRef, ScalarRef},
+        model::Model,
+        scene::AssetRef,
+        writer::Writer,
+    },
     super::{
         compression::Compression, AnimationBuf, AnimationId, BitmapBuf, BitmapFontBuf,
         BitmapFontId, BitmapId, BlobId, MaterialId, MaterialInfo, ModelBuf, ModelId, Pak, SceneBuf,
@@ -33,7 +41,7 @@ use {
         Deserialize, Deserializer, Serialize,
     },
     std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         env::var,
         fmt::{Debug, Formatter},
         fs::{create_dir_all, File},
@@ -239,6 +247,157 @@ trait Canonicalize {
 }
 
 impl PakBuf {
+    /// Returns the list of source files used to bake this pak, including all assets
+    /// specified inline or within scenes.
+    /// 
+    /// Includes the provided `src` parameter.
+    pub fn source_files(src: impl AsRef<Path>) -> anyhow::Result<Box<[PathBuf]>> {
+        fn handle_bitmap(res: &mut HashSet<PathBuf>, bitmap: &Bitmap) {
+            res.insert(bitmap.src().to_path_buf());
+        }
+
+        fn handle_material(res: &mut HashSet<PathBuf>, material: &Material) {
+            match &material.color {
+                ColorRef::Asset(bitmap) => handle_bitmap(res, bitmap),
+                ColorRef::Path(path) => {
+                    res.insert(path.to_path_buf());
+                }
+                _ => (),
+            }
+
+            if let Some(displacement) = &material.displacement {
+                handle_scalar_ref(res, displacement);
+            }
+
+            match &material.emissive {
+                Some(EmissiveRef::Asset(bitmap)) => handle_bitmap(res, bitmap),
+                Some(EmissiveRef::Path(path)) => {
+                    res.insert(path.to_path_buf());
+                }
+                _ => (),
+            }
+
+            if let Some(metal) = &material.metal {
+                handle_scalar_ref(res, metal);
+            }
+
+            match &material.normal {
+                Some(NormalRef::Asset(bitmap)) => handle_bitmap(res, bitmap),
+                Some(NormalRef::Path(path)) => {
+                    res.insert(path.to_path_buf());
+                }
+                None => (),
+            }
+
+            if let Some(rough) = &material.rough {
+                handle_scalar_ref(res, rough);
+            }
+        }
+
+        fn handle_model(res: &mut HashSet<PathBuf>, model: &Model) {
+            res.insert(model.src().to_path_buf());
+        }
+
+        fn handle_scalar_ref(res: &mut HashSet<PathBuf>, scalar_ref: &ScalarRef) {
+            match scalar_ref {
+                ScalarRef::Asset(bitmap) => handle_bitmap(res, bitmap),
+                ScalarRef::Path(path) => {
+                    res.insert(path.to_path_buf());
+                }
+                _ => (),
+            }
+        }
+
+        // Load the source file into an Asset::Content instance
+        let src_dir = parent(&src);
+        let content = Asset::read(&src)?
+            .into_content()
+            .context("Unable to read asset file")?;
+
+        let mut res = HashSet::new();
+
+        res.insert(src.as_ref().to_path_buf());
+
+        for asset_glob in content
+            .groups()
+            .into_iter()
+            .filter(|group| group.enabled())
+            .flat_map(|group| group.asset_globs())
+        {
+            let asset_paths = glob(src_dir.join(asset_glob).to_string_lossy().as_ref())
+                .context("Unable to glob source directory")?;
+            for asset_path in asset_paths {
+                let asset_path = asset_path?;
+
+                if asset_path
+                    .extension()
+                    .map(|ext| ext.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .as_str()
+                    == "toml"
+                {
+                    let asset = Asset::read(&asset_path)?;
+                    let asset_parent = parent(&asset_path);
+
+                    match asset {
+                        Asset::Animation(mut anim) => {
+                            anim.canonicalize(&src_dir, &asset_parent);
+                            res.insert(anim.src().to_path_buf());
+                        }
+                        Asset::Bitmap(mut bitmap) => {
+                            bitmap.canonicalize(&src_dir, &asset_parent);
+                            handle_bitmap(&mut res, &bitmap);
+                        }
+                        Asset::BitmapFont(mut blob) => {
+                            blob.canonicalize(&src_dir, &asset_parent);
+                            res.insert(blob.src().to_path_buf());
+                        }
+                        Asset::Material(mut material) => {
+                            material.canonicalize(&src_dir, &asset_parent);
+                            handle_material(&mut res, &material);
+                        }
+                        Asset::Model(mut model) => {
+                            model.canonicalize(&src_dir, &asset_parent);
+                            handle_model(&mut res, &model);
+                        }
+                        Asset::Scene(mut scene) => {
+                            scene.canonicalize(&src_dir, &asset_parent);
+
+                            for scene_ref in scene.refs() {
+                                match scene_ref.model() {
+                                    Some(AssetRef::Asset(model)) => {
+                                        handle_model(&mut res, model);
+                                    }
+                                    Some(AssetRef::Path(path)) => {
+                                        res.insert(path.to_path_buf());
+                                    }
+                                    None => (),
+                                }
+
+                                for material in scene_ref.materials() {
+                                    match material {
+                                        AssetRef::Asset(material) => {
+                                            handle_material(&mut res, &material);
+                                        }
+                                        AssetRef::Path(path) => {
+                                            res.insert(path.to_path_buf());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => (),
+                    }
+                }
+
+                res.insert(asset_path);
+            }
+        }
+
+        Ok(res.into_iter().collect())
+    }
+
     pub fn bake(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> anyhow::Result<()> {
         re_run_if_changed(&src);
 
@@ -383,7 +542,7 @@ impl PakBuf {
                         let src_dir = src_dir.clone();
                         let asset_path = asset_path.clone();
                         tasks.push(rt.spawn_blocking(move || {
-                            let blob = Blob { src: asset_path };
+                            let blob = Blob::new(asset_path);
                             blob.bake(&writer, &src_dir).unwrap();
                         }));
                     }

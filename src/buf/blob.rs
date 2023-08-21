@@ -22,10 +22,16 @@ use {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Blob {
     /// The file source.
-    pub src: PathBuf,
+    src: PathBuf,
 }
 
 impl Blob {
+    pub fn new(src: impl AsRef<Path>) -> Self {
+        let src = src.as_ref().to_path_buf();
+
+        Self { src }
+    }
+
     /// Reads and processes arbitrary binary source files into an existing `.pak` file buffer.
     pub fn bake(
         &self,
@@ -149,6 +155,10 @@ impl Blob {
         writer.ctx.insert(asset, id.into());
 
         Ok(id)
+    }
+
+    pub fn src(&self) -> &Path {
+        &self.src
     }
 }
 

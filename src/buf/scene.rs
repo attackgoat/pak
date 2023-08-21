@@ -406,7 +406,6 @@ impl SceneRef {
     ///
     /// May either be a `Model` asset specified inline or a model source file. Model source files
     /// may be either `.toml` `Model` asset files or direct references to `.glb`/`.gltf` files.
-    #[allow(unused)]
     pub fn model(&self) -> Option<&AssetRef<Model>> {
         self.model.as_ref()
     }
@@ -415,7 +414,6 @@ impl SceneRef {
     ///
     /// If specified, the material assets do not need to be referenced in any content file. If the
     /// material is referenced in a content file it will not be duplicated or cause any problems.
-    #[allow(unused)]
     pub fn materials(&self) -> &[AssetRef<Material>] {
         self.materials.as_deref().unwrap_or_default()
     }
