@@ -15,11 +15,6 @@ use {
     },
 };
 
-// TODO: https://github.com/rust-lang/rust/issues/59359
-fn current_pos(stream: &mut impl Seek) -> Result<u32, Error> {
-    Ok(stream.seek(SeekFrom::Current(0))? as _)
-}
-
 #[derive(Default)]
 pub struct Writer {
     compression: Option<Compression>,
@@ -132,8 +127,18 @@ impl Writer {
     }
 
     fn write_data(&mut self, mut writer: impl Write + Seek) -> Result<(), Error> {
+        let mut magic_bytes = [0u8; 20];
+        magic_bytes.copy_from_slice(b"ATTACKGOAT-PAK-V1.0 ");
+
+        // Write a known value so we can identify this file
+        bincode::serialize_into(&mut writer, &magic_bytes)
+            .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+
+        let skip_position = writer.stream_position()?;
+
         // Write a blank spot that we'll use for the skip header later
-        writer.write_all(&0u32.to_ne_bytes())?;
+        bincode::serialize_into(&mut writer, &0u32)
+            .map_err(|_| Error::from(ErrorKind::InvalidData))?;
 
         // Write the compression we're going to be using, if any
         bincode::serialize_into(&mut writer, &self.compression)
@@ -192,7 +197,7 @@ impl Writer {
         Self::write_refs(self.compression, &mut writer, &mut self.data.scenes)?;
 
         // Write the data portion and then re-seek to the beginning to write the skip header
-        let skip = current_pos(&mut writer)?;
+        let skip = writer.stream_position()? as u32;
         {
             let compressed = if let Some(compressed) = self.compression {
                 compressed.new_writer(&mut writer)
@@ -203,8 +208,9 @@ impl Writer {
                 .map_err(|_| Error::from(ErrorKind::InvalidData))?;
         }
 
-        writer.seek(SeekFrom::Start(0))?;
-        writer.write_all(&(skip).to_ne_bytes())?;
+        writer.seek(SeekFrom::Start(skip_position))?;
+        bincode::serialize_into(&mut writer, &skip)
+            .map_err(|_| Error::from(ErrorKind::InvalidData))?;
 
         Ok(())
     }
@@ -218,7 +224,7 @@ impl Writer {
         T: Serialize,
     {
         let mut res = vec![];
-        let mut start = current_pos(&mut writer)?;
+        let mut start = writer.stream_position()? as _;
 
         for (idx, data) in refs.drain(..).map(|data| data.serialize()).enumerate() {
             // Write this data, compressed
@@ -233,7 +239,7 @@ impl Writer {
             }
 
             // Push a ref
-            let end = current_pos(&mut writer)?;
+            let end = writer.stream_position()? as _;
 
             trace!("Index {idx} = {} bytes ({start}..{end})", end - start);
 

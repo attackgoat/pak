@@ -324,14 +324,31 @@ impl PakBuf {
     }
 
     pub fn from_stream(mut stream: impl Stream + 'static) -> Result<Self, Error> {
+        let magic_bytes: [u8; 20] = bincode::deserialize_from(&mut stream).map_err(|_| {
+            warn!("Unable to read magic bytes");
+
+            Error::from(ErrorKind::InvalidData)
+        })?;
+
+        if String::from_utf8(magic_bytes.into()).unwrap_or_default() != "ATTACKGOAT-PAK-V1.0 " {
+            warn!("Unsupported magic bytes");
+
+            return Err(Error::from(ErrorKind::InvalidData));
+        }
+
         // Read the number of bytes we must 'skip' in order to read the main data
-        let skip = {
-            let mut buf: [u8; 4] = Default::default();
-            stream.read_exact(&mut buf)?;
-            u32::from_ne_bytes(buf)
-        };
-        let compression: Option<Compression> = bincode::deserialize_from(&mut stream)
-            .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+        let skip: u32 = bincode::deserialize_from(&mut stream).map_err(|_| {
+            warn!("Unable to read skip length");
+
+            Error::from(ErrorKind::InvalidData)
+        })?;
+
+        let compression: Option<Compression> =
+            bincode::deserialize_from(&mut stream).map_err(|_| {
+                warn!("Unable to read compression data");
+
+                Error::from(ErrorKind::InvalidData)
+            })?;
 
         // Read the compressed main data
         stream.seek(SeekFrom::Start(skip as _))?;
@@ -341,8 +358,11 @@ impl PakBuf {
             } else {
                 Box::new(&mut stream)
             };
-            bincode::deserialize_from(&mut compressed)
-                .map_err(|_| Error::from(ErrorKind::InvalidData))?
+            bincode::deserialize_from(&mut compressed).map_err(|_| {
+                warn!("Unable to read header");
+
+                Error::from(ErrorKind::InvalidData)
+            })?
         };
 
         trace!(
