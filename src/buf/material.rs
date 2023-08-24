@@ -351,7 +351,7 @@ impl Material {
         project_dir: impl AsRef<Path>,
         src_dir: impl AsRef<Path>,
     ) -> anyhow::Result<MaterialInfo> {
-        let color = match &mut self.color {
+        let color = match &self.color {
             ColorRef::Asset(bitmap) => {
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
@@ -365,27 +365,22 @@ impl Material {
                 })
             }
             ColorRef::Path(src) => {
-                let src = src_dir
-                    .as_ref()
-                    .join(&src)
-                    .canonicalize()
-                    .context("Unable to canonicalize source path")?;
-                let mut bitmap = if is_toml(&src) {
-                    let mut bitmap = Asset::read(&src)
+                let mut bitmap = if is_toml(src) {
+                    let mut bitmap = Asset::read(src)
                         .context("Unable to read color bitmap asset")?
                         .into_bitmap()
                         .expect("Source file should be a bitmap asset");
                     bitmap.canonicalize(&project_dir, &src_dir);
                     bitmap
                 } else {
-                    Bitmap::new(&src)
+                    Bitmap::new(src)
                 };
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
 
                 rt.spawn_blocking(move || {
                     bitmap
-                        .bake_from_path(&writer, &project_dir, Some(src))
+                        .bake_from_path(&writer, &project_dir, Option::<PathBuf>::None)
                         .context("Unable to bake color asset bitmap from path")
                         .unwrap()
                 })
@@ -407,7 +402,7 @@ impl Material {
             }
         };
 
-        let normal = match &mut self.normal {
+        let normal = match &self.normal {
             Some(NormalRef::Asset(bitmap)) => {
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
@@ -421,20 +416,15 @@ impl Material {
                 })
             }
             Some(NormalRef::Path(src)) => {
-                let src = src_dir
-                    .as_ref()
-                    .join(&src)
-                    .canonicalize()
-                    .context("Unable to canonicalize source path")?;
-                let bitmap = if is_toml(&src) {
-                    let mut bitmap = Asset::read(&src)
+                let bitmap = if is_toml(src) {
+                    let mut bitmap = Asset::read(src)
                         .context("Unable to read normal bitmap asset")?
                         .into_bitmap()
                         .expect("Source file should be a bitmap asset");
                     bitmap.canonicalize(&project_dir, &src_dir);
                     bitmap
                 } else {
-                    Bitmap::new(&src)
+                    Bitmap::new(src)
                 };
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
@@ -442,7 +432,7 @@ impl Material {
                 rt.spawn_blocking(move || {
                     bitmap
                         .with_format(BitmapFormat::Rgb)
-                        .bake_from_path(&writer, &project_dir, Some(src))
+                        .bake_from_path(&writer, &project_dir, Option::<PathBuf>::None)
                         .context("Unable to bake normal asset bitmap from path")
                         .unwrap()
                 })
@@ -464,7 +454,7 @@ impl Material {
             }
         };
 
-        let emissive = match &mut self.emissive {
+        let emissive = match &self.emissive {
             Some(EmissiveRef::Asset(bitmap)) => {
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
@@ -480,20 +470,15 @@ impl Material {
                 })
             }
             Some(EmissiveRef::Path(src)) => {
-                let src = src_dir
-                    .as_ref()
-                    .join(&src)
-                    .canonicalize()
-                    .context("Unable to canonicalize source path")?;
-                let bitmap = if is_toml(&src) {
-                    let mut bitmap = Asset::read(&src)
+                let bitmap = if is_toml(src) {
+                    let mut bitmap = Asset::read(src)
                         .context("Unable to read emissive bitmap asset")?
                         .into_bitmap()
                         .expect("Source file should be a bitmap asset");
                     bitmap.canonicalize(&project_dir, &src_dir);
                     bitmap
                 } else {
-                    Bitmap::new(&src)
+                    Bitmap::new(src)
                 };
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
@@ -502,7 +487,7 @@ impl Material {
                     Some(
                         bitmap
                             .with_format(BitmapFormat::Rgb)
-                            .bake_from_path(&writer, &project_dir, Some(src))
+                            .bake_from_path(&writer, &project_dir, Option::<PathBuf>::None)
                             .context("Unable to bake emissive asset bitmap from path")
                             .unwrap(),
                     )
@@ -670,13 +655,8 @@ impl Material {
                 .as_bitmap_buf()
                 .context("Unable to create bitmap buf from scalar bitmap asset")?,
             Some(ScalarRef::Path(src)) => {
-                let src = src_dir
-                    .as_ref()
-                    .join(&src)
-                    .canonicalize()
-                    .context("Unable to canonicalize source path")?;
-                if is_toml(&src) {
-                    let mut bitmap = Asset::read(&src)?
+                if is_toml(src) {
+                    let mut bitmap = Asset::read(src)?
                         .into_bitmap()
                         .expect("Source file should be a bitmap asset");
                     bitmap.canonicalize(&project_dir, src_dir);

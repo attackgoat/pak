@@ -41,7 +41,7 @@ use {
         Deserialize, Deserializer, Serialize,
     },
     std::{
-        collections::{HashMap, HashSet},
+        collections::{BTreeSet, HashMap},
         env::var,
         fmt::{Debug, Formatter},
         fs::{create_dir_all, File},
@@ -56,38 +56,26 @@ use {
 };
 
 /// Given some parent directory and a filename, returns just the portion after the directory.
-#[allow(unused)]
 fn file_key(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> String {
     let res_dir = dir.as_ref();
-    let mut path = path.as_ref();
-    let mut parts = vec![];
+    let path = path.as_ref();
 
-    while path != res_dir {
-        {
-            let path = path.file_name();
-            if path.is_none() {
-                break;
-            }
-
-            let path = path.unwrap();
-            let path_str = path.to_str();
-            if path_str.is_none() {
-                break;
-            }
-
-            parts.push(path_str.unwrap().to_string());
+    let mut key = vec![];
+    for part in path.ancestors() {
+        if part == res_dir {
+            break;
         }
-        path = path.parent().unwrap();
-    }
 
-    let mut key = String::new();
-    for part in parts.iter().rev() {
         if !key.is_empty() {
-            key.push('/');
+            key.push("/".to_string());
         }
 
-        key.push_str(part);
+        if let Some(file_name) = part.file_name() {
+            key.push(file_name.to_string_lossy().to_string());
+        }
     }
+
+    let key = key.into_iter().rev().collect::<String>();
 
     // Strip off the toml extension as needed
     let mut key = PathBuf::from(key);
@@ -199,11 +187,17 @@ trait Canonicalize {
         src_dir: impl AsRef<Path>,
         src: impl AsRef<Path>,
     ) -> PathBuf {
-        //trace!("Getting path for {} in {} (res_dir={})", path.as_ref().display(), path_dir.as_ref().display(), res_dir.as_ref().display());
+        // info!(
+        //     "Getting path for {} in {} (res_dir={}, absolute={})",
+        //     src.as_ref().display(),
+        //     src_dir.as_ref().display(),
+        //     project_dir.as_ref().display(),
+        //     src.as_ref().is_absolute()
+        // );
 
         // Absolute paths are 'project aka resource directory' absolute, not *your host file system*
         // absolute!
-        if src.as_ref().is_absolute() {
+        let res = if src.as_ref().is_absolute() {
             // TODO: This could be way simpler!
 
             // Build an array of path items (file and directories) until the root
@@ -224,39 +218,26 @@ trait Canonicalize {
                 temp = temp.join(part);
             }
 
-            temp.canonicalize().unwrap_or_else(|_| {
-                panic!(
-                    "{} not found, unable to canonicalize absolute path using {} with {}",
-                    temp.display(),
-                    project_dir.as_ref().display(),
-                    src.as_ref().display(),
-                );
-            })
+            temp
         } else {
-            let temp = src_dir.as_ref().join(&src);
-            temp.canonicalize().unwrap_or_else(|_| {
-                panic!(
-                    "{} not found, unable to canonicalize relative path using {} with {}",
-                    temp.display(),
-                    src_dir.as_ref().display(),
-                    src.as_ref().display(),
-                );
-            })
-        }
+            src_dir.as_ref().join(&src)
+        };
+
+        dunce::canonicalize(&res).unwrap_or(res)
     }
 }
 
 impl PakBuf {
     /// Returns the list of source files used to bake this pak, including all assets
     /// specified inline or within scenes.
-    /// 
+    ///
     /// Includes the provided `src` parameter.
     pub fn source_files(src: impl AsRef<Path>) -> anyhow::Result<Box<[PathBuf]>> {
-        fn handle_bitmap(res: &mut HashSet<PathBuf>, bitmap: &Bitmap) {
+        fn handle_bitmap(res: &mut BTreeSet<PathBuf>, bitmap: &Bitmap) {
             res.insert(bitmap.src().to_path_buf());
         }
 
-        fn handle_material(res: &mut HashSet<PathBuf>, material: &Material) {
+        fn handle_material(res: &mut BTreeSet<PathBuf>, material: &Material) {
             match &material.color {
                 ColorRef::Asset(bitmap) => handle_bitmap(res, bitmap),
                 ColorRef::Path(path) => {
@@ -294,11 +275,11 @@ impl PakBuf {
             }
         }
 
-        fn handle_model(res: &mut HashSet<PathBuf>, model: &Model) {
+        fn handle_model(res: &mut BTreeSet<PathBuf>, model: &Model) {
             res.insert(model.src().to_path_buf());
         }
 
-        fn handle_scalar_ref(res: &mut HashSet<PathBuf>, scalar_ref: &ScalarRef) {
+        fn handle_scalar_ref(res: &mut BTreeSet<PathBuf>, scalar_ref: &ScalarRef) {
             match scalar_ref {
                 ScalarRef::Asset(bitmap) => handle_bitmap(res, bitmap),
                 ScalarRef::Path(path) => {
@@ -314,7 +295,7 @@ impl PakBuf {
             .into_content()
             .context("Unable to read asset file")?;
 
-        let mut res = HashSet::new();
+        let mut res = BTreeSet::new();
 
         res.insert(src.as_ref().to_path_buf());
 
