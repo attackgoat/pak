@@ -75,6 +75,16 @@ pub struct Model {
     #[serde(rename = "bake-tangent")]
     bake_tangent: Option<bool>,
     euler: Option<Euler>,
+
+    #[serde(rename = "flip-x")]
+    flip_x: Option<bool>,
+
+    #[serde(rename = "flip-y")]
+    flip_y: Option<bool>,
+
+    #[serde(rename = "flip-z")]
+    flip_z: Option<bool>,
+    
     lod: Option<bool>,
 
     #[serde(rename = "lod-target-error")]
@@ -110,6 +120,9 @@ impl Model {
         Self {
             bake_tangent: None,
             euler: None,
+            flip_x: None,
+            flip_y: None,
+            flip_z: None,
             lod: None,
             lod_target_error: None,
             meshes: None,
@@ -755,6 +768,24 @@ impl Model {
                                         restart_index,
                                     ),
                                     _ => (),
+                                }
+
+                                if self.flip_x.unwrap_or_default() {
+                                    for [x, _y, _z] in &mut vertices.positions {
+                                        *x *= -1.0;
+                                    }
+                                }
+
+                                if self.flip_y.unwrap_or_default() {
+                                    for [_x, y, _z] in &mut vertices.positions {
+                                        *y *= -1.0;
+                                    }
+                                }
+
+                                if self.flip_z.unwrap_or_default() {
+                                    for [_x, _y, z] in &mut vertices.positions {
+                                        *z *= -1.0;
+                                    }
                                 }
 
                                 vertices.transform(transform);

@@ -135,7 +135,7 @@ macro_rules! id_struct {
         paste! {
             #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord,
                 Serialize)]
-            pub struct [<$name Id>](usize);
+            pub struct [<$name Id>](pub usize);
         }
     };
 }
@@ -188,30 +188,30 @@ pub trait Pak {
     fn model_id(&self, key: impl AsRef<str>) -> Option<ModelId>;
 
     /// Gets the pak-unique `SceneId` corresponding to the given key, if one exsits.
-    fn scene_id(&mut self, key: impl AsRef<str>) -> Option<SceneId>;
+    fn scene_id(&self, key: impl AsRef<str>) -> Option<SceneId>;
 
     // --- "Read" functions
 
     /// Gets the corresponding animation for the given ID.
-    fn read_animation_id(&mut self, id: AnimationId) -> Result<AnimationBuf, Error>;
+    fn read_animation_id(&mut self, id: impl Into<AnimationId>) -> Result<AnimationBuf, Error>;
 
     /// Reads the corresponding bitmap for the given ID.
-    fn read_bitmap_font_id(&mut self, id: BitmapFontId) -> Result<BitmapFontBuf, Error>;
+    fn read_bitmap_font_id(&mut self, id: impl Into<BitmapFontId>) -> Result<BitmapFontBuf, Error>;
 
     /// Reads the corresponding bitmap for the given ID.
-    fn read_bitmap_id(&mut self, id: BitmapId) -> Result<BitmapBuf, Error>;
+    fn read_bitmap_id(&mut self, id: impl Into<BitmapId>) -> Result<BitmapBuf, Error>;
 
     /// Gets the corresponding blob for the given ID.
-    fn read_blob_id(&mut self, id: BlobId) -> Result<Vec<u8>, Error>;
+    fn read_blob_id(&mut self, id: impl Into<BlobId>) -> Result<Vec<u8>, Error>;
 
     /// Gets the material for the given handle, if one exsits.
-    fn read_material_id(&self, id: MaterialId) -> Option<MaterialInfo>;
+    fn read_material_id(&self, id: impl Into<MaterialId>) -> Option<MaterialInfo>;
 
     /// Gets the corresponding animation for the given ID.
-    fn read_model_id(&mut self, id: ModelId) -> Result<ModelBuf, Error>;
+    fn read_model_id(&mut self, id: impl Into<ModelId>) -> Result<ModelBuf, Error>;
 
     /// Gets the corresponding animation for the given ID.
-    fn read_scene_id(&mut self, id: SceneId) -> Result<SceneBuf, Error>;
+    fn read_scene_id(&mut self, id: impl Into<SceneId>) -> Result<SceneBuf, Error>;
 
     // --- Convenience functions
 
@@ -296,6 +296,22 @@ pub struct PakBuf {
 }
 
 impl PakBuf {
+    pub fn animation_count(&self) -> usize {
+        self.data.anims.len()
+    }
+
+    pub fn bitmap_count(&self) -> usize {
+        self.data.bitmaps.len()
+    }
+
+    pub fn bitmap_font_count(&self) -> usize {
+        self.data.bitmap_fonts.len()
+    }
+
+    pub fn blob_count(&self) -> usize {
+        self.data.blobs.len()
+    }
+
     fn deserialize<T>(&mut self, pos: u64, len: usize) -> Result<T, Error>
     where
         T: DeserializeOwned,
@@ -382,6 +398,14 @@ impl PakBuf {
         self.data.ids.keys().map(|key| key.as_str())
     }
 
+    pub fn model_count(&self) -> usize {
+        self.data.models.len()
+    }
+
+    pub fn material_count(&self) -> usize {
+        self.data.materials.len()
+    }
+
     /// Opens the given path and decodes a `Pak`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref().to_path_buf();
@@ -389,6 +413,10 @@ impl PakBuf {
         let buf = BufReader::new(file);
 
         Self::from_stream(PakFile { buf, path })
+    }
+
+    pub fn scene_count(&self) -> usize {
+        self.data.scenes.len()
     }
 }
 
@@ -436,12 +464,14 @@ impl Pak for PakBuf {
     }
 
     /// Gets the pak-unique `SceneId` corresponding to the given key, if one exsits.
-    fn scene_id(&mut self, key: impl AsRef<str>) -> Option<SceneId> {
+    fn scene_id(&self, key: impl AsRef<str>) -> Option<SceneId> {
         self.data.ids.get(key.as_ref()).and_then(|id| id.as_scene())
     }
 
     /// Gets the corresponding animation for the given ID.
-    fn read_animation_id(&mut self, id: AnimationId) -> Result<AnimationBuf, Error> {
+    fn read_animation_id(&mut self, id: impl Into<AnimationId>) -> Result<AnimationBuf, Error> {
+        let id = id.into();
+
         trace!("Deserializing animation {}", id.0);
 
         let (pos, len) = self.data.anims[id.0]
@@ -451,7 +481,9 @@ impl Pak for PakBuf {
     }
 
     /// Reads the corresponding bitmap for the given ID.
-    fn read_bitmap_font_id(&mut self, id: BitmapFontId) -> Result<BitmapFontBuf, Error> {
+    fn read_bitmap_font_id(&mut self, id: impl Into<BitmapFontId>) -> Result<BitmapFontBuf, Error> {
+        let id = id.into();
+
         trace!("Deserializing bitmap font {}", id.0);
 
         let (pos, len) = self.data.bitmap_fonts[id.0]
@@ -461,7 +493,9 @@ impl Pak for PakBuf {
     }
 
     /// Reads the corresponding bitmap for the given ID.
-    fn read_bitmap_id(&mut self, id: BitmapId) -> Result<BitmapBuf, Error> {
+    fn read_bitmap_id(&mut self, id: impl Into<BitmapId>) -> Result<BitmapBuf, Error> {
+        let id = id.into();
+
         trace!("Deserializing bitmap {}", id.0);
 
         let (pos, len) = self.data.bitmaps[id.0]
@@ -471,7 +505,9 @@ impl Pak for PakBuf {
     }
 
     /// Gets the corresponding blob for the given ID.
-    fn read_blob_id(&mut self, id: BlobId) -> Result<Vec<u8>, Error> {
+    fn read_blob_id(&mut self, id: impl Into<BlobId>) -> Result<Vec<u8>, Error> {
+        let id = id.into();
+
         trace!("Deserializing blob {}", id.0);
 
         let (pos, len) = self.data.blobs[id.0]
@@ -481,12 +517,16 @@ impl Pak for PakBuf {
     }
 
     /// Gets the material for the given ID.
-    fn read_material_id(&self, id: MaterialId) -> Option<MaterialInfo> {
+    fn read_material_id(&self, id: impl Into<MaterialId>) -> Option<MaterialInfo> {
+        let id = id.into();
+
         self.data.materials.get(id.0).copied()
     }
 
     /// Gets the corresponding animation for the given ID.
-    fn read_model_id(&mut self, id: ModelId) -> Result<ModelBuf, Error> {
+    fn read_model_id(&mut self, id: impl Into<ModelId>) -> Result<ModelBuf, Error> {
+        let id = id.into();
+
         trace!("Deserializing model {}", id.0);
 
         let (pos, len) = self.data.models[id.0]
@@ -496,7 +536,9 @@ impl Pak for PakBuf {
     }
 
     /// Gets the corresponding animation for the given ID.
-    fn read_scene_id(&mut self, id: SceneId) -> Result<SceneBuf, Error> {
+    fn read_scene_id(&mut self, id: impl Into<SceneId>) -> Result<SceneBuf, Error> {
+        let id = id.into();
+
         trace!("Deserializing scene {}", id.0);
 
         let (pos, len) = self.data.scenes[id.0]
