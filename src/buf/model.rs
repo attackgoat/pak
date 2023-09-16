@@ -26,7 +26,7 @@ use {
         Deserialize, Deserializer,
     },
     std::{
-        collections::{HashMap, HashSet, VecDeque},
+        collections::{BTreeSet, HashMap, HashSet, VecDeque},
         fmt::Formatter,
         io::{Error, ErrorKind},
         num::FpCategory,
@@ -84,7 +84,7 @@ pub struct Model {
 
     #[serde(rename = "flip-z")]
     flip_z: Option<bool>,
-    
+
     lod: Option<bool>,
 
     #[serde(rename = "lod-target-error")]
@@ -749,7 +749,18 @@ impl Model {
                     mesh.primitives()
                         .filter_map(|primitive| match primitive.mode() {
                             Mode::TriangleFan | Mode::TriangleStrip | Mode::Triangles => {
-                                trace!("Reading mesh \"{}\"", node.name().unwrap_or_default());
+                                trace!(
+                                    "Reading mesh \"{}\" (material index {})",
+                                    node.name().unwrap_or_default(),
+                                    if primitive.material().index().is_some() {
+                                        format!(
+                                            "{}",
+                                            primitive.material().index().unwrap_or_default()
+                                        )
+                                    } else {
+                                        "unset".to_string()
+                                    }
+                                );
 
                                 // Read material and vertex data
                                 let material = primitive.material().index().unwrap_or_default();
@@ -808,7 +819,7 @@ impl Model {
             .iter()
             .flat_map(|(parts, ..)| parts)
             .map(|(material, ..)| *material)
-            .collect::<HashSet<_>>()
+            .collect::<BTreeSet<_>>()
             .into_iter()
             .enumerate()
             .map(|(idx, material)| (material, idx as _))
