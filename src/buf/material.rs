@@ -1,7 +1,7 @@
 use {
     super::{
         super::bitmap::{BitmapBuf, BitmapColor, BitmapFormat},
-        bitmap::Bitmap,
+        bitmap::{Bitmap, BitmapSwizzle},
         file_key, is_toml, parse_hex_color, parse_hex_scalar, Asset, Canonicalize, MaterialId,
         MaterialInfo, Writer,
     },
@@ -406,7 +406,7 @@ impl Material {
             Some(NormalRef::Asset(bitmap)) => {
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
-                let mut bitmap = bitmap.clone().with_format(BitmapFormat::Rgb);
+                let mut bitmap = bitmap.clone().with_swizzle(BitmapSwizzle::RGB);
 
                 rt.spawn_blocking(move || {
                     bitmap
@@ -431,7 +431,7 @@ impl Material {
 
                 rt.spawn_blocking(move || {
                     bitmap
-                        .with_format(BitmapFormat::Rgb)
+                        .with_swizzle(BitmapSwizzle::RGB)
                         .bake_from_path(&writer, &project_dir, Option::<PathBuf>::None)
                         .context("Unable to bake normal asset bitmap from path")
                         .unwrap()
@@ -458,7 +458,7 @@ impl Material {
             Some(EmissiveRef::Asset(bitmap)) => {
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
-                let mut bitmap = bitmap.clone().with_format(BitmapFormat::Rgb);
+                let mut bitmap = bitmap.clone().with_swizzle(BitmapSwizzle::RGB);
 
                 rt.spawn_blocking(move || {
                     Some(
@@ -486,7 +486,7 @@ impl Material {
                 rt.spawn_blocking(move || {
                     Some(
                         bitmap
-                            .with_format(BitmapFormat::Rgb)
+                            .with_swizzle(BitmapSwizzle::RGB)
                             .bake_from_path(&writer, &project_dir, Option::<PathBuf>::None)
                             .context("Unable to bake emissive asset bitmap from path")
                             .unwrap(),

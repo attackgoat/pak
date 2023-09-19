@@ -1,7 +1,7 @@
 use {
     super::{
         super::bitmap::{BitmapColor, BitmapFormat},
-        bitmap::Bitmap,
+        bitmap::{Bitmap, BitmapSwizzle},
         file_key, re_run_if_changed, Asset, BitmapBuf, BitmapFontBuf, BitmapFontId, BlobId,
         Canonicalize, Writer,
     },
@@ -96,7 +96,7 @@ impl Blob {
                 let path = def_parent.join(page);
 
                 // Bake the pixels
-                Bitmap::read_pixels(path, BitmapFormat::Rgba, None)
+                Bitmap::read_pixels(path, Some(BitmapSwizzle::RGBA), None)
             })
             .filter(|res| res.is_ok()) // TODO: Horrible!
             .map(|res| res.unwrap())

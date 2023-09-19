@@ -7,8 +7,15 @@ use {
     image::{buffer::ConvertBuffer, imageops::FilterType, open, DynamicImage, RgbaImage},
     log::info,
     parking_lot::Mutex,
-    serde::Deserialize,
+    serde::{
+        de::{
+            value::{MapAccessDeserializer, SeqAccessDeserializer},
+            MapAccess, SeqAccess, Visitor,
+        },
+        Deserialize, Deserializer,
+    },
     std::{
+        fmt::Formatter,
         path::{Path, PathBuf},
         sync::Arc,
     },
@@ -18,9 +25,12 @@ use {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Bitmap {
     color: Option<BitmapColor>,
-    format: Option<BitmapFormat>,
     resize: Option<u32>,
     src: PathBuf,
+
+    /// Controls the number and order of the channels output into the final image
+    #[serde(default, deserialize_with = "BitmapSwizzle::de")]
+    swizzle: Option<BitmapSwizzle>,
 }
 
 impl Bitmap {
@@ -31,9 +41,9 @@ impl Bitmap {
     {
         Self {
             color: None,
-            format: None,
             resize: None,
             src: src.as_ref().to_path_buf(),
+            swizzle: None,
         }
     }
 
@@ -43,8 +53,9 @@ impl Bitmap {
         self
     }
 
-    pub fn with_format(mut self, format: BitmapFormat) -> Self {
-        self.format = Some(format);
+    #[allow(dead_code)]
+    pub fn with_swizzle(mut self, swizzle: BitmapSwizzle) -> Self {
+        self.swizzle = Some(swizzle);
         self
     }
 
@@ -82,24 +93,6 @@ impl Bitmap {
             );
         }
 
-        // If format was not specified we guess (it is read as it is from disk; this
-        // is just format represented in the .pak file and what you can retrieve it as)
-        if self.format.is_none() {
-            self.format = match open(self.src()).context("Unable to open bitmap file")? {
-                DynamicImage::ImageLuma8(_) => Some(BitmapFormat::R),
-                DynamicImage::ImageRgb8(_) => Some(BitmapFormat::Rgb),
-                DynamicImage::ImageRgba8(img) => {
-                    if img.pixels().all(|pixel| pixel[3] == u8::MAX) {
-                        // The source image has alpha but we're going to discard it
-                        Some(BitmapFormat::Rgb)
-                    } else {
-                        Some(BitmapFormat::Rgba)
-                    }
-                }
-                _ => None,
-            };
-        }
-
         let bitmap = self
             .as_bitmap_buf()
             .context("Unable to create bitmap buf")?;
@@ -116,7 +109,7 @@ impl Bitmap {
     }
 
     pub fn as_bitmap_buf(&self) -> anyhow::Result<BitmapBuf> {
-        let (width, pixels) = Self::read_pixels(self.src(), self.format(), self.resize)
+        let (width, pixels) = Self::read_pixels(self.src(), self.swizzle, self.resize)
             .context("Unable to read pixels")?;
 
         Ok(BitmapBuf::new(self.color(), self.format(), width, pixels))
@@ -126,15 +119,19 @@ impl Bitmap {
         self.color.unwrap_or(BitmapColor::Srgb)
     }
 
-    /// Specific pixel channels used.
-    pub fn format(&self) -> BitmapFormat {
-        self.format.unwrap_or(BitmapFormat::Rgba)
+    fn format(&self) -> BitmapFormat {
+        match self.swizzle {
+            Some(BitmapSwizzle::One(_)) => BitmapFormat::R,
+            Some(BitmapSwizzle::Two(_)) => BitmapFormat::Rg,
+            Some(BitmapSwizzle::Three(_)) => BitmapFormat::Rgb,
+            Some(BitmapSwizzle::Four(_)) | None => BitmapFormat::Rgba,
+        }
     }
 
     /// Reads raw pixel data from an image source file and returns them in the given format.
     pub fn read_pixels(
         path: impl AsRef<Path>,
-        fmt: BitmapFormat,
+        swizzle: Option<BitmapSwizzle>,
         resize: Option<u32>,
     ) -> anyhow::Result<(u32, Vec<u8>)> {
         re_run_if_changed(&path);
@@ -163,6 +160,36 @@ impl Bitmap {
 
         //let elapsed = std::time::Instant::now() - started;
         //info!("Image open took {} ms for {}x{}", elapsed.as_millis(), image.width(), image.height());
+
+        // If format was not specified we guess (it is read as it is from disk; this
+        // is just format represented in the .pak file and what you can retrieve it as)
+        let swizzle = swizzle.unwrap_or_else(|| {
+            match &image {
+                DynamicImage::ImageLuma8(_) => BitmapSwizzle::One(BitmapChannel::R),
+                DynamicImage::ImageRgb8(_) => {
+                    BitmapSwizzle::Three([BitmapChannel::R, BitmapChannel::G, BitmapChannel::B])
+                }
+                DynamicImage::ImageRgba8(img) => {
+                    if img.pixels().all(|pixel| pixel[3] == u8::MAX) {
+                        // The source image has alpha but we're going to discard it
+                        BitmapSwizzle::Three([BitmapChannel::R, BitmapChannel::G, BitmapChannel::B])
+                    } else {
+                        BitmapSwizzle::Four([
+                            BitmapChannel::R,
+                            BitmapChannel::G,
+                            BitmapChannel::B,
+                            BitmapChannel::A,
+                        ])
+                    }
+                }
+                _ => BitmapSwizzle::Four([
+                    BitmapChannel::R,
+                    BitmapChannel::G,
+                    BitmapChannel::B,
+                    BitmapChannel::A,
+                ]),
+            }
+        });
 
         if let Some(resize) = resize {
             let (width, height) = if image.width() > image.height() {
@@ -193,64 +220,64 @@ impl Bitmap {
             _ => unimplemented!(),
         };
         let width = image.width();
-        let data = match fmt {
-            BitmapFormat::R => Self::pixels_r(&image),
-            BitmapFormat::Rg => Self::pixels_rg(&image),
-            BitmapFormat::Rgb => Self::pixels_rgb(&image),
-            BitmapFormat::Rgba => Self::pixels_rgba(&image),
+        let data = match swizzle {
+            BitmapSwizzle::One(swizzle) => Self::pixels_r(&image, swizzle),
+            BitmapSwizzle::Two(swizzle) => Self::pixels_rg(&image, swizzle),
+            BitmapSwizzle::Three(swizzle) => Self::pixels_rgb(&image, swizzle),
+            BitmapSwizzle::Four(swizzle) => Self::pixels_rgba(&image, swizzle),
         };
 
         Ok((width, data))
     }
 
-    fn pixels_r(image: &RgbaImage) -> Vec<u8> {
+    fn pixels_r(image: &RgbaImage, r: BitmapChannel) -> Vec<u8> {
         let mut buf = Vec::with_capacity(image.width() as usize * image.height() as usize);
         for y in 0..image.height() {
             for x in 0..image.width() {
                 let pixel = image.get_pixel(x, y);
-                buf.push(pixel[0]);
+                buf.push(pixel[r.rgba_index()]);
             }
         }
 
         buf
     }
 
-    fn pixels_rg(image: &RgbaImage) -> Vec<u8> {
+    fn pixels_rg(image: &RgbaImage, [r, g]: [BitmapChannel; 2]) -> Vec<u8> {
         let mut buf = Vec::with_capacity(image.width() as usize * image.height() as usize * 2);
         for y in 0..image.height() {
             for x in 0..image.width() {
                 let pixel = image.get_pixel(x, y);
-                buf.push(pixel[0]);
-                buf.push(pixel[1]);
+                buf.push(pixel[r.rgba_index()]);
+                buf.push(pixel[g.rgba_index()]);
             }
         }
 
         buf
     }
 
-    fn pixels_rgb(image: &RgbaImage) -> Vec<u8> {
+    fn pixels_rgb(image: &RgbaImage, [r, g, b]: [BitmapChannel; 3]) -> Vec<u8> {
         let mut buf = Vec::with_capacity(image.width() as usize * image.height() as usize * 3);
         for y in 0..image.height() {
             for x in 0..image.width() {
                 let pixel = image.get_pixel(x, y);
-                buf.push(pixel[0]);
-                buf.push(pixel[1]);
-                buf.push(pixel[2]);
+                buf.push(pixel[r.rgba_index()]);
+                buf.push(pixel[g.rgba_index()]);
+                buf.push(pixel[b.rgba_index()]);
             }
         }
 
         buf
     }
 
-    fn pixels_rgba(image: &RgbaImage) -> Vec<u8> {
+    fn pixels_rgba(image: &RgbaImage, [r, g, b, a]: [BitmapChannel; 4]) -> Vec<u8> {
         let mut buf = Vec::with_capacity(image.width() as usize * image.height() as usize * 4);
         for y in 0..image.height() {
             for x in 0..image.width() {
                 let pixel = image.get_pixel(x, y);
-                buf.push(pixel[0]);
-                buf.push(pixel[1]);
-                buf.push(pixel[2]);
-                buf.push(pixel[3]);
+                buf.push(pixel[r.rgba_index()]);
+                buf.push(pixel[g.rgba_index()]);
+                buf.push(pixel[b.rgba_index()]);
+                buf.push(pixel[a.rgba_index()]);
             }
         }
 
@@ -266,5 +293,158 @@ impl Bitmap {
 impl Canonicalize for Bitmap {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
         self.src = Self::canonicalize_project_path(project_dir, src_dir, &self.src);
+    }
+}
+
+/// Describes a single channel of a `Bitmap`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
+pub enum BitmapChannel {
+    R,
+    G,
+    B,
+    A,
+}
+
+impl BitmapChannel {
+    fn rgba_index(self) -> usize {
+        match self {
+            Self::R => 0,
+            Self::G => 1,
+            Self::B => 2,
+            Self::A => 3,
+        }
+    }
+}
+
+/// Describes the channel arrangement of a `Bitmap`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum BitmapSwizzle {
+    One(BitmapChannel),
+    Two([BitmapChannel; 2]),
+    Three([BitmapChannel; 3]),
+    Four([BitmapChannel; 4]),
+}
+
+impl BitmapSwizzle {
+    pub const RGB: Self = Self::Three([BitmapChannel::R, BitmapChannel::G, BitmapChannel::B]);
+    pub const RGBA: Self = Self::Four([
+        BitmapChannel::R,
+        BitmapChannel::B,
+        BitmapChannel::G,
+        BitmapChannel::A,
+    ]);
+
+    fn de<'de, D>(deserializer: D) -> Result<Option<Self>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ScalarRefVisitor;
+
+        impl<'de> Visitor<'de> for ScalarRefVisitor {
+            type Value = Option<BitmapSwizzle>;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                formatter.write_str("swizzle string with one to four values of either r, g, b or a")
+            }
+
+            fn visit_str<E>(self, str: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                fn parse_channel<E>(c: char) -> Result<BitmapChannel, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(match c {
+                        'r' => BitmapChannel::R,
+                        'g' => BitmapChannel::G,
+                        'b' => BitmapChannel::B,
+                        'a' => BitmapChannel::A,
+                        _ => return Err(E::custom("expected a value of either r, g, b or a")),
+                    })
+                }
+
+                let mut chars = str.chars();
+
+                Ok(Some(match str.len() {
+                    1 => BitmapSwizzle::One(parse_channel(chars.next().unwrap())?),
+                    2 => BitmapSwizzle::Two([
+                        parse_channel(chars.next().unwrap())?,
+                        parse_channel(chars.next().unwrap())?,
+                    ]),
+                    3 => BitmapSwizzle::Three([
+                        parse_channel(chars.next().unwrap())?,
+                        parse_channel(chars.next().unwrap())?,
+                        parse_channel(chars.next().unwrap())?,
+                    ]),
+                    4 => BitmapSwizzle::Four([
+                        parse_channel(chars.next().unwrap())?,
+                        parse_channel(chars.next().unwrap())?,
+                        parse_channel(chars.next().unwrap())?,
+                        parse_channel(chars.next().unwrap())?,
+                    ]),
+                    _ => return Err(E::custom("expected a string with one to four values")),
+                }))
+            }
+        }
+
+        deserializer.deserialize_any(ScalarRefVisitor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {super::*, toml::de::ValueDeserializer};
+
+    #[test]
+    fn bitmap_swizzle() {
+        assert!(Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = '' }")).is_err(),);
+        assert!(
+            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'rrggbb' }"))
+                .is_err(),
+        );
+        assert!(
+            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'z' }")).is_err(),
+        );
+
+        assert_eq!(
+            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'r' }")).unwrap(),
+            Bitmap::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::R))
+        );
+        assert_eq!(
+            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'g' }")).unwrap(),
+            Bitmap::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::G))
+        );
+        assert_eq!(
+            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'b' }")).unwrap(),
+            Bitmap::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::B))
+        );
+        assert_eq!(
+            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'a' }")).unwrap(),
+            Bitmap::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::A))
+        );
+
+        assert_eq!(
+            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'gg' }")).unwrap(),
+            Bitmap::new(PathBuf::new())
+                .with_swizzle(BitmapSwizzle::Two([BitmapChannel::G, BitmapChannel::G]))
+        );
+        assert_eq!(
+            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'bgr' }")).unwrap(),
+            Bitmap::new(PathBuf::new()).with_swizzle(BitmapSwizzle::Three([
+                BitmapChannel::B,
+                BitmapChannel::G,
+                BitmapChannel::R
+            ]))
+        );
+        assert_eq!(
+            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'rrrr' }")).unwrap(),
+            Bitmap::new(PathBuf::new()).with_swizzle(BitmapSwizzle::Four([
+                BitmapChannel::R,
+                BitmapChannel::R,
+                BitmapChannel::R,
+                BitmapChannel::R
+            ]))
+        );
     }
 }
