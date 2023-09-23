@@ -139,73 +139,76 @@ mod tests {
 
     #[test]
     fn index_buffer_u8() {
-        let index_buf = IndexBuffer::new(&[0, 1, 2]);
+        let indices = [0, 1, 2, 0, 1, 3];
+        let index_buf = IndexBuffer::new(&indices);
 
-        assert_eq!(index_buf.triangle_count(), 1);
-        assert_eq!(index_buf.index_count(), 3);
+        assert_eq!(index_buf.triangle_count(), 2);
+        assert_eq!(index_buf.index_count(), 6);
         assert_eq!(index_buf.index_type(), IndexType::U8);
 
         let buf = index_buf.as_u8().unwrap();
 
-        assert_eq!(buf.len(), 3);
-        assert_eq!(buf[0], 0);
-        assert_eq!(buf[1], 1);
-        assert_eq!(buf[2], 2);
+        assert_eq!(buf.len(), 6);
+        for (expected, actual) in indices.iter().copied().zip(buf) {
+            assert_eq!(expected, actual as u32);
+        }
 
         let buf = index_buf.as_u16().unwrap();
 
-        assert_eq!(buf.len(), 3);
-        assert_eq!(buf[0], 0);
-        assert_eq!(buf[1], 1);
-        assert_eq!(buf[2], 2);
+        assert_eq!(buf.len(), 6);
+        for (expected, actual) in indices.iter().copied().zip(buf) {
+            assert_eq!(expected, actual as u32);
+        }
 
         let buf = index_buf.as_u32();
 
-        assert_eq!(buf.len(), 3);
-        assert_eq!(buf[0], 0);
-        assert_eq!(buf[1], 1);
-        assert_eq!(buf[2], 2);
+        assert_eq!(buf.len(), 6);
+        for (expected, actual) in indices.iter().copied().zip(buf) {
+            assert_eq!(expected, actual as u32);
+        }
     }
 
     #[test]
     fn index_buffer_u16() {
-        let index_buf = IndexBuffer::new(&[0, 1, 42_000]);
+        let indices = [0, 1, 42_000, 0, 1, 2];
+        let index_buf = IndexBuffer::new(&indices);
 
-        assert_eq!(index_buf.triangle_count(), 1);
-        assert_eq!(index_buf.index_count(), 3);
+        assert_eq!(index_buf.triangle_count(), 2);
+        assert_eq!(index_buf.index_count(), 6);
         assert_eq!(index_buf.index_type(), IndexType::U16);
         assert_eq!(index_buf.as_u8(), None);
 
         let buf = index_buf.as_u16().unwrap();
 
-        assert_eq!(buf.len(), 3);
-        assert_eq!(buf[0], 0);
-        assert_eq!(buf[1], 1);
-        assert_eq!(buf[2], 42_000);
+        assert_eq!(buf.len(), 6);
+        for (expected, actual) in indices.iter().copied().zip(buf) {
+            assert_eq!(expected, actual as u32);
+        }
 
         let buf = index_buf.as_u32();
 
-        assert_eq!(buf.len(), 3);
-        assert_eq!(buf[0], 0);
-        assert_eq!(buf[1], 1);
-        assert_eq!(buf[2], 42_000);
+        assert_eq!(buf.len(), 6);
+        for (expected, actual) in indices.iter().copied().zip(buf) {
+            assert_eq!(expected, actual as u32);
+        }
     }
 
     #[test]
     fn index_buffer_u32() {
-        let index_buf = IndexBuffer::new(&[0, 1, 100_000]);
+        let indices = [0, 1, 100_000, 0, 1, 2];
+        let index_buf = IndexBuffer::new(&indices);
 
-        assert_eq!(index_buf.triangle_count(), 1);
-        assert_eq!(index_buf.index_count(), 3);
+        assert_eq!(index_buf.triangle_count(), 2);
+        assert_eq!(index_buf.index_count(), 6);
         assert_eq!(index_buf.index_type(), IndexType::U32);
         assert_eq!(index_buf.as_u8(), None);
         assert_eq!(index_buf.as_u16(), None);
 
         let buf = index_buf.as_u32();
 
-        assert_eq!(buf.len(), 3);
-        assert_eq!(buf[0], 0);
-        assert_eq!(buf[1], 1);
-        assert_eq!(buf[2], 100_000);
+        assert_eq!(buf.len(), 6);
+        for (expected, actual) in indices.iter().copied().zip(buf) {
+            assert_eq!(expected, actual as u32);
+        }
     }
 }
