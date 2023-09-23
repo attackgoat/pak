@@ -100,7 +100,8 @@ impl Blob {
             })
             .filter(|res| res.is_ok()) // TODO: Horrible!
             .map(|res| res.unwrap())
-            .map(|(width, pixels)| {
+            .map(|(_, width, pixels)| {
+                // TODO: Handle format correctly!
                 let mut better_pixels = Vec::with_capacity(pixels.len());
                 for y in 0..pixels.len() / 4 / width as usize {
                     for x in 0..width as usize {

@@ -109,23 +109,14 @@ impl Bitmap {
     }
 
     pub fn as_bitmap_buf(&self) -> anyhow::Result<BitmapBuf> {
-        let (width, pixels) = Self::read_pixels(self.src(), self.swizzle, self.resize)
+        let (format, width, pixels) = Self::read_pixels(self.src(), self.swizzle, self.resize)
             .context("Unable to read pixels")?;
 
-        Ok(BitmapBuf::new(self.color(), self.format(), width, pixels))
+        Ok(BitmapBuf::new(self.color(), format, width, pixels))
     }
 
     pub fn color(&self) -> BitmapColor {
         self.color.unwrap_or(BitmapColor::Srgb)
-    }
-
-    fn format(&self) -> BitmapFormat {
-        match self.swizzle {
-            Some(BitmapSwizzle::One(_)) => BitmapFormat::R,
-            Some(BitmapSwizzle::Two(_)) => BitmapFormat::Rg,
-            Some(BitmapSwizzle::Three(_)) => BitmapFormat::Rgb,
-            Some(BitmapSwizzle::Four(_)) | None => BitmapFormat::Rgba,
-        }
     }
 
     /// Reads raw pixel data from an image source file and returns them in the given format.
@@ -133,7 +124,7 @@ impl Bitmap {
         path: impl AsRef<Path>,
         swizzle: Option<BitmapSwizzle>,
         resize: Option<u32>,
-    ) -> anyhow::Result<(u32, Vec<u8>)> {
+    ) -> anyhow::Result<(BitmapFormat, u32, Vec<u8>)> {
         re_run_if_changed(&path);
 
         //let started = std::time::Instant::now();
@@ -220,14 +211,16 @@ impl Bitmap {
             _ => unimplemented!(),
         };
         let width = image.width();
-        let data = match swizzle {
-            BitmapSwizzle::One(swizzle) => Self::pixels_r(&image, swizzle),
-            BitmapSwizzle::Two(swizzle) => Self::pixels_rg(&image, swizzle),
-            BitmapSwizzle::Three(swizzle) => Self::pixels_rgb(&image, swizzle),
-            BitmapSwizzle::Four(swizzle) => Self::pixels_rgba(&image, swizzle),
+        let (format, data) = match swizzle {
+            BitmapSwizzle::One(swizzle) => (BitmapFormat::R, Self::pixels_r(&image, swizzle)),
+            BitmapSwizzle::Two(swizzle) => (BitmapFormat::Rg, Self::pixels_rg(&image, swizzle)),
+            BitmapSwizzle::Three(swizzle) => (BitmapFormat::Rgb, Self::pixels_rgb(&image, swizzle)),
+            BitmapSwizzle::Four(swizzle) => {
+                (BitmapFormat::Rgba, Self::pixels_rgba(&image, swizzle))
+            }
         };
 
-        Ok((width, data))
+        Ok((format, width, data))
     }
 
     fn pixels_r(image: &RgbaImage, r: BitmapChannel) -> Vec<u8> {
