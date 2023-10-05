@@ -29,6 +29,7 @@ use {
         collections::{BTreeSet, HashMap, HashSet, VecDeque},
         fmt::Formatter,
         io::{Error, ErrorKind},
+        iter::repeat,
         num::FpCategory,
         path::{Path, PathBuf},
         sync::Arc,
@@ -861,19 +862,22 @@ impl Model {
 
                 if !self.bake_tangent() {
                     data.tangents.clear();
+                } else if data.tangents.is_empty() {
+                    warn!(
+                        "Tangent data requested but not found: {} (will generate)",
+                        self.src().display()
+                    );
+
+                    data.tangents
+                        .extend(repeat([0.0; 4]).take(data.positions.len()));
+
+                    assert!(mikktspace::generate_tangents(&mut data));
                 }
 
                 // Main mesh part
                 {
                     let (vertex, mut vertex_buf) = data.to_vertex_buf();
                     let vertex_stride = vertex.stride();
-
-                    if self.bake_tangent() && !vertex.contains(Vertex::TANGENT) {
-                        warn!(
-                            "Tangent data requested but not found: {}",
-                            self.src().display()
-                        )
-                    }
 
                     self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride);
 
@@ -1008,6 +1012,10 @@ struct VertexData {
 }
 
 impl VertexData {
+    fn index(&self, face: usize, vert: usize) -> usize {
+        self.indices[face * 3 + vert] as _
+    }
+
     fn to_vertex_buf(&self) -> (Vertex, Vec<u8>) {
         let mut vertex = Vertex::POSITION;
 
@@ -1128,5 +1136,32 @@ impl VertexData {
         for normal in &mut self.normals {
             *normal = rotation.mul_vec3(Vec3::from_array(*normal)).to_array();
         }
+    }
+}
+
+impl mikktspace::Geometry for VertexData {
+    fn num_faces(&self) -> usize {
+        self.indices.len() / 3
+    }
+
+    fn num_vertices_of_face(&self, _face: usize) -> usize {
+        3
+    }
+
+    fn position(&self, face: usize, vert: usize) -> [f32; 3] {
+        self.positions[self.index(face, vert)]
+    }
+
+    fn normal(&self, face: usize, vert: usize) -> [f32; 3] {
+        self.normals[self.index(face, vert)]
+    }
+
+    fn tex_coord(&self, face: usize, vert: usize) -> [f32; 2] {
+        self.textures.0[self.index(face, vert)]
+    }
+
+    fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
+        let idx = self.index(face, vert);
+        self.tangents[idx] = tangent;
     }
 }

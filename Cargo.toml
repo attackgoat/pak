@@ -29,6 +29,7 @@ gltf = { version = "1.2", features = ["names"] }
 image = "0.24"
 log = "0.4"
 meshopt = "0.1"
+mikktspace = "0.3"
 parking_lot = { version = "0.12", optional = true }
 ordered-float = { version = "3.6", features = ["serde"] }
 paste = "1.0"
