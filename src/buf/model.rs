@@ -73,8 +73,6 @@ impl MeshRef {
 /// Holds a description of `.glb` or `.gltf` 3D models.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Model {
-    #[serde(rename = "bake-tangent")]
-    bake_tangent: Option<bool>,
     euler: Option<Euler>,
 
     #[serde(rename = "flip-x")]
@@ -94,6 +92,7 @@ pub struct Model {
     #[serde(rename = "min-lod-triangles")]
     min_lod_triangles: Option<usize>,
 
+    normals: Option<bool>,
     offset: Option<[OrderedFloat<f32>; 3]>,
     optimize: Option<bool>,
 
@@ -108,6 +107,8 @@ pub struct Model {
     shadow: Option<bool>,
     src: PathBuf,
 
+    tangents: Option<bool>,
+
     // Tables must follow values
     #[serde(rename = "mesh")]
     meshes: Option<Box<[MeshRef]>>,
@@ -119,7 +120,6 @@ impl Model {
 
     pub fn new(src: impl AsRef<Path>) -> Self {
         Self {
-            bake_tangent: None,
             euler: None,
             flip_x: None,
             flip_y: None,
@@ -128,6 +128,7 @@ impl Model {
             lod_target_error: None,
             meshes: None,
             min_lod_triangles: None,
+            normals: None,
             offset: None,
             optimize: None,
             overdraw_threshold: None,
@@ -135,6 +136,7 @@ impl Model {
             scale: None,
             shadow: None,
             src: src.as_ref().to_path_buf(),
+            tangents: None,
         }
     }
 
@@ -183,11 +185,6 @@ impl Model {
         writer.ctx.insert(asset, id.into());
 
         Ok(id)
-    }
-
-    /// When `true` (the default) tangent values will be stored.
-    pub fn bake_tangent(&self) -> bool {
-        self.bake_tangent.unwrap_or(true)
     }
 
     fn calculate_lods(
@@ -263,6 +260,11 @@ impl Model {
         self.min_lod_triangles
             .unwrap_or(Self::DEFAULT_LOD_MIN)
             .clamp(1, usize::MAX)
+    }
+
+    /// When `true` (the default) normal values will be stored (or generated if needed).
+    pub fn normals(&self) -> bool {
+        self.normals.unwrap_or(true)
     }
 
     /// Translation of the model origin.
@@ -686,6 +688,11 @@ impl Model {
         self.src.as_path()
     }
 
+    /// When `true` (the default) tangent values will be stored (or generated if needed).
+    pub fn tangents(&self) -> bool {
+        self.tangents.unwrap_or(true)
+    }
+
     fn to_model_buf(&self) -> anyhow::Result<ModelBuf> {
         // Gather a map of the importable mesh names and the renamed name they should get
         let mut mesh_names = HashMap::<_, _>::default();
@@ -860,13 +867,30 @@ impl Model {
             for (material, mut data) in parts {
                 let material = materials.get(&material).copied().unwrap_or_default();
 
-                if !self.bake_tangent() {
+                if !self.normals() {
+                    data.normals.clear();
+                } else if data.normals.is_empty() {
+                    data.generate_normals();
+                }
+
+                if !self.tangents() {
                     data.tangents.clear();
                 } else if data.tangents.is_empty() {
                     warn!(
                         "Tangent data requested but not found: {} (will generate)",
                         self.src().display()
                     );
+
+                    if data.normals.is_empty() {
+                        data.generate_normals();
+                    }
+
+                    if data.textures.0.is_empty() {
+                        // We must generate totally fake texture coordinates too
+                        data.textures
+                            .0
+                            .resize(data.positions.len(), Default::default());
+                    }
 
                     data.tangents
                         .extend(repeat([0.0; 4]).take(data.positions.len()));
@@ -1012,6 +1036,40 @@ struct VertexData {
 }
 
 impl VertexData {
+    fn generate_normals(&mut self) {
+        self.normals.clear();
+        self.normals
+            .resize(self.positions.len(), Default::default());
+
+        for idx in 0..self.indices.len() / 3 {
+            let offset = idx * 3;
+            let indices = [
+                self.indices[offset] as usize,
+                self.indices[offset + 1] as usize,
+                self.indices[offset + 2] as usize,
+            ];
+            let vertices = [
+                Vec3::from_array(self.positions[indices[0]]),
+                Vec3::from_array(self.positions[indices[1]]),
+                Vec3::from_array(self.positions[indices[2]]),
+            ];
+
+            let normal = (vertices[1] - vertices[0])
+                .cross(vertices[2] - vertices[0])
+                .normalize();
+            self.normals[indices[0]] =
+                (Vec3::from_array(self.normals[indices[0]]) + normal).to_array();
+            self.normals[indices[1]] =
+                (Vec3::from_array(self.normals[indices[1]]) + normal).to_array();
+            self.normals[indices[2]] =
+                (Vec3::from_array(self.normals[indices[2]]) + normal).to_array();
+        }
+
+        for idx in 0..self.normals.len() {
+            self.normals[idx] = Vec3::from_array(self.normals[idx]).normalize().to_array();
+        }
+    }
+
     fn index(&self, face: usize, vert: usize) -> usize {
         self.indices[face * 3 + vert] as _
     }
