@@ -407,15 +407,13 @@ impl Model {
                     return None;
                 }
 
-                let gltf_joints = skin.joints().collect::<Box<_>>();
-
-                if inverse_binds.len() != gltf_joints.len() {
+                if inverse_binds.len() != skin.joints().len() {
                     warn!("Incompatible joints found");
 
                     return None;
                 }
 
-                if gltf_joints.iter().any(|joint| joint.name().is_none()) {
+                if skin.joints().any(|joint| joint.name().is_none()) {
                     warn!("Unnamed joints found");
 
                     return None;
@@ -423,7 +421,7 @@ impl Model {
 
                 {
                     let mut joint_names = HashSet::new();
-                    for joint_name in gltf_joints.iter().map(|joint| joint.name().unwrap()) {
+                    for joint_name in skin.joints().map(|joint| joint.name().unwrap()) {
                         if !joint_names.insert(joint_name) {
                             warn!("Duplicate joint names found");
 
@@ -432,60 +430,25 @@ impl Model {
                     }
                 }
 
-                // Create a list of GLTF joints sorted by file index where we store:
-                // 0: The JOINTS vertex attribute index of this joint
-                // 1: The node for this joint
-                // 2: The IBP matrix
-                let gltf_joints = {
-                    let mut res = Vec::with_capacity(gltf_joints.len());
-                    res.extend(
-                        gltf_joints
-                            .iter()
-                            .cloned()
-                            .zip(inverse_binds.iter().copied())
-                            .enumerate()
-                            .map(|(index, (node, inverse_bind))| (index, node, inverse_bind)),
-                    );
-                    res.sort_unstable_by_key(|(_, node, _)| node.index());
-                    res
-                };
+                let mut parents = HashMap::with_capacity(skin.joints().len());
+                for (index, joint) in skin.joints().enumerate() {
+                    for child in joint.children() {
+                        if parents.insert(child.index(), index).is_some() {
+                            warn!("Invalid skeleton hierarchy found");
 
-                let mut child_indices = Vec::with_capacity(gltf_joints.len());
-                for (_, node, _) in gltf_joints.iter() {
-                    for child in node.children() {
-                        child_indices.push(child.index());
+                            return None;
+                        }
                     }
                 }
 
-                child_indices.sort_unstable();
-
-                // Find the root node(s)
-                let mut nodes = VecDeque::default();
-                for (index, node, inverse_bind) in gltf_joints.iter() {
-                    if child_indices.binary_search(&node.index()).is_err() {
-                        nodes.push_front((*index, nodes.len(), node.clone(), *inverse_bind));
-                    }
-                }
-
-                let mut joints = Vec::with_capacity(gltf_joints.len());
-                while let Some((index, parent_index, node, inverse_bind)) = nodes.pop_back() {
-                    for child in node.children() {
-                        let child_index = gltf_joints
-                            .binary_search_by_key(&child.index(), |(_, node, _)| node.index())
-                            .unwrap();
-                        let (index, _, inverse_bind) = gltf_joints[child_index];
-                        nodes.push_front((index, joints.len(), child, inverse_bind));
-                    }
-
+                let mut joints = Vec::with_capacity(skin.joints().len());
+                for (index, joint) in skin.joints().enumerate() {
                     joints.push(Joint {
-                        index,
-                        inverse_bind,
-                        name: node.name().unwrap().to_string(),
-                        parent_index,
+                        parent_index: parents.get(&joint.index()).copied().unwrap_or(index),
+                        inverse_bind: inverse_binds[index],
+                        name: joint.name().unwrap_or_default().to_string(),
                     });
                 }
-
-                debug_assert_eq!(joints.len(), gltf_joints.len());
 
                 Some(Skin::new(joints))
             })

@@ -8,9 +8,6 @@ use {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Joint {
-    /// Index which is referenced by the JOINTS and WEIGHTS vertex attributes.
-    pub index: usize,
-
     /// A matrix which transform the mesh into the local space of the joint.
     pub inverse_bind: Mat4,
 
