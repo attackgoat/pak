@@ -84,6 +84,9 @@ pub struct Model {
     #[serde(rename = "flip-z")]
     flip_z: Option<bool>,
 
+    #[serde(rename = "ignore-skin")]
+    ignore_skin: Option<bool>,
+
     lod: Option<bool>,
 
     #[serde(rename = "lod-target-error")]
@@ -124,6 +127,7 @@ impl Model {
             flip_x: None,
             flip_y: None,
             flip_z: None,
+            ignore_skin: None,
             lod: None,
             lod_target_error: None,
             meshes: None,
@@ -387,17 +391,20 @@ impl Model {
         self.overdraw_threshold.unwrap_or(OrderedFloat(1.05)).0
     }
 
-    fn read_skin(node: &Node, bufs: &[Data]) -> Option<Skin> {
+    fn read_skin(node: &Node, bufs: &[Data], transform: Mat4) -> Option<Skin> {
         node.skin()
             .map(|skin| {
                 let inverse_binds = skin
                     .reader(|buf| bufs.get(buf.index()).map(|data| data.0.as_slice()))
                     .read_inverse_bind_matrices()
                     .map(|data| {
-                        let mut res = Vec::with_capacity(data.len());
-                        res.extend(data.map(|matrix| Mat4::from_cols_array_2d(&matrix)));
+                        data.map(|matrix| {
+                            let inverse_bind = Mat4::from_cols_array_2d(&matrix);
+                            let bind = inverse_bind.inverse();
 
-                        res
+                            (transform * bind).inverse()
+                        })
+                        .collect::<Box<_>>()
                     })
                     .unwrap_or_default();
 
@@ -442,17 +449,17 @@ impl Model {
                 }
 
                 let mut joints = Vec::with_capacity(skin.joints().len());
-                for (index, joint) in skin.joints().enumerate() {
+                for (idx, joint) in skin.joints().enumerate() {
                     joints.push(Joint {
-                        parent_index: parents.get(&joint.index()).copied().unwrap_or(index),
-                        inverse_bind: inverse_binds[index],
+                        parent_index: parents.get(&joint.index()).copied().unwrap_or(idx),
+                        inverse_bind: inverse_binds[idx],
                         name: joint.name().unwrap_or_default().to_string(),
                     });
                 }
 
                 Some(Skin::new(joints))
             })
-            .unwrap_or_default()
+            .flatten()
     }
 
     fn read_vertices<'a, 's, F>(data: Reader<'a, 's, F>) -> (u32, VertexData)
@@ -694,93 +701,88 @@ impl Model {
                 }
             }
 
-            Some((node, Mat4::IDENTITY))
+            Some(node)
         }));
         let mut meshes = vec![];
-
+        let allow_skin = !self.ignore_skin.unwrap_or_default();
         let model_transform =
             Mat4::from_scale_rotation_translation(Vec3::ONE, self.rotation(), self.offset());
 
         while !nodes.is_empty() {
-            let (node, parent_transform) = nodes.pop_front().unwrap();
-
-            debug!("Loading mesh {}", node.name().unwrap_or_default());
-
-            let transform = extract_transform(&node) * parent_transform;
+            let node = nodes.pop_front().unwrap();
 
             for child_node in node.children() {
-                nodes.push_back((child_node, transform));
+                nodes.push_back(child_node);
             }
 
-            let transform = model_transform * transform;
+            if let Some(mesh) = node.mesh() {
+                info!("Loading mesh {}", node.name().unwrap_or_default());
 
-            let parts = node
-                .mesh()
-                .map(|mesh| {
-                    mesh.primitives()
-                        .filter_map(|primitive| match primitive.mode() {
-                            Mode::TriangleFan | Mode::TriangleStrip | Mode::Triangles => {
-                                trace!(
-                                    "Reading mesh \"{}\" (material index {})",
-                                    node.name().unwrap_or_default(),
-                                    if primitive.material().index().is_some() {
-                                        format!(
-                                            "{}",
-                                            primitive.material().index().unwrap_or_default()
-                                        )
-                                    } else {
-                                        "unset".to_string()
-                                    }
-                                );
-
-                                // Read material and vertex data
-                                let material = primitive.material().index().unwrap_or_default();
-                                let (restart_index, mut vertices) =
-                                    Self::read_vertices(primitive.reader(|buf| {
-                                        bufs.get(buf.index()).map(|data| data.0.as_slice())
-                                    }));
-
-                                // Convert unsupported modes (meshopt requires triangles)
-                                match primitive.mode() {
-                                    Mode::TriangleFan => {
-                                        Self::convert_triangle_fan_to_list(&mut vertices.indices)
-                                    }
-                                    Mode::TriangleStrip => Self::convert_triangle_strip_to_list(
-                                        &mut vertices.indices,
-                                        restart_index,
-                                    ),
-                                    _ => (),
+                let skin = allow_skin
+                    .then(|| Self::read_skin(&node, &bufs, model_transform))
+                    .flatten();
+                let transform = model_transform * extract_transform(&node);
+                let parts = mesh
+                    .primitives()
+                    .filter_map(|primitive| match primitive.mode() {
+                        Mode::TriangleFan | Mode::TriangleStrip | Mode::Triangles => {
+                            trace!(
+                                "Reading mesh \"{}\" (material index {})",
+                                node.name().unwrap_or_default(),
+                                if primitive.material().index().is_some() {
+                                    format!("{}", primitive.material().index().unwrap_or_default())
+                                } else {
+                                    "unset".to_string()
                                 }
+                            );
 
-                                if self.flip_x.unwrap_or_default() {
-                                    for [x, _y, _z] in &mut vertices.positions {
-                                        *x *= -1.0;
-                                    }
+                            // Read material and vertex data
+                            let material = primitive.material().index().unwrap_or_default();
+                            let (restart_index, mut vertices) =
+                                Self::read_vertices(primitive.reader(|buf| {
+                                    bufs.get(buf.index()).map(|data| data.0.as_slice())
+                                }));
+
+                            // Convert unsupported modes (meshopt requires triangles)
+                            match primitive.mode() {
+                                Mode::TriangleFan => {
+                                    Self::convert_triangle_fan_to_list(&mut vertices.indices)
                                 }
-
-                                if self.flip_y.unwrap_or_default() {
-                                    for [_x, y, _z] in &mut vertices.positions {
-                                        *y *= -1.0;
-                                    }
-                                }
-
-                                if self.flip_z.unwrap_or_default() {
-                                    for [_x, _y, z] in &mut vertices.positions {
-                                        *z *= -1.0;
-                                    }
-                                }
-
-                                vertices.transform(transform);
-
-                                Some((material, vertices))
+                                Mode::TriangleStrip => Self::convert_triangle_strip_to_list(
+                                    &mut vertices.indices,
+                                    restart_index,
+                                ),
+                                _ => (),
                             }
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
 
-            meshes.push((parts, node));
+                            if self.flip_x.unwrap_or_default() {
+                                for [x, _y, _z] in &mut vertices.positions {
+                                    *x *= -1.0;
+                                }
+                            }
+
+                            if self.flip_y.unwrap_or_default() {
+                                for [_x, y, _z] in &mut vertices.positions {
+                                    *y *= -1.0;
+                                }
+                            }
+
+                            if self.flip_z.unwrap_or_default() {
+                                for [_x, _y, z] in &mut vertices.positions {
+                                    *z *= -1.0;
+                                }
+                            }
+
+                            vertices.transform(transform);
+
+                            Some((material, vertices))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+
+                meshes.push((node, skin, parts));
+            }
         }
 
         // Figure out which unique materials are used on these target mesh primitives and convert
@@ -788,7 +790,7 @@ impl Model {
         // This makes the final materials used index as 0, 1, 2, etc
         let materials = meshes
             .iter()
-            .flat_map(|(parts, ..)| parts)
+            .flat_map(|(.., parts)| parts)
             .map(|(material, ..)| *material)
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -808,7 +810,7 @@ impl Model {
 
         // Build a ModelBuf from the meshes in this document
         let mut model = ModelBuf::default();
-        for (parts, node) in meshes {
+        for (node, skin, parts) in meshes {
             let name = if mesh_names.is_empty() {
                 node.name().map(|name| name.to_owned())
             } else {
@@ -824,11 +826,14 @@ impl Model {
                 name.as_deref().unwrap_or_default()
             );
 
-            let skin = Self::read_skin(&node, &bufs);
             let mut mesh_parts = Vec::with_capacity(parts.len() + (parts.len() * shadow as usize));
 
             for (material, mut data) in parts {
                 let material = materials.get(&material).copied().unwrap_or_default();
+
+                if skin.is_none() {
+                    data.skin = None;
+                }
 
                 if !self.normals() {
                     data.normals.clear();
