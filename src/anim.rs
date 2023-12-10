@@ -110,3 +110,14 @@ pub enum Outputs {
     Scales(Vec<Vec3>),
     Translations(Vec<Vec3>),
 }
+
+impl Outputs {
+    /// The count of outputs
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Rotations(rotations) => rotations.len(),
+            Self::Scales(scales) => scales.len(),
+            Self::Translations(translations) => translations.len(),
+        }
+    }
+}

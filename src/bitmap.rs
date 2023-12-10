@@ -118,6 +118,11 @@ impl BitmapFormat {
             Self::Rgba => 4,
         }
     }
+
+    /// Returns `true` if this format includes an alpha channel.
+    pub const fn has_alpha(self) -> bool {
+        matches!(self, Self::Rgba)
+    }
 }
 
 /// Describes the color space of a `Bitmap`.
