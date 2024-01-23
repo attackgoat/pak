@@ -14,7 +14,8 @@ use {
     log::{debug, info, trace, warn},
     meshopt::{
         generate_vertex_remap, optimize_overdraw_in_place, optimize_vertex_cache_in_place,
-        quantize_unorm, remap_index_buffer, simplify, unstripify, VertexDataAdapter,
+        quantize_unorm, remap_index_buffer, simplify, unstripify, SimplifyOptions,
+        VertexDataAdapter,
     },
     ordered_float::OrderedFloat,
     parking_lot::Mutex,
@@ -89,6 +90,9 @@ pub struct Model {
 
     lod: Option<bool>,
 
+    #[serde(rename = "lod-lock-border")]
+    lod_lock_border: Option<bool>,
+
     #[serde(rename = "lod-target-error")]
     lod_target_error: Option<OrderedFloat<f32>>,
 
@@ -129,6 +133,7 @@ impl Model {
             flip_z: None,
             ignore_skin: None,
             lod: None,
+            lod_lock_border: None,
             lod_target_error: None,
             meshes: None,
             min_lod_triangles: None,
@@ -207,6 +212,11 @@ impl Model {
         let target_ratio = 1.0 + target_error;
         let min_triangles = self.min_lod_triangles();
         let vertices = VertexDataAdapter::new(vertex_buf, vertex_stride, 0).unwrap();
+        let opts = if self.lod_lock_border() {
+            SimplifyOptions::LockBorder
+        } else {
+            SimplifyOptions::None
+        };
 
         loop {
             let target_count = (res.last().unwrap().len() / 3) >> 1;
@@ -214,7 +224,7 @@ impl Model {
                 break;
             }
 
-            let lod = simplify(indices, &vertices, target_count, target_error);
+            let lod = simplify(indices, &vertices, target_count, target_error, opts, None);
             let lod_count = lod.len() / 3;
             let lod_ratio = lod_count as f32 / target_count as f32;
             if lod_ratio > 1.0 || lod_ratio < target_ratio {
@@ -247,6 +257,15 @@ impl Model {
     /// When `true` levels of detail will be generated for all meshes.
     pub fn lod(&self) -> bool {
         self.lod.unwrap_or_default()
+    }
+
+    /// When `true` levels of detail vertices that lie on the topological border of the mesh will be
+    /// locked in place such that they don’t move during simplification.
+    ///
+    /// This can be valuable to simplify independent chunks of a mesh, for example terrain, to
+    /// ensure that individual levels of detail can be stitched together later without gaps.
+    pub fn lod_lock_border(&self) -> bool {
+        self.lod_lock_border.unwrap_or_default()
     }
 
     /// The "fitting" value which levels of detail use to determine that further simplication will
