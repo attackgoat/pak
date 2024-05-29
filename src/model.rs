@@ -1,7 +1,6 @@
 use {
-    super::index::IndexBuffer,
+    super::{index::IndexBuffer, Mat4},
     bitflags::bitflags,
-    glam::Mat4,
     serde::{Deserialize, Serialize},
     std::collections::HashMap,
 };

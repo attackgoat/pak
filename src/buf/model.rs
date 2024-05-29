@@ -471,7 +471,7 @@ impl Model {
                 for (idx, joint) in skin.joints().enumerate() {
                     joints.push(Joint {
                         parent_index: parents.get(&joint.index()).copied().unwrap_or(idx),
-                        inverse_bind: inverse_binds[idx],
+                        inverse_bind: inverse_binds[idx].to_cols_array(),
                         name: joint.name().unwrap_or_default().to_string(),
                     });
                 }

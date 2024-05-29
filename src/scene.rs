@@ -1,6 +1,5 @@
 use {
-    super::{index::IndexBuffer, MaterialId, ModelId},
-    glam::{Quat, Vec3},
+    super::{index::IndexBuffer, MaterialId, ModelId, Quat, Vec3},
     serde::{Deserialize, Serialize},
     std::collections::HashMap,
 };

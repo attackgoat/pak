@@ -115,13 +115,11 @@ impl Animation {
 
             let outputs = match data.read_outputs().unwrap() {
                 ReadOutputs::Rotations(Rotations::F32(rotations)) => {
-                    Outputs::Rotations(rotations.map(Quat::from_array).collect())
+                    Outputs::Rotations(rotations.collect())
                 }
-                ReadOutputs::Scales(scales) => {
-                    Outputs::Scales(scales.map(Vec3::from_array).collect())
-                }
+                ReadOutputs::Scales(scales) => Outputs::Scales(scales.collect()),
                 ReadOutputs::Translations(translations) => {
-                    Outputs::Translations(translations.map(Vec3::from_array).collect())
+                    Outputs::Translations(translations.collect())
                 }
                 _ => {
                     warn!("Unsupported morph target channel");

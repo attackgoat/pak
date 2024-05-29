@@ -29,6 +29,10 @@ use {
     },
 };
 
+pub type Vec3 = [f32; 3];
+pub type Quat = [f32; 4];
+pub type Mat4 = [f32; 16];
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct Data {
     // These fields are handled by bincode serialization as-is

@@ -235,8 +235,8 @@ impl Scene {
                 id: geometry.id().map(|id| id.to_owned()),
                 indices: geometry.indices.to_vec(),
                 vertices,
-                position: geometry.position(),
-                rotation: geometry.rotation(),
+                position: geometry.position().into(),
+                rotation: geometry.rotation().into(),
                 tags,
             });
         }
@@ -321,8 +321,8 @@ impl Scene {
                 id: scene_ref.id().map(|id| id.to_owned()),
                 materials,
                 model,
-                position: scene_ref.position(),
-                rotation: scene_ref.rotation(),
+                position: scene_ref.position().into(),
+                rotation: scene_ref.rotation().into(),
                 tags,
             });
         }

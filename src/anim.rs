@@ -1,5 +1,5 @@
 use {
-    glam::{Quat, Vec3},
+    super::{Quat, Vec3},
     gltf::animation::Interpolation as GltfInterpolation,
     serde::{Deserialize, Serialize},
     std::time::Duration,
