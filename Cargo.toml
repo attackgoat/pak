@@ -23,7 +23,7 @@ bitflags = { version = "2.5", features = ["serde"] }
 bmfont = { version = "0.3", default-features = false, optional = true }
 brotli = "6.0"
 dunce = "1.0"
-glam = { version = "0.27", features = ["serde"] }
+glam = "0.27"
 glob = { version = "0.3", optional = true }
 gltf = { version = "1.4", features = ["names"] }
 image = { version = "0.25", optional = true }
