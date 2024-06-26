@@ -85,7 +85,7 @@ impl SceneBuf {
     }
 
     /// Gets an iterator of the `Geometry` items stored in this `Scene`.
-    pub fn geometries(&self) -> impl Iterator<Item = SceneBufGeometry<'_>> {
+    pub fn geometries(&self) -> impl ExactSizeIterator<Item = SceneBufGeometry<'_>> {
         SceneBufGeometryIter {
             idx: 0,
             scene: self,
@@ -93,7 +93,7 @@ impl SceneBuf {
     }
 
     /// Gets an iterator of the `Ref` items stored in this `Scene`.
-    pub fn refs(&self) -> impl Iterator<Item = SceneBufRef<'_>> {
+    pub fn refs(&self) -> impl ExactSizeIterator<Item = SceneBufRef<'_>> {
         SceneBufRefIter {
             idx: 0,
             scene: self,
@@ -165,6 +165,12 @@ impl SceneBufGeometry<'_> {
 struct SceneBufGeometryIter<'a> {
     idx: usize,
     scene: &'a SceneBuf,
+}
+
+impl<'a> ExactSizeIterator for SceneBufGeometryIter<'a> {
+    fn len(&self) -> usize {
+        self.scene.geometries.len()
+    }
 }
 
 impl<'a> Iterator for SceneBufGeometryIter<'a> {
@@ -246,6 +252,12 @@ impl SceneBufRef<'_> {
 struct SceneBufRefIter<'a> {
     idx: usize,
     scene: &'a SceneBuf,
+}
+
+impl<'a> ExactSizeIterator for SceneBufRefIter<'a> {
+    fn len(&self) -> usize {
+        self.scene.refs.len()
+    }
 }
 
 impl<'a> Iterator for SceneBufRefIter<'a> {
