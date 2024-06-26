@@ -66,16 +66,18 @@ pub struct MeshPart {
     #[serde(with = "serde_bytes")]
     vertex_buf: Vec<u8>,
 
-    vertex_ty: Vertex,
+    vertex_type: VertexType,
 }
 
 impl MeshPart {
-    pub fn new(material: u8, vertex_buf: &[u8], vertex_ty: Vertex) -> Self {
+    pub fn new(material: u8, vertex_buf: &[u8], vertex_type: VertexType) -> Self {
+        let vertex_buf = vertex_buf.to_vec();
+
         let res = Self {
             lods: Default::default(),
             material,
-            vertex_buf: vertex_buf.to_vec(),
-            vertex_ty,
+            vertex_buf,
+            vertex_type,
         };
 
         debug_assert!(res.vertex_count() > 0);
@@ -95,21 +97,21 @@ impl MeshPart {
         self.lods.push(IndexBuffer::new(indices));
     }
 
-    pub fn vertex(&self) -> Vertex {
-        self.vertex_ty
+    pub fn vertex_count(&self) -> usize {
+        let stride = self.vertex_type.stride();
+        let buf_len = self.vertex_buf.len();
+
+        debug_assert_eq!(buf_len % stride, 0);
+
+        buf_len / stride
     }
 
     pub fn vertex_data(&self) -> &[u8] {
         &self.vertex_buf
     }
 
-    pub fn vertex_count(&self) -> usize {
-        let stride = self.vertex_ty.stride();
-        let buf_len = self.vertex_buf.len();
-
-        debug_assert_eq!(buf_len % stride, 0);
-
-        buf_len / stride
+    pub fn vertex_type(&self) -> VertexType {
+        self.vertex_type
     }
 }
 
@@ -130,7 +132,7 @@ impl Skin {
 
 bitflags! {
     #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-    pub struct Vertex: u8 {
+    pub struct VertexType: u8 {
         const POSITION = 1 << 0;
         const JOINTS_WEIGHTS = Self::POSITION.bits() | 1 << 1;
         const NORMAL = Self::POSITION.bits() | 1 << 2;
@@ -140,7 +142,7 @@ bitflags! {
     }
 }
 
-impl Vertex {
+impl VertexType {
     pub fn stride(&self) -> usize {
         let mut res = 12;
 

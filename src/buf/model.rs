@@ -1,6 +1,6 @@
 use {
     super::{
-        super::model::{Joint, Mesh, MeshPart, ModelBuf, Skin, Vertex},
+        super::model::{Joint, Mesh, MeshPart, ModelBuf, Skin, VertexType},
         file_key, re_run_if_changed, Canonicalize, Euler, ModelId, Rotation, Writer,
     },
     anyhow::Context,
@@ -1061,30 +1061,30 @@ impl VertexData {
         self.indices[face * 3 + vert] as _
     }
 
-    fn to_vertex_buf(&self) -> (Vertex, Vec<u8>) {
-        let mut vertex = Vertex::POSITION;
+    fn to_vertex_buf(&self) -> (VertexType, Vec<u8>) {
+        let mut vertex_type = VertexType::POSITION;
 
         if !self.normals.is_empty() {
-            vertex |= Vertex::NORMAL;
+            vertex_type |= VertexType::NORMAL;
         }
 
         if self.skin.is_some() {
-            vertex |= Vertex::JOINTS_WEIGHTS;
+            vertex_type |= VertexType::JOINTS_WEIGHTS;
         }
 
         if !self.tangents.is_empty() {
-            vertex |= Vertex::TANGENT;
+            vertex_type |= VertexType::TANGENT;
         }
 
         if !self.textures.0.is_empty() {
-            vertex |= Vertex::TEXTURE0;
+            vertex_type |= VertexType::TEXTURE0;
         }
 
         if !self.textures.1.is_empty() {
-            vertex |= Vertex::TEXTURE1;
+            vertex_type |= VertexType::TEXTURE1;
         }
 
-        let vertex_stride = vertex.stride();
+        let vertex_stride = vertex_type.stride();
         let buf_len = self.positions.len() * vertex_stride;
         let mut buf = Vec::with_capacity(buf_len);
 
@@ -1094,26 +1094,26 @@ impl VertexData {
             buf.extend_from_slice(&position[1].to_ne_bytes());
             buf.extend_from_slice(&position[2].to_ne_bytes());
 
-            if vertex.contains(Vertex::NORMAL) {
+            if vertex_type.contains(VertexType::NORMAL) {
                 let normal = self.normals[idx];
                 buf.extend_from_slice(&normal[0].to_ne_bytes());
                 buf.extend_from_slice(&normal[1].to_ne_bytes());
                 buf.extend_from_slice(&normal[2].to_ne_bytes());
             }
 
-            if vertex.contains(Vertex::TEXTURE0) {
+            if vertex_type.contains(VertexType::TEXTURE0) {
                 let textures = self.textures.0[idx];
                 buf.extend_from_slice(&textures[0].to_ne_bytes());
                 buf.extend_from_slice(&textures[1].to_ne_bytes());
             }
 
-            if vertex.contains(Vertex::TEXTURE1) {
+            if vertex_type.contains(VertexType::TEXTURE1) {
                 let textures = self.textures.1[idx];
                 buf.extend_from_slice(&textures[0].to_ne_bytes());
                 buf.extend_from_slice(&textures[1].to_ne_bytes());
             }
 
-            if vertex.contains(Vertex::TANGENT) {
+            if vertex_type.contains(VertexType::TANGENT) {
                 let tangent = self.tangents[idx];
                 buf.extend_from_slice(&tangent[0].to_ne_bytes());
                 buf.extend_from_slice(&tangent[1].to_ne_bytes());
@@ -1121,7 +1121,7 @@ impl VertexData {
                 buf.extend_from_slice(&tangent[3].to_ne_bytes());
             }
 
-            if vertex.contains(Vertex::JOINTS_WEIGHTS) {
+            if vertex_type.contains(VertexType::JOINTS_WEIGHTS) {
                 let skin = self.skin.as_ref().unwrap();
 
                 let joints = skin.0[idx];
@@ -1136,17 +1136,17 @@ impl VertexData {
 
         assert_eq!(buf.len(), buf_len);
 
-        (vertex, buf)
+        (vertex_type, buf)
     }
 
-    fn to_shadow_buf(&self) -> (Vertex, Vec<u8>) {
-        let mut vertex = Vertex::POSITION;
+    fn to_shadow_buf(&self) -> (VertexType, Vec<u8>) {
+        let mut vertex_type = VertexType::POSITION;
 
         if self.skin.is_some() {
-            vertex |= Vertex::JOINTS_WEIGHTS;
+            vertex_type |= VertexType::JOINTS_WEIGHTS;
         }
 
-        let vertex_stride = vertex.stride();
+        let vertex_stride = vertex_type.stride();
         let buf_len = self.positions.len() * vertex_stride;
         let mut buf = Vec::with_capacity(buf_len);
 
@@ -1156,7 +1156,7 @@ impl VertexData {
             buf.extend_from_slice(&position[1].to_ne_bytes());
             buf.extend_from_slice(&position[2].to_ne_bytes());
 
-            if vertex.contains(Vertex::JOINTS_WEIGHTS) {
+            if vertex_type.contains(VertexType::JOINTS_WEIGHTS) {
                 let skin = self.skin.as_ref().unwrap();
 
                 let joints = skin.0[idx];
@@ -1167,7 +1167,7 @@ impl VertexData {
             }
         }
 
-        (vertex, buf)
+        (vertex_type, buf)
     }
 
     fn transform(&mut self, transform: Mat4) {
