@@ -42,11 +42,11 @@ impl Mesh {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
-pub struct ModelBuf {
+pub struct Model {
     meshes: Vec<Mesh>,
 }
 
-impl ModelBuf {
+impl Model {
     pub fn meshes(&self) -> &[Mesh] {
         &self.meshes
     }

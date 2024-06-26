@@ -6,11 +6,11 @@ use {
 
 /// Holds an `Animation` in a `.pak` file. For data transport only.
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
-pub struct AnimationBuf {
+pub struct Animation {
     channels: Vec<Channel>,
 }
 
-impl AnimationBuf {
+impl Animation {
     pub(super) fn new(channels: Vec<Channel>) -> Self {
         Self { channels }
     }

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Holds a `Bitmap` in a `.pak` file. For data transport only.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct BitmapBuf {
+pub struct Bitmap {
     color: BitmapColor,
     fmt: BitmapFormat,
 
@@ -12,7 +12,7 @@ pub struct BitmapBuf {
     width: u32,
 }
 
-impl BitmapBuf {
+impl Bitmap {
     /// Pixel data must be tightly packed (no additional stride)
     pub fn new(
         color: BitmapColor,

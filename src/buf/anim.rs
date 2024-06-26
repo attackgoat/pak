@@ -1,6 +1,6 @@
 use {
     super::{
-        super::anim::{AnimationBuf, Channel, Outputs},
+        super::anim::{Animation, Channel, Outputs},
         file_key, AnimationId, Asset, Canonicalize, Writer,
     },
     gltf::{
@@ -23,7 +23,7 @@ use {
 
 /// Holds a description of `.glb` or `.gltf` model animations.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
-pub struct Animation {
+pub struct AnimationAsset {
     name: Option<String>,
     src: PathBuf,
 
@@ -31,7 +31,7 @@ pub struct Animation {
     exclude: Option<Vec<String>>,
 }
 
-impl Animation {
+impl AnimationAsset {
     /// Reads and processes animation source files into an existing `.pak` file buffer.
     #[allow(unused)]
     pub(super) fn bake(
@@ -172,7 +172,7 @@ impl Animation {
             return Ok(id.as_animation().unwrap());
         }
 
-        let id = writer.push_animation(AnimationBuf::new(channels), Some(key));
+        let id = writer.push_animation(Animation::new(channels), Some(key));
         writer.ctx.insert(asset, id.into());
 
         Ok(id)
@@ -197,14 +197,14 @@ impl Animation {
     }
 }
 
-impl Canonicalize for Animation {
+impl Canonicalize for AnimationAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
         self.src = Self::canonicalize_project_path(project_dir, src_dir, &self.src);
     }
 }
 
-impl From<Animation> for Asset {
-    fn from(anim: Animation) -> Self {
+impl From<AnimationAsset> for Asset {
+    fn from(anim: AnimationAsset) -> Self {
         Self::Animation(anim)
     }
 }

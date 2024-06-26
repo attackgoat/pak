@@ -2,9 +2,9 @@ use {
     super::{
         super::scene::{GeometryData, SceneRefData},
         file_key, is_toml,
-        material::Material,
-        model::Model,
-        parent, Asset, Canonicalize, Euler, Rotation, SceneBuf, SceneId, Writer,
+        material::MaterialAsset,
+        model::ModelAsset,
+        parent, Asset, Canonicalize, Euler, Rotation, Scene, SceneId, Writer,
     },
     anyhow::Context,
     glam::{vec3, EulerRot, Quat, Vec3},
@@ -171,7 +171,7 @@ impl Geometry {
 
 /// Holds a description of scene entities and tagged data.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
-pub struct Scene {
+pub struct SceneAsset {
     // (Values here)
 
     // Tables must follow values
@@ -182,7 +182,7 @@ pub struct Scene {
     refs: Option<Box<[SceneRef]>>,
 }
 
-impl Scene {
+impl SceneAsset {
     /// Reads and processes scene source files into an existing `.pak` file buffer.
     pub fn bake(
         &self,
@@ -274,7 +274,7 @@ impl Scene {
                             (Some(src), material)
                         } else {
                             // Material color file reference
-                            (None, Material::new(src))
+                            (None, MaterialAsset::new(src))
                         }
                     }
                 })
@@ -306,7 +306,7 @@ impl Scene {
                             (Some(src), model)
                         } else {
                             // Model file reference
-                            (None, Model::new(src))
+                            (None, ModelAsset::new(src))
                         }
                     }
                 })
@@ -322,7 +322,7 @@ impl Scene {
             });
         }
 
-        let scene = SceneBuf::new(geometries.into_iter(), refs.into_iter());
+        let scene = Scene::new(geometries.into_iter(), refs.into_iter());
 
         let mut writer = writer.lock();
         if let Some(h) = writer.ctx.get(&asset) {
@@ -348,7 +348,7 @@ impl Scene {
     }
 }
 
-impl Canonicalize for Scene {
+impl Canonicalize for SceneAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
         self.refs
             .as_deref_mut()
@@ -363,10 +363,10 @@ impl Canonicalize for Scene {
 pub struct SceneRef {
     euler: Option<Euler>,
     id: Option<String>,
-    materials: Option<Vec<AssetRef<Material>>>,
+    materials: Option<Vec<AssetRef<MaterialAsset>>>,
 
-    #[serde(default, deserialize_with = "AssetRef::<Model>::de")]
-    model: Option<AssetRef<Model>>,
+    #[serde(default, deserialize_with = "AssetRef::<ModelAsset>::de")]
+    model: Option<AssetRef<ModelAsset>>,
 
     position: Option<[OrderedFloat<f32>; 3]>,
     rotation: Option<Rotation>,
@@ -401,7 +401,7 @@ impl SceneRef {
     ///
     /// May either be a `Model` asset specified inline or a model source file. Model source files
     /// may be either `.toml` `Model` asset files or direct references to `.glb`/`.gltf` files.
-    pub fn model(&self) -> Option<&AssetRef<Model>> {
+    pub fn model(&self) -> Option<&AssetRef<ModelAsset>> {
         self.model.as_ref()
     }
 
@@ -409,7 +409,7 @@ impl SceneRef {
     ///
     /// If specified, the material assets do not need to be referenced in any content file. If the
     /// material is referenced in a content file it will not be duplicated or cause any problems.
-    pub fn materials(&self) -> &[AssetRef<Material>] {
+    pub fn materials(&self) -> &[AssetRef<MaterialAsset>] {
         self.materials.as_deref().unwrap_or_default()
     }
 

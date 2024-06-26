@@ -1,7 +1,7 @@
 use {
     super::{
         super::bitmap::{BitmapColor, BitmapFormat},
-        file_key, re_run_if_changed, BitmapBuf, BitmapId, Canonicalize, Writer,
+        file_key, re_run_if_changed, Bitmap, BitmapId, Canonicalize, Writer,
     },
     anyhow::Context,
     image::{buffer::ConvertBuffer, imageops::FilterType, open, DynamicImage, RgbaImage},
@@ -17,7 +17,7 @@ use {
 
 /// Holds a description of `.jpeg` and other regular images.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
-pub struct Bitmap {
+pub struct BitmapAsset {
     color: Option<BitmapColor>,
     resize: Option<u32>,
     src: PathBuf,
@@ -27,7 +27,7 @@ pub struct Bitmap {
     swizzle: Option<BitmapSwizzle>,
 }
 
-impl Bitmap {
+impl BitmapAsset {
     /// Constructs a new Bitmap with the given image file source.
     pub fn new<P>(src: P) -> Self
     where
@@ -102,11 +102,11 @@ impl Bitmap {
         Ok(id)
     }
 
-    pub fn as_bitmap_buf(&self) -> anyhow::Result<BitmapBuf> {
+    pub fn as_bitmap_buf(&self) -> anyhow::Result<Bitmap> {
         let (format, width, pixels) = Self::read_pixels(self.src(), self.swizzle, self.resize)
             .context("Unable to read pixels")?;
 
-        Ok(BitmapBuf::new(self.color(), format, width, pixels))
+        Ok(Bitmap::new(self.color(), format, width, pixels))
     }
 
     pub fn color(&self) -> BitmapColor {
@@ -277,7 +277,7 @@ impl Bitmap {
     }
 }
 
-impl Canonicalize for Bitmap {
+impl Canonicalize for BitmapAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
         self.src = Self::canonicalize_project_path(project_dir, src_dir, &self.src);
     }
@@ -385,48 +385,58 @@ mod tests {
 
     #[test]
     fn bitmap_swizzle() {
-        assert!(Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = '' }")).is_err(),);
         assert!(
-            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'rrggbb' }"))
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = '' }")).is_err(),
+        );
+        assert!(BitmapAsset::deserialize(ValueDeserializer::new(
+            "{ src = '', swizzle = 'rrggbb' }"
+        ))
+        .is_err(),);
+        assert!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'z' }"))
                 .is_err(),
         );
-        assert!(
-            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'z' }")).is_err(),
+
+        assert_eq!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'r' }"))
+                .unwrap(),
+            BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::R))
+        );
+        assert_eq!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'g' }"))
+                .unwrap(),
+            BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::G))
+        );
+        assert_eq!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'b' }"))
+                .unwrap(),
+            BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::B))
+        );
+        assert_eq!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'a' }"))
+                .unwrap(),
+            BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::A))
         );
 
         assert_eq!(
-            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'r' }")).unwrap(),
-            Bitmap::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::R))
-        );
-        assert_eq!(
-            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'g' }")).unwrap(),
-            Bitmap::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::G))
-        );
-        assert_eq!(
-            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'b' }")).unwrap(),
-            Bitmap::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::B))
-        );
-        assert_eq!(
-            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'a' }")).unwrap(),
-            Bitmap::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::A))
-        );
-
-        assert_eq!(
-            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'gg' }")).unwrap(),
-            Bitmap::new(PathBuf::new())
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'gg' }"))
+                .unwrap(),
+            BitmapAsset::new(PathBuf::new())
                 .with_swizzle(BitmapSwizzle::Two([BitmapChannel::G, BitmapChannel::G]))
         );
         assert_eq!(
-            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'bgr' }")).unwrap(),
-            Bitmap::new(PathBuf::new()).with_swizzle(BitmapSwizzle::Three([
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'bgr' }"))
+                .unwrap(),
+            BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::Three([
                 BitmapChannel::B,
                 BitmapChannel::G,
                 BitmapChannel::R
             ]))
         );
         assert_eq!(
-            Bitmap::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'rrrr' }")).unwrap(),
-            Bitmap::new(PathBuf::new()).with_swizzle(BitmapSwizzle::Four([
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'rrrr' }"))
+                .unwrap(),
+            BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::Four([
                 BitmapChannel::R,
                 BitmapChannel::R,
                 BitmapChannel::R,

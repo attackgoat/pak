@@ -1,8 +1,7 @@
 use {
     super::{
-        super::compression::Compression, AnimationBuf, AnimationId, Asset, BitmapBuf,
-        BitmapFontBuf, BitmapFontId, BitmapId, BlobId, MaterialId, MaterialInfo, ModelBuf, ModelId,
-        SceneBuf, SceneId,
+        super::compression::Compression, Animation, AnimationId, Asset, Bitmap, BitmapFont,
+        BitmapFontId, BitmapId, BlobId, MaterialId, MaterialInfo, Model, ModelId, Scene, SceneId,
     },
     crate::{Data, DataRef, Id},
     log::trace,
@@ -23,9 +22,9 @@ pub struct Writer {
 }
 
 impl Writer {
-    pub fn push_animation(&mut self, buf: AnimationBuf, key: Option<String>) -> AnimationId {
+    pub fn push_animation(&mut self, animation: Animation, key: Option<String>) -> AnimationId {
         let id = AnimationId(self.data.anims.len());
-        self.data.anims.push(DataRef::Data(buf));
+        self.data.anims.push(DataRef::Data(animation));
 
         if let Some(key) = key {
             assert!(self.data.ids.get(&key).is_none());
@@ -36,9 +35,13 @@ impl Writer {
         id
     }
 
-    pub fn push_bitmap_font(&mut self, buf: BitmapFontBuf, key: Option<String>) -> BitmapFontId {
+    pub fn push_bitmap_font(
+        &mut self,
+        bitmap_font: BitmapFont,
+        key: Option<String>,
+    ) -> BitmapFontId {
         let id = BitmapFontId(self.data.bitmap_fonts.len());
-        self.data.bitmap_fonts.push(DataRef::Data(buf));
+        self.data.bitmap_fonts.push(DataRef::Data(bitmap_font));
 
         if let Some(key) = key {
             assert!(self.data.ids.get(&key).is_none());
@@ -49,9 +52,9 @@ impl Writer {
         id
     }
 
-    pub fn push_bitmap(&mut self, buf: BitmapBuf, key: Option<String>) -> BitmapId {
+    pub fn push_bitmap(&mut self, bitmap: Bitmap, key: Option<String>) -> BitmapId {
         let id = BitmapId(self.data.bitmaps.len());
-        self.data.bitmaps.push(DataRef::Data(buf));
+        self.data.bitmaps.push(DataRef::Data(bitmap));
 
         if let Some(key) = key {
             assert!(self.data.ids.get(&key).is_none());
@@ -62,9 +65,9 @@ impl Writer {
         id
     }
 
-    pub fn push_blob(&mut self, buf: Vec<u8>, key: Option<String>) -> BlobId {
+    pub fn push_blob(&mut self, blob: Vec<u8>, key: Option<String>) -> BlobId {
         let id = BlobId(self.data.blobs.len());
-        self.data.blobs.push(DataRef::Data(buf));
+        self.data.blobs.push(DataRef::Data(blob));
 
         if let Some(key) = key {
             assert!(self.data.ids.get(&key).is_none());
@@ -88,9 +91,9 @@ impl Writer {
         id
     }
 
-    pub fn push_model(&mut self, buf: ModelBuf, key: Option<String>) -> ModelId {
+    pub fn push_model(&mut self, model: Model, key: Option<String>) -> ModelId {
         let id = ModelId(self.data.models.len());
-        self.data.models.push(DataRef::Data(buf));
+        self.data.models.push(DataRef::Data(model));
 
         if let Some(key) = key {
             assert!(self.data.ids.get(&key).is_none());
@@ -101,9 +104,9 @@ impl Writer {
         id
     }
 
-    pub fn push_scene(&mut self, buf: SceneBuf, key: String) -> SceneId {
+    pub fn push_scene(&mut self, scene: Scene, key: String) -> SceneId {
         let id = SceneId(self.data.scenes.len());
-        self.data.scenes.push(DataRef::Data(buf));
+        self.data.scenes.push(DataRef::Data(scene));
 
         assert!(self.data.ids.get(&key).is_none());
 

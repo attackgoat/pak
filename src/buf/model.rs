@@ -1,6 +1,6 @@
 use {
     super::{
-        super::model::{Joint, Mesh, MeshPart, ModelBuf, Skin, VertexType},
+        super::model::{Joint, Mesh, MeshPart, Model, Skin, VertexType},
         file_key, re_run_if_changed, Canonicalize, Euler, ModelId, Rotation, Writer,
     },
     anyhow::Context,
@@ -69,7 +69,7 @@ impl MeshRef {
 
 /// Holds a description of `.glb` or `.gltf` 3D models.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
-pub struct Model {
+pub struct ModelAsset {
     euler: Option<Euler>,
 
     #[serde(rename = "flip-x")]
@@ -117,7 +117,7 @@ pub struct Model {
     meshes: Option<Box<[MeshRef]>>,
 }
 
-impl Model {
+impl ModelAsset {
     pub const DEFAULT_LOD_MIN: usize = 64;
     pub const DEFAULT_LOD_TARGET_ERROR: f32 = 0.05;
 
@@ -176,7 +176,7 @@ impl Model {
         }
 
         let model = self
-            .to_model_buf()
+            .to_model()
             .map_err(|err| Error::new(ErrorKind::InvalidData, err))
             .context("Creating model buffer")?;
 
@@ -678,7 +678,7 @@ impl Model {
         self.tangents.unwrap_or(true)
     }
 
-    fn to_model_buf(&self) -> anyhow::Result<ModelBuf> {
+    fn to_model(&self) -> anyhow::Result<Model> {
         // Gather a map of the importable mesh names and the renamed name they should get
         let mut mesh_names = HashMap::<_, _>::default();
         if let Some(meshes) = &self.meshes {
@@ -823,8 +823,8 @@ impl Model {
 
         let shadow = self.shadow();
 
-        // Build a ModelBuf from the meshes in this document
-        let mut model = ModelBuf::default();
+        // Build a Model from the meshes in this document
+        let mut model = Model::default();
         for (node, skin, parts) in meshes {
             let name = if mesh_names.is_empty() {
                 node.name().map(|name| name.to_owned())
@@ -937,7 +937,7 @@ impl Model {
     }
 }
 
-impl Canonicalize for Model {
+impl Canonicalize for ModelAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
         self.src = Self::canonicalize_project_path(project_dir, src_dir, &self.src);
     }

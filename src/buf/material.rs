@@ -1,7 +1,7 @@
 use {
     super::{
-        super::bitmap::{BitmapBuf, BitmapColor, BitmapFormat},
-        bitmap::{Bitmap, BitmapSwizzle},
+        super::bitmap::{Bitmap, BitmapColor, BitmapFormat},
+        bitmap::{BitmapAsset, BitmapSwizzle},
         file_key, is_toml, parse_hex_color, parse_hex_scalar, Asset, Canonicalize, MaterialId,
         MaterialInfo, Writer,
     },
@@ -30,7 +30,7 @@ use {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum ColorRef {
     /// A `Bitmap` asset specified inline.
-    Asset(Bitmap),
+    Asset(BitmapAsset),
 
     /// A `Bitmap` asset file or image source file.
     Path(PathBuf),
@@ -146,7 +146,7 @@ impl Default for ColorRef {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum EmissiveRef {
     /// A `Bitmap` asset specified inline.
-    Asset(Bitmap),
+    Asset(BitmapAsset),
 
     /// A `Bitmap` asset file or image source file.
     Path(PathBuf),
@@ -257,7 +257,7 @@ impl Default for EmissiveRef {
 
 /// Holds a description of data used for model rendering.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
-pub struct Material {
+pub struct MaterialAsset {
     /// A `Bitmap` asset, `Bitmap` asset file, three or four channel image source file, or single
     /// four channel color.
     #[serde(default, deserialize_with = "ColorRef::de")]
@@ -290,7 +290,7 @@ pub struct Material {
     pub rough: Option<ScalarRef>,
 }
 
-impl Material {
+impl MaterialAsset {
     // const DEFAULT_METALNESS: f32 = 0.5;
     // const DEFAULT_ROUGHNESS: f32 = 0.5;
 
@@ -373,7 +373,7 @@ impl Material {
                     bitmap.canonicalize(&project_dir, &src_dir);
                     bitmap
                 } else {
-                    Bitmap::new(src)
+                    BitmapAsset::new(src)
                 };
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
@@ -394,8 +394,7 @@ impl Material {
                     if let Some(id) = writer.ctx.get(&Asset::ColorRgba(val)) {
                         id.as_bitmap().unwrap()
                     } else {
-                        let bitmap =
-                            BitmapBuf::new(BitmapColor::Linear, BitmapFormat::Rgba, 1, val);
+                        let bitmap = Bitmap::new(BitmapColor::Linear, BitmapFormat::Rgba, 1, val);
                         writer.push_bitmap(bitmap, None)
                     }
                 })
@@ -424,7 +423,7 @@ impl Material {
                     bitmap.canonicalize(&project_dir, &src_dir);
                     bitmap
                 } else {
-                    Bitmap::new(src)
+                    BitmapAsset::new(src)
                 };
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
@@ -447,7 +446,7 @@ impl Material {
                         id.as_bitmap().unwrap()
                     } else {
                         let bitmap =
-                            BitmapBuf::new(BitmapColor::Linear, BitmapFormat::Rgb, 1, normal_val);
+                            Bitmap::new(BitmapColor::Linear, BitmapFormat::Rgb, 1, normal_val);
                         writer.push_bitmap(bitmap, None)
                     }
                 })
@@ -478,7 +477,7 @@ impl Material {
                     bitmap.canonicalize(&project_dir, &src_dir);
                     bitmap
                 } else {
-                    Bitmap::new(src)
+                    BitmapAsset::new(src)
                 };
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
@@ -502,7 +501,7 @@ impl Material {
                     Some(if let Some(id) = writer.ctx.get(&Asset::ColorRgb(val)) {
                         id.as_bitmap().unwrap()
                     } else {
-                        let bitmap = BitmapBuf::new(BitmapColor::Linear, BitmapFormat::Rgb, 1, val);
+                        let bitmap = Bitmap::new(BitmapColor::Linear, BitmapFormat::Rgb, 1, val);
                         writer.push_bitmap(bitmap, None)
                     })
                 })
@@ -611,7 +610,7 @@ impl Material {
                 let res = if let Some(id) = writer.ctx.get(&params_asset) {
                     id.as_bitmap().unwrap()
                 } else {
-                    let params = BitmapBuf::new(
+                    let params = Bitmap::new(
                         BitmapColor::Linear,
                         if displacement.is_none() {
                             BitmapFormat::Rg
@@ -662,15 +661,15 @@ impl Material {
                     bitmap.canonicalize(&project_dir, src_dir);
                     bitmap
                 } else {
-                    Bitmap::new(&src)
+                    BitmapAsset::new(&src)
                 }
             }
             .as_bitmap_buf()
             .context("Unable to create bitmap buf")?,
             Some(ScalarRef::Value(val)) => {
-                BitmapBuf::new(BitmapColor::Linear, BitmapFormat::R, 1, [*val])
+                Bitmap::new(BitmapColor::Linear, BitmapFormat::R, 1, [*val])
             }
-            None => BitmapBuf::new(BitmapColor::Linear, BitmapFormat::R, 1, [128]),
+            None => Bitmap::new(BitmapColor::Linear, BitmapFormat::R, 1, [128]),
         };
         let image =
             GrayImage::from_raw(bitmap.width(), bitmap.height(), bitmap.pixels().to_vec()).unwrap();
@@ -679,7 +678,7 @@ impl Material {
     }
 }
 
-impl Canonicalize for Material {
+impl Canonicalize for MaterialAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
         self.color.canonicalize(&project_dir, &src_dir);
 
@@ -705,7 +704,7 @@ impl Canonicalize for Material {
     }
 }
 
-impl Default for Material {
+impl Default for MaterialAsset {
     fn default() -> Self {
         Self {
             color: ColorRef::WHITE,
@@ -740,7 +739,7 @@ pub struct MaterialParams {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum NormalRef {
     /// A `Bitmap` asset specified inline.
-    Asset(Bitmap),
+    Asset(BitmapAsset),
 
     /// A `Bitmap` asset file or three channel image source file.
     Path(PathBuf),
@@ -805,7 +804,7 @@ impl Canonicalize for NormalRef {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum ScalarRef {
     /// A `Bitmap` asset specified inline.
-    Asset(Bitmap),
+    Asset(BitmapAsset),
 
     /// A `Bitmap` asset file or single channel image source file.
     Path(PathBuf),

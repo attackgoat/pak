@@ -1,8 +1,8 @@
 use {
     super::{
         super::bitmap::{BitmapColor, BitmapFormat},
-        bitmap::{Bitmap, BitmapSwizzle},
-        file_key, re_run_if_changed, BitmapBuf, BitmapFontBuf, BitmapFontId, BlobId, Canonicalize,
+        bitmap::{BitmapAsset, BitmapSwizzle},
+        file_key, re_run_if_changed, Bitmap, BitmapFont, BitmapFontId, BlobId, Canonicalize,
         Writer,
     },
     bmfont::{BMFont, OrdinateOrientation},
@@ -20,12 +20,12 @@ use {
 
 /// Holds a description of any generic file.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
-pub struct Blob {
+pub struct BlobAsset {
     /// The file source.
     src: PathBuf,
 }
 
-impl Blob {
+impl BlobAsset {
     pub fn new(src: impl AsRef<Path>) -> Self {
         let src = src.as_ref().to_path_buf();
 
@@ -96,7 +96,7 @@ impl Blob {
                 let path = def_parent.join(page);
 
                 // Bake the pixels
-                Bitmap::read_pixels(path, Some(BitmapSwizzle::RGBA), None)
+                BitmapAsset::read_pixels(path, Some(BitmapSwizzle::RGBA), None)
             })
             .filter(|res| res.is_ok()) // TODO: Horrible!
             .map(|res| res.unwrap())
@@ -142,9 +142,7 @@ impl Blob {
 
         let page_bufs = pages
             .into_iter()
-            .map(|(_, pixels)| {
-                BitmapBuf::new(BitmapColor::Linear, BitmapFormat::Rgb, width, pixels)
-            })
+            .map(|(_, pixels)| Bitmap::new(BitmapColor::Linear, BitmapFormat::Rgb, width, pixels))
             .collect();
 
         let mut writer = writer.lock();
@@ -152,7 +150,7 @@ impl Blob {
             return Ok(id.as_bitmap_font().unwrap());
         }
 
-        let id = writer.push_bitmap_font(BitmapFontBuf::new(def_file, page_bufs), Some(key));
+        let id = writer.push_bitmap_font(BitmapFont::new(def_file, page_bufs), Some(key));
         writer.ctx.insert(asset, id.into());
 
         Ok(id)
@@ -163,7 +161,7 @@ impl Blob {
     }
 }
 
-impl Canonicalize for Blob {
+impl Canonicalize for BlobAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
         self.src = Self::canonicalize_project_path(project_dir, src_dir, &self.src);
     }

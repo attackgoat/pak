@@ -1,17 +1,17 @@
 use {
-    super::bitmap::BitmapBuf,
+    super::bitmap::Bitmap,
     serde::{Deserialize, Serialize},
 };
 
 /// Holds a `BitmapFont` in a `.pak` file. For data transport only.
 #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct BitmapFontBuf {
+pub struct BitmapFont {
     def: String,
-    pages: Vec<BitmapBuf>,
+    pages: Vec<Bitmap>,
 }
 
-impl BitmapFontBuf {
-    pub fn new(def: String, pages: Vec<BitmapBuf>) -> Self {
+impl BitmapFont {
+    pub fn new(def: String, pages: Vec<Bitmap>) -> Self {
         Self { def, pages }
     }
 
@@ -22,7 +22,7 @@ impl BitmapFontBuf {
     }
 
     /// Gets the `BitmapBuf` pages within this `BitmapFont`.
-    pub fn pages(&self) -> impl ExactSizeIterator<Item = &BitmapBuf> {
+    pub fn pages(&self) -> impl ExactSizeIterator<Item = &Bitmap> {
         self.pages.iter()
     }
 }

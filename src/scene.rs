@@ -29,13 +29,13 @@ pub struct GeometryData {
 
 /// A container for scene entities.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SceneBuf {
+pub struct Scene {
     geometries: Vec<Geometry>,
     refs: Vec<SceneRef>,
     strs: Vec<String>,
 }
 
-impl SceneBuf {
+impl Scene {
     pub(crate) fn new<G, R>(geometry_data: G, ref_data: R) -> Self
     where
         G: Iterator<Item = GeometryData>,
@@ -85,16 +85,16 @@ impl SceneBuf {
     }
 
     /// Gets an iterator of the `Geometry` items stored in this `Scene`.
-    pub fn geometries(&self) -> impl ExactSizeIterator<Item = SceneBufGeometry<'_>> {
-        SceneBufGeometryIter {
+    pub fn geometries(&self) -> impl ExactSizeIterator<Item = SceneGeometry<'_>> {
+        SceneGeometryIter {
             idx: 0,
             scene: self,
         }
     }
 
     /// Gets an iterator of the `Ref` items stored in this `Scene`.
-    pub fn refs(&self) -> impl ExactSizeIterator<Item = SceneBufRef<'_>> {
-        SceneBufRefIter {
+    pub fn refs(&self) -> impl ExactSizeIterator<Item = SceneRefRef<'_>> {
+        SceneRefIter {
             idx: 0,
             scene: self,
         }
@@ -107,12 +107,12 @@ impl SceneBuf {
 
 /// An individual `Scene` geometry.
 #[derive(Debug)]
-pub struct SceneBufGeometry<'a> {
+pub struct SceneGeometry<'a> {
     idx: usize,
-    scene: &'a SceneBuf,
+    scene: &'a Scene,
 }
 
-impl SceneBufGeometry<'_> {
+impl SceneGeometry<'_> {
     /// Returns `true` if the geometry contains the given tag.
     pub fn has_tag<T: AsRef<str>>(&self, tag: T) -> bool {
         let tag = tag.as_ref();
@@ -162,23 +162,23 @@ impl SceneBufGeometry<'_> {
 
 /// An `Iterator` of [`Geometry`] items.
 #[derive(Debug)]
-struct SceneBufGeometryIter<'a> {
+struct SceneGeometryIter<'a> {
     idx: usize,
-    scene: &'a SceneBuf,
+    scene: &'a Scene,
 }
 
-impl<'a> ExactSizeIterator for SceneBufGeometryIter<'a> {
+impl<'a> ExactSizeIterator for SceneGeometryIter<'a> {
     fn len(&self) -> usize {
         self.scene.geometries.len()
     }
 }
 
-impl<'a> Iterator for SceneBufGeometryIter<'a> {
-    type Item = SceneBufGeometry<'a>;
+impl<'a> Iterator for SceneGeometryIter<'a> {
+    type Item = SceneGeometry<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx < self.scene.geometries.len() {
-            let res = SceneBufGeometry {
+            let res = SceneGeometry {
                 scene: self.scene,
                 idx: self.idx,
             };
@@ -192,12 +192,12 @@ impl<'a> Iterator for SceneBufGeometryIter<'a> {
 
 /// An individual `Scene` reference.
 #[derive(Debug)]
-pub struct SceneBufRef<'a> {
+pub struct SceneRefRef<'a> {
     idx: usize,
-    scene: &'a SceneBuf,
+    scene: &'a Scene,
 }
 
-impl SceneBufRef<'_> {
+impl SceneRefRef<'_> {
     /// Returns `true` if the ref contains the given tag.
     pub fn has_tag<T: AsRef<str>>(&self, tag: T) -> bool {
         let tag = tag.as_ref();
@@ -249,23 +249,23 @@ impl SceneBufRef<'_> {
 
 /// An `Iterator` of [`Ref`] items.
 #[derive(Debug)]
-struct SceneBufRefIter<'a> {
+struct SceneRefIter<'a> {
     idx: usize,
-    scene: &'a SceneBuf,
+    scene: &'a Scene,
 }
 
-impl<'a> ExactSizeIterator for SceneBufRefIter<'a> {
+impl<'a> ExactSizeIterator for SceneRefIter<'a> {
     fn len(&self) -> usize {
         self.scene.refs.len()
     }
 }
 
-impl<'a> Iterator for SceneBufRefIter<'a> {
-    type Item = SceneBufRef<'a>;
+impl<'a> Iterator for SceneRefIter<'a> {
+    type Item = SceneRefRef<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx < self.scene.refs.len() {
-            let res = SceneBufRef {
+            let res = SceneRefRef {
                 scene: self.scene,
                 idx: self.idx,
             };

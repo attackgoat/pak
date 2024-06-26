@@ -15,16 +15,16 @@ mod writer;
 use {
     self::{
         asset::Asset,
-        bitmap::Bitmap,
-        blob::Blob,
-        material::{ColorRef, EmissiveRef, Material, NormalRef, ScalarRef},
-        model::Model,
+        bitmap::BitmapAsset,
+        blob::BlobAsset,
+        material::{ColorRef, EmissiveRef, MaterialAsset, NormalRef, ScalarRef},
+        model::ModelAsset,
         scene::AssetRef,
         writer::Writer,
     },
     super::{
-        AnimationBuf, AnimationId, BitmapBuf, BitmapFontBuf, BitmapFontId, BitmapId, BlobId,
-        MaterialId, MaterialInfo, ModelBuf, ModelId, SceneBuf, SceneId,
+        Animation, AnimationId, Bitmap, BitmapFont, BitmapFontId, BitmapId, BlobId, MaterialId,
+        MaterialInfo, Model, ModelId, Scene, SceneId,
     },
     crate::PakBuf,
     anyhow::Context,
@@ -226,11 +226,11 @@ impl PakBuf {
     ///
     /// Includes the provided `src` parameter.
     pub fn source_files(src: impl AsRef<Path>) -> anyhow::Result<Box<[PathBuf]>> {
-        fn handle_bitmap(res: &mut BTreeSet<PathBuf>, bitmap: &Bitmap) {
+        fn handle_bitmap(res: &mut BTreeSet<PathBuf>, bitmap: &BitmapAsset) {
             res.insert(bitmap.src().to_path_buf());
         }
 
-        fn handle_material(res: &mut BTreeSet<PathBuf>, material: &Material) {
+        fn handle_material(res: &mut BTreeSet<PathBuf>, material: &MaterialAsset) {
             match &material.color {
                 ColorRef::Asset(bitmap) => handle_bitmap(res, bitmap),
                 ColorRef::Path(path) => {
@@ -268,7 +268,7 @@ impl PakBuf {
             }
         }
 
-        fn handle_model(res: &mut BTreeSet<PathBuf>, model: &Model) {
+        fn handle_model(res: &mut BTreeSet<PathBuf>, model: &ModelAsset) {
             res.insert(model.src().to_path_buf());
         }
 
@@ -415,7 +415,7 @@ impl PakBuf {
                         let src_dir = src_dir.clone();
                         let asset_path = asset_path.clone();
                         tasks.push(rt.spawn_blocking(move || {
-                            Model::new(&asset_path)
+                            ModelAsset::new(&asset_path)
                                 .bake(&writer, &src_dir, Some(&asset_path))
                                 .unwrap();
                         }));
@@ -426,7 +426,7 @@ impl PakBuf {
                         let src_dir = src_dir.clone();
                         let asset_path = asset_path.clone();
                         tasks.push(rt.spawn_blocking(move || {
-                            Bitmap::new(&asset_path)
+                            BitmapAsset::new(&asset_path)
                                 .bake_from_path(&writer, src_dir, Some(asset_path))
                                 .unwrap();
                         }));
@@ -516,7 +516,7 @@ impl PakBuf {
                         let src_dir = src_dir.clone();
                         let asset_path = asset_path.clone();
                         tasks.push(rt.spawn_blocking(move || {
-                            let blob = Blob::new(asset_path);
+                            let blob = BlobAsset::new(asset_path);
                             blob.bake(&writer, &src_dir).unwrap();
                         }));
                     }

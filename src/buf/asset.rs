@@ -1,12 +1,12 @@
 use {
     super::{
-        anim::Animation,
-        bitmap::Bitmap,
-        blob::Blob,
+        anim::AnimationAsset,
+        bitmap::BitmapAsset,
+        blob::BlobAsset,
         content::Content,
-        material::{Material, MaterialParams},
-        model::Model,
-        scene::Scene,
+        material::{MaterialAsset, MaterialParams},
+        model::ModelAsset,
+        scene::SceneAsset,
     },
     anyhow::{bail, Context},
     serde::Deserialize,
@@ -21,13 +21,13 @@ use {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub enum Asset {
     /// `.glb` or `.gltf` model animations.
-    Animation(Animation),
+    Animation(AnimationAsset),
     /// `.jpeg` and other regular images.
-    Bitmap(Bitmap),
+    Bitmap(BitmapAsset),
     /// `.fnt` bitmapped fonts.
-    BitmapFont(Blob),
+    BitmapFont(BlobAsset),
     /// Raw byte blobs.
-    Blob(Blob),
+    Blob(BlobAsset),
     /// Solid color.
     ColorRgb([u8; 3]),
     /// Solid color with alpha channel.
@@ -35,16 +35,16 @@ pub enum Asset {
     /// Top-level content files which simply group other asset files for ease of use.
     Content(Content),
     /// Used for 3D model rendering.
-    Material(Material),
+    Material(MaterialAsset),
     /// Used to cache the params texture during material baking.
     MaterialParams(MaterialParams),
     /// `.glb` or `.gltf` 3D models.
-    Model(Model),
+    Model(ModelAsset),
     /// Describes position/orientation/scale and tagged data specific to each program.
     ///
     /// You are expected to write some manner of and export tool in order to create this file type
     /// using an external editor.
-    Scene(Scene),
+    Scene(SceneAsset),
 }
 
 impl Asset {
@@ -74,7 +74,7 @@ impl Asset {
     }
 
     /// Attempts to extract a `Bitmap` asset from this collection type.
-    pub fn into_bitmap(self) -> Option<Bitmap> {
+    pub fn into_bitmap(self) -> Option<BitmapAsset> {
         match self {
             Self::Bitmap(bitmap) => Some(bitmap),
             _ => None,
@@ -90,7 +90,7 @@ impl Asset {
     }
 
     /// Attempts to extract a `Material` asset from this collection type.
-    pub fn into_material(self) -> Option<Material> {
+    pub fn into_material(self) -> Option<MaterialAsset> {
         match self {
             Self::Material(material) => Some(material),
             _ => None,
@@ -98,7 +98,7 @@ impl Asset {
     }
 
     /// Attempts to extract a `Model` asset from this collection type.
-    pub fn into_model(self) -> Option<Model> {
+    pub fn into_model(self) -> Option<ModelAsset> {
         match self {
             Self::Model(model) => Some(model),
             _ => None,
@@ -106,14 +106,14 @@ impl Asset {
     }
 }
 
-impl From<Bitmap> for Asset {
-    fn from(val: Bitmap) -> Self {
+impl From<BitmapAsset> for Asset {
+    fn from(val: BitmapAsset) -> Self {
         Self::Bitmap(val)
     }
 }
 
-impl From<Blob> for Asset {
-    fn from(val: Blob) -> Self {
+impl From<BlobAsset> for Asset {
+    fn from(val: BlobAsset) -> Self {
         Self::Blob(val)
     }
 }
@@ -130,20 +130,20 @@ impl From<[u8; 4]> for Asset {
     }
 }
 
-impl From<Model> for Asset {
-    fn from(val: Model) -> Self {
+impl From<ModelAsset> for Asset {
+    fn from(val: ModelAsset) -> Self {
         Self::Model(val)
     }
 }
 
-impl From<Material> for Asset {
-    fn from(val: Material) -> Self {
+impl From<MaterialAsset> for Asset {
+    fn from(val: MaterialAsset) -> Self {
         Self::Material(val)
     }
 }
 
-impl From<Scene> for Asset {
-    fn from(val: Scene) -> Self {
+impl From<SceneAsset> for Asset {
+    fn from(val: SceneAsset) -> Self {
         Self::Scene(val)
     }
 }
@@ -152,21 +152,21 @@ impl From<Scene> for Asset {
 struct Schema {
     #[serde(rename = "animation")]
     #[allow(unused)]
-    anim: Option<Animation>,
+    anim: Option<AnimationAsset>,
 
     #[allow(unused)]
-    bitmap: Option<Bitmap>,
+    bitmap: Option<BitmapAsset>,
 
     #[serde(rename = "bitmap-font")]
     #[allow(unused)]
-    bitmap_font: Option<Blob>,
+    bitmap_font: Option<BlobAsset>,
 
     #[allow(unused)]
     content: Option<Content>,
     #[allow(unused)]
-    material: Option<Material>,
+    material: Option<MaterialAsset>,
     #[allow(unused)]
-    model: Option<Model>,
+    model: Option<ModelAsset>,
     #[allow(unused)]
-    scene: Option<Scene>,
+    scene: Option<SceneAsset>,
 }
