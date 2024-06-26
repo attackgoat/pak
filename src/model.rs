@@ -2,7 +2,6 @@ use {
     super::{index::IndexBuffer, Mat4},
     bitflags::bitflags,
     serde::{Deserialize, Serialize},
-    std::collections::HashMap,
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

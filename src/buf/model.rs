@@ -4,7 +4,7 @@ use {
         file_key, re_run_if_changed, Canonicalize, Euler, ModelId, Rotation, Writer,
     },
     anyhow::Context,
-    glam::{quat, vec3, EulerRot, Mat4, Quat, Vec3, Vec4},
+    glam::{vec3, EulerRot, Mat4, Quat, Vec3},
     gltf::import,
     gltf::{
         buffer::Data,
@@ -13,17 +13,13 @@ use {
     },
     log::{debug, info, trace, warn},
     meshopt::{
-        generate_vertex_remap, optimize_overdraw_in_place, optimize_vertex_cache_in_place,
-        quantize_unorm, remap_index_buffer, simplify, unstripify, SimplifyOptions,
-        VertexDataAdapter,
+        optimize_overdraw_in_place, optimize_vertex_cache_in_place, quantize_unorm,
+        remap_index_buffer, simplify, unstripify, SimplifyOptions, VertexDataAdapter,
     },
     ordered_float::OrderedFloat,
     parking_lot::Mutex,
     serde::{
-        de::{
-            value::{MapAccessDeserializer, SeqAccessDeserializer},
-            MapAccess, SeqAccess, Visitor,
-        },
+        de::{value::SeqAccessDeserializer, SeqAccess, Visitor},
         Deserialize, Deserializer,
     },
     std::{

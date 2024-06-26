@@ -2,8 +2,8 @@ use {
     super::{
         super::bitmap::{BitmapColor, BitmapFormat},
         bitmap::{Bitmap, BitmapSwizzle},
-        file_key, re_run_if_changed, Asset, BitmapBuf, BitmapFontBuf, BitmapFontId, BlobId,
-        Canonicalize, Writer,
+        file_key, re_run_if_changed, BitmapBuf, BitmapFontBuf, BitmapFontId, BlobId, Canonicalize,
+        Writer,
     },
     bmfont::{BMFont, OrdinateOrientation},
     log::info,

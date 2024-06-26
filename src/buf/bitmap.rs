@@ -7,13 +7,7 @@ use {
     image::{buffer::ConvertBuffer, imageops::FilterType, open, DynamicImage, RgbaImage},
     log::info,
     parking_lot::Mutex,
-    serde::{
-        de::{
-            value::{MapAccessDeserializer, SeqAccessDeserializer},
-            MapAccess, SeqAccess, Visitor,
-        },
-        Deserialize, Deserializer,
-    },
+    serde::{de::Visitor, Deserialize, Deserializer},
     std::{
         fmt::Formatter,
         path::{Path, PathBuf},

@@ -1,5 +1,5 @@
 use {
-    serde::{de::DeserializeOwned, Deserialize, Serialize},
+    serde::{Deserialize, Serialize},
     std::mem::size_of,
 };
 

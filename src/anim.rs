@@ -2,7 +2,6 @@ use {
     super::{Quat, Vec3},
     gltf::animation::Interpolation as GltfInterpolation,
     serde::{Deserialize, Serialize},
-    std::time::Duration,
 };
 
 /// Holds an `Animation` in a `.pak` file. For data transport only.

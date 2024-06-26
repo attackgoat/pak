@@ -12,16 +12,11 @@ use {
     ordered_float::OrderedFloat,
     parking_lot::Mutex,
     serde::{
-        de::{
-            value::{MapAccessDeserializer, SeqAccessDeserializer},
-            MapAccess, SeqAccess, Visitor,
-        },
+        de::{value::MapAccessDeserializer, MapAccess, Visitor},
         Deserialize, Deserializer,
     },
     std::{
-        f32::consts::PI,
         fmt::Formatter,
-        io::Error,
         marker::PhantomData,
         mem::size_of,
         path::{Path, PathBuf},

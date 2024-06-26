@@ -3,11 +3,10 @@ use {
         super::anim::{AnimationBuf, Channel, Outputs},
         file_key, AnimationId, Asset, Canonicalize, Writer,
     },
-    glam::{quat, Quat, Vec3},
     gltf::{
         animation::{
             util::{ReadOutputs, Rotations},
-            Interpolation as GltfInterpolation, Property,
+            Interpolation as GltfInterpolation,
         },
         import,
     },
