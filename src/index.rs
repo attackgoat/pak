@@ -1,4 +1,7 @@
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use {
+    serde::{de::DeserializeOwned, Deserialize, Serialize},
+    std::mem::size_of,
+};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IndexBuffer {
@@ -131,6 +134,16 @@ pub enum IndexType {
     U8,
     U16,
     U32,
+}
+
+impl IndexType {
+    pub fn stride(self) -> usize {
+        match self {
+            Self::U8 => size_of::<u8>(),
+            Self::U16 => size_of::<u16>(),
+            Self::U32 => size_of::<u32>(),
+        }
+    }
 }
 
 #[cfg(test)]
