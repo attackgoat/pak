@@ -10,7 +10,7 @@ use {
         },
         import,
     },
-    log::{debug, info, warn},
+    log::{debug, info, log_enabled, warn, Level::Debug},
     parking_lot::Mutex,
     serde::Deserialize,
     std::{
@@ -52,9 +52,10 @@ impl AnimationAsset {
         let name = self.name();
         let (doc, bufs, _) = import(self.src()).unwrap();
 
-        #[cfg(debug_assertions)]
-        for anim in doc.animations() {
-            debug!("Found animation '{}'", anim.name().unwrap_or_default());
+        if log_enabled!(Debug) {
+            for anim in doc.animations() {
+                debug!("Found animation '{}'", anim.name().unwrap_or_default());
+            }
         }
 
         let mut anim = doc.animations().find(|anim| name == anim.name());
