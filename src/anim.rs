@@ -111,6 +111,15 @@ pub enum Outputs {
 }
 
 impl Outputs {
+    /// Returns `true` if the vector contains no elements.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Rotations(rotations) => rotations.is_empty(),
+            Self::Scales(scales) => scales.is_empty(),
+            Self::Translations(translations) => translations.is_empty(),
+        }
+    }
+
     /// The count of outputs
     pub fn len(&self) -> usize {
         match self {
