@@ -34,3 +34,31 @@ materials = [
 ]
 position = [1.0, 2.0, 3.0]
 rotation = [4.0, 5.0, 6.0]
+
+[[scene.ref]]
+id = 'just data'
+data = { my-value = 42.0, another-value = 'foo', bar = [1, 2, 3, 'banana'] }
+
+[[scene.ref]]
+id = 'more data'
+data.frog = 'roger'
+data.ted = 1400.3
+
+[[scene.ref]]
+id = 'tags first'
+tags = ['up']
+data = { my-value = false }
+
+[[scene.ref]]
+id = 'tags last'
+data = { my-value = true }
+tags = ['down']
+
+[[scene.geometry]]
+id = 'my-special-2d-collider'
+indices = [0, 1, 2, 1, 2, 3]
+vertices = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0]
+tags = ['quad']
+data = { on-fire = true }
+position = [0.0, 0.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]

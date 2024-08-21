@@ -58,5 +58,38 @@ fn deserialize_scene_materials() -> Result<(), Error> {
         assert_ne!(model_ref.materials()[0], model_ref.materials()[1]);
     }
 
+    {
+        let model_ref = find_model("just data").unwrap();
+
+        let my_value = model_ref.data("my-value").unwrap();
+        assert!(my_value.is_f32());
+        assert_eq!(my_value.as_f32(), Some(42.0));
+
+        let another_value = model_ref.data("another-value").unwrap();
+        assert!(another_value.is_str());
+        assert_eq!(another_value.as_str(), Some("foo"));
+
+        let bar = model_ref.data("bar").unwrap();
+        assert!(bar.is_iter());
+
+        let mut bar_iter = bar.as_iter().unwrap();
+
+        let next = bar_iter.next().unwrap();
+        assert!(next.is_i32());
+        assert_eq!(next.as_i32(), Some(1));
+
+        let next = bar_iter.next().unwrap();
+        assert!(next.is_i32());
+        assert_eq!(next.as_i32(), Some(2));
+
+        let next = bar_iter.next().unwrap();
+        assert!(next.is_i32());
+        assert_eq!(next.as_i32(), Some(3));
+
+        let next = bar_iter.next().unwrap();
+        assert!(next.is_str());
+        assert_eq!(next.as_str(), Some("banana"));
+    }
+
     Ok(())
 }

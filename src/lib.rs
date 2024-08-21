@@ -17,7 +17,7 @@ pub use self::{
     bitmap_font::BitmapFont,
     index::{IndexBuffer, IndexType},
     model::{Joint, Mesh, MeshPart, Model, Skin, VertexType},
-    scene::{Geometry, GeometryData, Scene, SceneGeometry, SceneRefData, SceneRefRef},
+    scene::{GeometryData, GeometryRef, ReferenceData, ReferenceRef, Scene},
 };
 
 use {

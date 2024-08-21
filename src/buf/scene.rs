@@ -1,6 +1,6 @@
 use {
     super::{
-        super::scene::{GeometryData, SceneRefData},
+        super::scene::{DataData, GeometryData, ReferenceData},
         file_key, is_toml,
         material::MaterialAsset,
         model::ModelAsset,
@@ -12,10 +12,11 @@ use {
     ordered_float::OrderedFloat,
     parking_lot::Mutex,
     serde::{
-        de::{value::MapAccessDeserializer, MapAccess, Visitor},
+        de::{value::MapAccessDeserializer, Error, MapAccess, Visitor},
         Deserialize, Deserializer,
     },
     std::{
+        collections::BTreeMap,
         fmt::Formatter,
         marker::PhantomData,
         mem::size_of,
@@ -113,16 +114,30 @@ where
 /// Holds a description of indexed triangle geometries.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Geometry {
-    euler: Option<Euler>,
     id: Option<String>,
+
+    // Values
+    euler: Option<Euler>,
     indices: Box<[u32]>,
     vertices: Box<[OrderedFloat<f32>]>,
     position: Option<[OrderedFloat<f32>; 3]>,
     rotation: Option<Rotation>,
+
+    // Tables must follow values
     tags: Option<Box<[String]>>,
+    data: Option<BTreeMap<String, Data>>,
 }
 
 impl Geometry {
+    /// An arbitrary collection of program-specific strings.
+    #[allow(unused)]
+    pub fn data(&self) -> impl Iterator<Item = (&String, &Data)> {
+        self.data
+            .as_ref()
+            .map(|data| data.iter())
+            .unwrap_or_default()
+    }
+
     /// Euler ordering of the model orientation.
     pub fn euler(&self) -> EulerRot {
         match self.euler.unwrap_or(Euler::XYZ) {
@@ -172,14 +187,11 @@ impl Geometry {
 /// Holds a description of scene entities and tagged data.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct SceneAsset {
-    // (Values here)
-
-    // Tables must follow values
     #[serde(rename = "geometry")]
     geometries: Option<Box<[Geometry]>>,
 
     #[serde(rename = "ref")]
-    refs: Option<Box<[SceneRef]>>,
+    references: Option<Box<[Reference]>>,
 }
 
 impl SceneAsset {
@@ -203,126 +215,134 @@ impl SceneAsset {
 
         let src_dir = parent(&path);
 
-        let mut geometries = Vec::with_capacity(
-            self.geometries
-                .as_ref()
-                .map(|geometries| geometries.len())
-                .unwrap_or_default(),
-        );
-        for geometry in self.geometries() {
-            // all tags must be lower case (no localized text!)
-            let mut tags = vec![];
-            for tag in geometry.tags() {
-                let baked = tag.as_str().trim().to_lowercase();
-                if let Err(idx) = tags.binary_search(&baked) {
-                    tags.insert(idx, baked);
+        let geometries = self
+            .geometries()
+            .iter()
+            .map(|geometry| {
+                let data = geometry
+                    .data()
+                    .map(|(key, value)| (key.clone(), value.clone().into()))
+                    .collect();
+
+                // all tags must be lower case (no localized text!)
+                let mut tags = vec![];
+                for tag in geometry.tags() {
+                    let baked = tag.as_str().trim().to_lowercase();
+                    if let Err(idx) = tags.binary_search(&baked) {
+                        tags.insert(idx, baked);
+                    }
                 }
-            }
 
-            let mut vertices = Vec::with_capacity(geometry.vertices.len() * size_of::<f32>());
-            geometry
-                .vertices
-                .iter()
-                .map(|vertex| vertex.0.to_ne_bytes())
-                .for_each(|vertex| vertices.extend_from_slice(&vertex));
+                let mut vertices = Vec::with_capacity(geometry.vertices.len() * size_of::<f32>());
+                geometry
+                    .vertices
+                    .iter()
+                    .map(|vertex| vertex.0.to_ne_bytes())
+                    .for_each(|vertex| vertices.extend_from_slice(&vertex));
 
-            geometries.push(GeometryData {
-                id: geometry.id().map(|id| id.to_owned()),
-                indices: geometry.indices.to_vec(),
-                vertices,
-                position: geometry.position().into(),
-                rotation: geometry.rotation().into(),
-                tags,
-            });
-        }
-
-        let mut refs = Vec::with_capacity(
-            self.refs
-                .as_ref()
-                .map(|refs| refs.len())
-                .unwrap_or_default(),
-        );
-        for scene_ref in self.refs() {
-            // all tags must be lower case (no localized text!)
-            let mut tags = vec![];
-            for tag in scene_ref.tags() {
-                let baked = tag.as_str().trim().to_lowercase();
-                if let Err(idx) = tags.binary_search(&baked) {
-                    tags.insert(idx, baked);
+                GeometryData {
+                    data,
+                    id: geometry.id().map(|id| id.to_owned()),
+                    indices: geometry.indices.to_vec(),
+                    vertices,
+                    position: geometry.position().into(),
+                    rotation: geometry.rotation().into(),
+                    tags,
                 }
-            }
+            })
+            .collect::<Box<_>>();
 
-            let materials = scene_ref
-                .materials()
-                .iter()
-                .map(|material| match material {
-                    AssetRef::Asset(material) => {
-                        // Material asset specified inline
-                        let material = material.clone();
-                        (None, material)
+        let references = self
+            .refs()
+            .iter()
+            .map(|reference| {
+                // all tags must be lower case (no localized text!)
+                let mut tags = vec![];
+                for tag in reference.tags() {
+                    let baked = tag.as_str().trim().to_lowercase();
+                    if let Err(idx) = tags.binary_search(&baked) {
+                        tags.insert(idx, baked);
                     }
-                    AssetRef::Path(src) => {
-                        if is_toml(&src) {
-                            // Asset file reference
-                            let mut material = Asset::read(&src)
-                                .context("Reading material asset")
-                                .expect("Unable to read material asset")
-                                .into_material()
-                                .expect("Not a material");
-                            let src_dir = parent(src);
-                            material.canonicalize(&project_dir, &src_dir);
-                            (Some(src), material)
-                        } else {
-                            // Material color file reference
-                            (None, MaterialAsset::new(src))
+                }
+
+                let data = reference
+                    .data()
+                    .map(|(key, value)| (key.clone(), value.clone().into()))
+                    .collect();
+
+                let materials = reference
+                    .materials()
+                    .iter()
+                    .map(|material| match material {
+                        AssetRef::Asset(material) => {
+                            // Material asset specified inline
+                            let material = material.clone();
+                            (None, material)
                         }
-                    }
-                })
-                .map(|(src, mut material)| {
-                    material
-                        .bake(rt, writer, &project_dir, &src_dir, src)
-                        .expect("material")
-                })
-                .collect();
-
-            let model = scene_ref
-                .model()
-                .map(|model| match model {
-                    AssetRef::Asset(model) => {
-                        // Model asset specified inline
-                        let model = model.clone();
-                        (None, model)
-                    }
-                    AssetRef::Path(src) => {
-                        if is_toml(&src) {
-                            // Asset file reference
-                            let mut model = Asset::read(&src)
-                                .context("Reading model asset")
-                                .expect("Unable to read model asset")
-                                .into_model()
-                                .expect("Not a model");
-                            let src_dir = parent(src);
-                            model.canonicalize(&project_dir, &src_dir);
-                            (Some(src), model)
-                        } else {
-                            // Model file reference
-                            (None, ModelAsset::new(src))
+                        AssetRef::Path(src) => {
+                            if is_toml(&src) {
+                                // Asset file reference
+                                let mut material = Asset::read(&src)
+                                    .context("Reading material asset")
+                                    .expect("Unable to read material asset")
+                                    .into_material()
+                                    .expect("Not a material");
+                                let src_dir = parent(src);
+                                material.canonicalize(&project_dir, &src_dir);
+                                (Some(src), material)
+                            } else {
+                                // Material color file reference
+                                (None, MaterialAsset::new(src))
+                            }
                         }
-                    }
-                })
-                .map(|(src, model)| model.bake(writer, &project_dir, src).expect("bake model"));
+                    })
+                    .map(|(src, mut material)| {
+                        material
+                            .bake(rt, writer, &project_dir, &src_dir, src)
+                            .expect("material")
+                    })
+                    .collect();
 
-            refs.push(SceneRefData {
-                id: scene_ref.id().map(|id| id.to_owned()),
-                materials,
-                model,
-                position: scene_ref.position().into(),
-                rotation: scene_ref.rotation().into(),
-                tags,
-            });
-        }
+                let model = reference
+                    .model()
+                    .map(|model| match model {
+                        AssetRef::Asset(model) => {
+                            // Model asset specified inline
+                            let model = model.clone();
+                            (None, model)
+                        }
+                        AssetRef::Path(src) => {
+                            if is_toml(&src) {
+                                // Asset file reference
+                                let mut model = Asset::read(&src)
+                                    .context("Reading model asset")
+                                    .expect("Unable to read model asset")
+                                    .into_model()
+                                    .expect("Not a model");
+                                let src_dir = parent(src);
+                                model.canonicalize(&project_dir, &src_dir);
+                                (Some(src), model)
+                            } else {
+                                // Model file reference
+                                (None, ModelAsset::new(src))
+                            }
+                        }
+                    })
+                    .map(|(src, model)| model.bake(writer, &project_dir, src).expect("bake model"));
 
-        let scene = Scene::new(geometries.into_iter(), refs.into_iter());
+                ReferenceData {
+                    data,
+                    id: reference.id().map(str::to_owned),
+                    materials,
+                    model,
+                    position: reference.position().into(),
+                    rotation: reference.rotation().into(),
+                    tags,
+                }
+            })
+            .collect::<Box<_>>();
+
+        let scene = Scene::new(geometries, references);
 
         let mut writer = writer.lock();
         if let Some(h) = writer.ctx.get(&asset) {
@@ -343,39 +363,49 @@ impl SceneAsset {
 
     /// Individual references within a scene.
     #[allow(unused)]
-    pub fn refs(&self) -> &[SceneRef] {
-        self.refs.as_deref().unwrap_or_default()
+    pub fn refs(&self) -> &[Reference] {
+        self.references.as_deref().unwrap_or_default()
     }
 }
 
 impl Canonicalize for SceneAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
-        self.refs
+        self.references
             .as_deref_mut()
             .unwrap_or_default()
             .iter_mut()
-            .for_each(|scene_ref| scene_ref.canonicalize(&project_dir, &src_dir));
+            .for_each(|reference| reference.canonicalize(&project_dir, &src_dir));
     }
 }
 
 /// Holds a description of one scene reference.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
-pub struct SceneRef {
-    euler: Option<Euler>,
+pub struct Reference {
     id: Option<String>,
-    materials: Option<Vec<AssetRef<MaterialAsset>>>,
 
+    // Values
+    euler: Option<Euler>,
+    materials: Option<Vec<AssetRef<MaterialAsset>>>,
     #[serde(default, deserialize_with = "AssetRef::<ModelAsset>::de")]
     model: Option<AssetRef<ModelAsset>>,
-
     position: Option<[OrderedFloat<f32>; 3]>,
     rotation: Option<Rotation>,
 
     // Tables must follow values
+    data: Option<BTreeMap<String, Data>>,
     tags: Option<Vec<String>>,
 }
 
-impl SceneRef {
+impl Reference {
+    /// An arbitrary collection of program-specific strings.
+    #[allow(unused)]
+    pub fn data(&self) -> impl Iterator<Item = (&String, &Data)> {
+        self.data
+            .as_ref()
+            .map(|data| data.iter())
+            .unwrap_or_default()
+    }
+
     /// Euler ordering of the model orientation.
     pub fn euler(&self) -> EulerRot {
         match self.euler.unwrap_or(Euler::XYZ) {
@@ -445,7 +475,7 @@ impl SceneRef {
     }
 }
 
-impl Canonicalize for SceneRef {
+impl Canonicalize for Reference {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
         if let Some(materials) = self.materials.as_mut() {
             for material in materials {
@@ -455,6 +485,181 @@ impl Canonicalize for SceneRef {
 
         if let Some(model) = self.model.as_mut() {
             model.canonicalize(&project_dir, &src_dir);
+        }
+    }
+}
+
+/// Encapsulates any scene data.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Data {
+    Array(Vec<Data>),
+    Bool(bool),
+    Float(OrderedFloat<f32>),
+    Number(i32),
+    String(String),
+}
+
+impl<'de> Data {
+    fn de<D>(deserializer: D) -> Result<Option<Self>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct DataVisitor;
+
+        impl<'de> Visitor<'de> for DataVisitor {
+            type Value = Option<Data>;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                formatter.write_str("bool, number, string, or array of any")
+            }
+
+            fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Some(Data::Bool(v)))
+            }
+
+            fn visit_char<E>(self, v: char) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                self.visit_string(v.to_string())
+            }
+
+            fn visit_f32<E>(self, v: f32) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                self.visit_f64(v as _)
+            }
+
+            fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Some(Data::Float(OrderedFloat(v as _))))
+            }
+
+            fn visit_i8<E>(self, v: i8) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                self.visit_i64(v as _)
+            }
+
+            fn visit_i16<E>(self, v: i16) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                self.visit_i64(v as _)
+            }
+
+            fn visit_i32<E>(self, v: i32) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                self.visit_i64(v as _)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if v >= i32::MIN as i64 && v <= i32::MAX as i64 {
+                    Ok(Some(Data::Number(v as _)))
+                } else {
+                    Err(Error::invalid_type(
+                        serde::de::Unexpected::Signed(v),
+                        &"an i32",
+                    ))
+                }
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut res = vec![];
+
+                while let Some(item) = seq.next_element()? {
+                    res.push(item);
+                }
+
+                Ok(Some(Data::Array(res)))
+            }
+
+            fn visit_str<E>(self, str: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                self.visit_string(str.to_string())
+            }
+
+            fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                Ok(Some(Data::String(v)))
+            }
+
+            fn visit_u8<E>(self, v: u8) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                self.visit_u64(v as _)
+            }
+
+            fn visit_u16<E>(self, v: u16) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                self.visit_u64(v as _)
+            }
+
+            fn visit_u32<E>(self, v: u32) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                self.visit_u64(v as _)
+            }
+
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if v <= i32::MAX as u64 {
+                    Ok(Some(Data::Number(v as _)))
+                } else {
+                    Err(Error::invalid_type(
+                        serde::de::Unexpected::Unsigned(v),
+                        &"an i32",
+                    ))
+                }
+            }
+        }
+
+        deserializer.deserialize_any(DataVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for Data {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Data::de(deserializer).transpose().unwrap()
+    }
+}
+
+impl From<Data> for DataData {
+    fn from(value: Data) -> Self {
+        match value {
+            Data::Array(values) => DataData::Array(values.into_iter().map(Into::into).collect()),
+            Data::Bool(value) => DataData::Bool(value),
+            Data::Float(OrderedFloat(value)) => DataData::Float(value),
+            Data::Number(value) => DataData::Number(value),
+            Data::String(value) => DataData::String(value),
         }
     }
 }
