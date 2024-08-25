@@ -8,6 +8,7 @@ use {
     anyhow::Context as _,
     image::{imageops::FilterType, DynamicImage, GenericImageView, GrayImage},
     log::info,
+    ordered_float::OrderedFloat,
     parking_lot::Mutex,
     serde::{
         de::{
@@ -36,11 +37,11 @@ pub enum ColorRef {
     Path(PathBuf),
 
     /// A single four channel color.
-    Value([u8; 4]),
+    Value([OrderedFloat<f32>; 4]),
 }
 
 impl ColorRef {
-    pub const WHITE: Self = Self::Value([u8::MAX; 4]);
+    pub const WHITE: Self = Self::Value([OrderedFloat(1.0f32); 4]);
 
     /// Deserialize from any of:
     ///
@@ -100,10 +101,10 @@ impl ColorRef {
                 }
 
                 Ok(ColorRef::Value([
-                    (val[0] * u8::MAX as f32) as u8,
-                    (val[1] * u8::MAX as f32) as u8,
-                    (val[2] * u8::MAX as f32) as u8,
-                    (val[3] * u8::MAX as f32) as u8,
+                    OrderedFloat(val[0]),
+                    OrderedFloat(val[1]),
+                    OrderedFloat(val[2]),
+                    OrderedFloat(val[3]),
                 ]))
             }
 
@@ -113,7 +114,12 @@ impl ColorRef {
             {
                 if str.starts_with('#') {
                     if let Some(val) = parse_hex_color(str) {
-                        return Ok(ColorRef::Value(val));
+                        return Ok(ColorRef::Value([
+                            OrderedFloat(val[0] as f32 / u8::MAX as f32),
+                            OrderedFloat(val[1] as f32 / u8::MAX as f32),
+                            OrderedFloat(val[2] as f32 / u8::MAX as f32),
+                            OrderedFloat(val[3] as f32 / u8::MAX as f32),
+                        ]));
                     }
                 }
 
@@ -152,11 +158,11 @@ pub enum EmissiveRef {
     Path(PathBuf),
 
     /// A single three channel color.
-    Value([u8; 3]),
+    Value([OrderedFloat<f32>; 3]),
 }
 
 impl EmissiveRef {
-    pub const WHITE: Self = Self::Value([u8::MAX; 3]);
+    pub const WHITE: Self = Self::Value([OrderedFloat(1.0); 3]);
 
     /// Deserialize from any of:
     ///
@@ -213,9 +219,9 @@ impl EmissiveRef {
                 }
 
                 Ok(Some(EmissiveRef::Value([
-                    (val[0] * u8::MAX as f32) as u8,
-                    (val[1] * u8::MAX as f32) as u8,
-                    (val[2] * u8::MAX as f32) as u8,
+                    OrderedFloat(val[0]),
+                    OrderedFloat(val[1]),
+                    OrderedFloat(val[2]),
                 ])))
             }
 
@@ -227,7 +233,11 @@ impl EmissiveRef {
                     if let Some(val) = parse_hex_color(str) {
                         assert_eq!(val[3], u8::MAX);
 
-                        return Ok(Some(EmissiveRef::Value([val[0], val[1], val[2]])));
+                        return Ok(Some(EmissiveRef::Value([
+                            OrderedFloat(val[0] as f32 / u8::MAX as f32),
+                            OrderedFloat(val[1] as f32 / u8::MAX as f32),
+                            OrderedFloat(val[2] as f32 / u8::MAX as f32),
+                        ])));
                     }
                 }
 
@@ -385,16 +395,25 @@ impl MaterialAsset {
                         .unwrap()
                 })
             }
-            ColorRef::Value(val) => {
+            &ColorRef::Value(val) => {
                 let writer = writer.clone();
-                let val = *val;
 
                 rt.spawn_blocking(move || {
                     let mut writer = writer.lock();
                     if let Some(id) = writer.ctx.get(&Asset::ColorRgba(val)) {
                         id.as_bitmap().unwrap()
                     } else {
-                        let bitmap = Bitmap::new(BitmapColor::Linear, BitmapFormat::Rgba, 1, val);
+                        let bitmap = Bitmap::new(
+                            BitmapColor::Linear,
+                            BitmapFormat::Rgba,
+                            1,
+                            [
+                                (val[0].0 * u8::MAX as f32) as u8,
+                                (val[1].0 * u8::MAX as f32) as u8,
+                                (val[2].0 * u8::MAX as f32) as u8,
+                                (val[3].0 * u8::MAX as f32) as u8,
+                            ],
+                        );
                         writer.push_bitmap(bitmap, None)
                     }
                 })
@@ -440,13 +459,21 @@ impl MaterialAsset {
                 let writer = writer.clone();
 
                 rt.spawn_blocking(move || {
-                    let normal_val = [128, 128, 255];
+                    let normal_val = [OrderedFloat(0.5), OrderedFloat(0.5), OrderedFloat(1.0)];
                     let mut writer = writer.lock();
                     if let Some(id) = writer.ctx.get(&Asset::ColorRgb(normal_val)) {
                         id.as_bitmap().unwrap()
                     } else {
-                        let bitmap =
-                            Bitmap::new(BitmapColor::Linear, BitmapFormat::Rgb, 1, normal_val);
+                        let bitmap = Bitmap::new(
+                            BitmapColor::Linear,
+                            BitmapFormat::Rgb,
+                            1,
+                            [
+                                (normal_val[0].0 * u8::MAX as f32) as u8,
+                                (normal_val[1].0 * u8::MAX as f32) as u8,
+                                (normal_val[2].0 * u8::MAX as f32) as u8,
+                            ],
+                        );
                         writer.push_bitmap(bitmap, None)
                     }
                 })
@@ -492,16 +519,24 @@ impl MaterialAsset {
                     )
                 })
             }
-            Some(EmissiveRef::Value(val)) => {
+            &Some(EmissiveRef::Value(val)) => {
                 let writer = writer.clone();
-                let val = *val;
 
                 rt.spawn_blocking(move || {
                     let mut writer = writer.lock();
                     Some(if let Some(id) = writer.ctx.get(&Asset::ColorRgb(val)) {
                         id.as_bitmap().unwrap()
                     } else {
-                        let bitmap = Bitmap::new(BitmapColor::Linear, BitmapFormat::Rgb, 1, val);
+                        let bitmap = Bitmap::new(
+                            BitmapColor::Linear,
+                            BitmapFormat::Rgb,
+                            1,
+                            [
+                                (val[0].0 * u8::MAX as f32) as u8,
+                                (val[1].0 * u8::MAX as f32) as u8,
+                                (val[2].0 * u8::MAX as f32) as u8,
+                            ],
+                        );
                         writer.push_bitmap(bitmap, None)
                     })
                 })
@@ -666,9 +701,12 @@ impl MaterialAsset {
             }
             .as_bitmap_buf()
             .context("Unable to create bitmap buf")?,
-            Some(ScalarRef::Value(val)) => {
-                Bitmap::new(BitmapColor::Linear, BitmapFormat::R, 1, [*val])
-            }
+            &Some(ScalarRef::Value(val)) => Bitmap::new(
+                BitmapColor::Linear,
+                BitmapFormat::R,
+                1,
+                [(val.0 * u8::MAX as f32) as _],
+            ),
             None => Bitmap::new(BitmapColor::Linear, BitmapFormat::R, 1, [128]),
         };
         let image =
@@ -810,7 +848,7 @@ pub enum ScalarRef {
     Path(PathBuf),
 
     /// A single value.
-    Value(u8),
+    Value(OrderedFloat<f32>),
 }
 
 impl ScalarRef {
@@ -853,7 +891,7 @@ impl ScalarRef {
                     _ => panic!("Unexpected scalar value"),
                 }
 
-                Ok(Some(ScalarRef::Value((val * u8::MAX as f32) as _)))
+                Ok(Some(ScalarRef::Value(OrderedFloat(val))))
             }
 
             fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>
@@ -871,7 +909,9 @@ impl ScalarRef {
             {
                 if str.starts_with('#') {
                     if let Some(val) = parse_hex_scalar(str) {
-                        return Ok(Some(ScalarRef::Value(val)));
+                        return Ok(Some(ScalarRef::Value(OrderedFloat(
+                            val as f32 / u8::MAX as f32,
+                        ))));
                     }
                 }
 

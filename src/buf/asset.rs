@@ -9,6 +9,7 @@ use {
         scene::SceneAsset,
     },
     anyhow::{bail, Context},
+    ordered_float::OrderedFloat,
     serde::Deserialize,
     std::{
         fs::read_to_string,
@@ -29,9 +30,9 @@ pub enum Asset {
     /// Raw byte blobs.
     Blob(BlobAsset),
     /// Solid color.
-    ColorRgb([u8; 3]),
+    ColorRgb([OrderedFloat<f32>; 3]),
     /// Solid color with alpha channel.
-    ColorRgba([u8; 4]),
+    ColorRgba([OrderedFloat<f32>; 4]),
     /// Top-level content files which simply group other asset files for ease of use.
     Content(Content),
     /// Used for 3D model rendering.
@@ -118,14 +119,14 @@ impl From<BlobAsset> for Asset {
     }
 }
 
-impl From<[u8; 3]> for Asset {
-    fn from(val: [u8; 3]) -> Self {
+impl From<[OrderedFloat<f32>; 3]> for Asset {
+    fn from(val: [OrderedFloat<f32>; 3]) -> Self {
         Self::ColorRgb(val)
     }
 }
 
-impl From<[u8; 4]> for Asset {
-    fn from(val: [u8; 4]) -> Self {
+impl From<[OrderedFloat<f32>; 4]> for Asset {
+    fn from(val: [OrderedFloat<f32>; 4]) -> Self {
         Self::ColorRgba(val)
     }
 }
