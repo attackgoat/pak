@@ -72,6 +72,7 @@ pub enum DataData {
 }
 
 /// An individual `Scene` data.
+#[derive(Clone, Copy, Debug)]
 pub struct DataRef<'a> {
     data: &'a Data,
     scene: &'a Scene,
@@ -79,7 +80,7 @@ pub struct DataRef<'a> {
 
 impl<'a> DataRef<'a> {
     /// Returns a value if the data is a boolean.
-    pub fn as_bool(&self) -> Option<bool> {
+    pub fn as_bool(self) -> Option<bool> {
         if let &Data::Bool(value) = self.data {
             Some(value)
         } else {
@@ -88,7 +89,7 @@ impl<'a> DataRef<'a> {
     }
 
     /// Returns a value if the data is a float.
-    pub fn as_f32(&self) -> Option<f32> {
+    pub fn as_f32(self) -> Option<f32> {
         if let &Data::Float(value) = self.data {
             Some(value)
         } else {
@@ -97,7 +98,7 @@ impl<'a> DataRef<'a> {
     }
 
     /// Returns a value if the data is a number.
-    pub fn as_i32(&self) -> Option<i32> {
+    pub fn as_i32(self) -> Option<i32> {
         if let &Data::Number(value) = self.data {
             Some(value)
         } else {
@@ -106,7 +107,7 @@ impl<'a> DataRef<'a> {
     }
 
     /// Returns an iterator if the data is an array.
-    pub fn as_iter(&self) -> Option<impl ExactSizeIterator<Item = DataRef>> {
+    pub fn as_iter(self) -> Option<impl ExactSizeIterator<Item = DataRef<'a>> + 'a> {
         if let Data::Array(values) = self.data {
             Some(DataIter {
                 data: values,
@@ -119,7 +120,7 @@ impl<'a> DataRef<'a> {
     }
 
     /// Returns a reference if the data is a string.
-    pub fn as_str(&self) -> Option<&str> {
+    pub fn as_str(self) -> Option<&'a str> {
         if let &Data::String(idx) = self.data {
             Some(self.scene.str(idx))
         } else {
@@ -128,27 +129,27 @@ impl<'a> DataRef<'a> {
     }
 
     /// Returns `true` if the data is a boolean.
-    pub fn is_bool(&self) -> bool {
+    pub fn is_bool(self) -> bool {
         matches!(self.data, Data::Bool(_))
     }
 
     /// Returns `true` if the data is a float.
-    pub fn is_f32(&self) -> bool {
+    pub fn is_f32(self) -> bool {
         matches!(self.data, Data::Float(_))
     }
 
     /// Returns `true` if the data is a number.
-    pub fn is_i32(&self) -> bool {
+    pub fn is_i32(self) -> bool {
         matches!(self.data, Data::Number(_))
     }
 
     /// Returns `true` if the data is an array.
-    pub fn is_iter(&self) -> bool {
+    pub fn is_iter(self) -> bool {
         matches!(self.data, Data::Array(_))
     }
 
     /// Returns `true` if the data is a string.
-    pub fn is_str(&self) -> bool {
+    pub fn is_str(self) -> bool {
         matches!(self.data, Data::String(_))
     }
 }
