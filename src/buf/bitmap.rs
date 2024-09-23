@@ -1,7 +1,8 @@
 use {
-    super::{
-        super::bitmap::{BitmapColor, BitmapFormat},
-        file_key, re_run_if_changed, Bitmap, BitmapId, Canonicalize, Writer,
+    super::{file_key, re_run_if_changed, Canonicalize, Writer},
+    crate::{
+        bitmap::{Bitmap, BitmapColor, BitmapFormat},
+        BitmapId,
     },
     anyhow::Context,
     image::{buffer::ConvertBuffer, imageops::FilterType, open, DynamicImage, RgbaImage},

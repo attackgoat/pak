@@ -22,10 +22,6 @@ use {
         scene::AssetRef,
         writer::Writer,
     },
-    super::{
-        Animation, AnimationId, Bitmap, BitmapFont, BitmapFontId, BitmapId, BlobId, MaterialId,
-        MaterialInfo, Model, ModelId, Scene, SceneId,
-    },
     crate::PakBuf,
     anyhow::Context,
     glob::glob,

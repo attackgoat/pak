@@ -1,9 +1,12 @@
 use {
     super::{
-        super::bitmap::{BitmapColor, BitmapFormat},
         bitmap::{BitmapAsset, BitmapSwizzle},
-        file_key, re_run_if_changed, Bitmap, BitmapFont, BitmapFontId, BlobId, Canonicalize,
-        Writer,
+        file_key, re_run_if_changed, Canonicalize, Writer,
+    },
+    crate::{
+        bitmap::{Bitmap, BitmapColor, BitmapFormat},
+        bitmap_font::BitmapFont,
+        BitmapFontId, BlobId,
     },
     bmfont::{BMFont, OrdinateOrientation},
     log::info,

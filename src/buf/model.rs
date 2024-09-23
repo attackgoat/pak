@@ -1,7 +1,8 @@
 use {
-    super::{
-        super::model::{Joint, Mesh, MeshPart, Model, Skin, VertexType},
-        file_key, re_run_if_changed, Canonicalize, Euler, ModelId, Rotation, Writer,
+    super::{file_key, re_run_if_changed, Canonicalize, Euler, Rotation, Writer},
+    crate::{
+        model::{Joint, Mesh, MeshPart, Model, Skin, VertexType},
+        ModelId,
     },
     anyhow::Context,
     glam::{vec3, EulerRot, Mat4, Quat, Vec3},

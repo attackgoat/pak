@@ -1,27 +1,22 @@
 #![allow(dead_code)]
 
-mod anim;
-mod bitmap;
-mod bitmap_font;
-mod compression;
-mod index;
-mod model;
-mod scene;
+pub mod anim;
+pub mod bitmap;
+pub mod bitmap_font;
+pub mod index;
+pub mod model;
+pub mod scene;
 
 #[cfg(feature = "bake")]
 pub mod buf;
 
-pub use self::{
-    anim::{Animation, Channel, Interpolation, Outputs},
-    bitmap::{Bitmap, BitmapColor, BitmapFormat},
-    bitmap_font::BitmapFont,
-    index::{IndexBuffer, IndexType},
-    model::{Joint, Mesh, MeshPart, Model, Skin, VertexType},
-    scene::{GeometryData, GeometryRef, ReferenceData, ReferenceRef, Scene},
-};
+mod compression;
 
 use {
-    self::compression::Compression,
+    self::{
+        anim::Animation, bitmap::Bitmap, bitmap_font::BitmapFont, compression::Compression,
+        model::Model, scene::Scene,
+    },
     log::{trace, warn},
     paste::paste,
     serde::{de::DeserializeOwned, Deserialize, Serialize},

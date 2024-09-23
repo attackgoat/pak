@@ -1,7 +1,8 @@
 use {
-    super::{
-        super::anim::{Animation, Channel, Outputs},
-        file_key, AnimationId, Asset, Canonicalize, Writer,
+    super::{file_key, Asset, Canonicalize, Writer},
+    crate::{
+        anim::{Animation, Channel, Outputs},
+        AnimationId,
     },
     gltf::{
         animation::{

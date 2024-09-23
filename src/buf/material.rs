@@ -1,9 +1,11 @@
 use {
     super::{
-        super::bitmap::{Bitmap, BitmapColor, BitmapFormat},
         bitmap::{BitmapAsset, BitmapSwizzle},
-        file_key, is_toml, parse_hex_color, parse_hex_scalar, Asset, Canonicalize, MaterialId,
-        MaterialInfo, Writer,
+        file_key, is_toml, parse_hex_color, parse_hex_scalar, Asset, Canonicalize, Writer,
+    },
+    crate::{
+        bitmap::{Bitmap, BitmapColor, BitmapFormat},
+        MaterialId, MaterialInfo,
     },
     anyhow::Context as _,
     image::{imageops::FilterType, DynamicImage, GenericImageView, GrayImage},

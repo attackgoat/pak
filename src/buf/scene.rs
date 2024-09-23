@@ -1,10 +1,11 @@
 use {
     super::{
-        super::scene::{DataData, GeometryData, ReferenceData},
-        file_key, is_toml,
-        material::MaterialAsset,
-        model::ModelAsset,
-        parent, Asset, Canonicalize, Euler, Rotation, Scene, SceneId, Writer,
+        file_key, is_toml, material::MaterialAsset, model::ModelAsset, parent, Asset, Canonicalize,
+        Euler, Rotation, Writer,
+    },
+    crate::{
+        scene::{DataData, GeometryData, ReferenceData, Scene},
+        SceneId,
     },
     anyhow::Context,
     glam::{vec3, EulerRot, Quat, Vec3},
