@@ -28,7 +28,7 @@ fn deserialize_scene_materials() -> Result<(), Error> {
     {
         let model_ref = find_model("model-with-one-material").unwrap();
 
-        assert_eq!(model_ref.position(), [1.0, 2.0, 3.0]);
+        assert_eq!(model_ref.translation(), [1.0, 2.0, 3.0]);
 
         let (x, y, z) = Quat::from_array(model_ref.rotation()).to_euler(EulerRot::XYZ);
         assert!((x - 4f32.to_radians()).abs() < EPSILON);

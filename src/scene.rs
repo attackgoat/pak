@@ -159,9 +159,9 @@ struct Geometry {
     data: Box<[(StringIndex, Data)]>,
     id: Option<StringIndex>,
     index_buf: IndexBuffer,
-    position: Vec3,
     rotation: Quat,
     tags: Box<[StringIndex]>,
+    translation: Vec3,
 
     #[serde(with = "serde_bytes")]
     vertex_buf: Box<[u8]>,
@@ -172,9 +172,9 @@ pub struct GeometryData {
     pub id: Option<String>,
     pub indices: Vec<u32>,
     pub vertices: Vec<u8>,
-    pub position: Vec3,
     pub rotation: Quat,
     pub tags: Vec<String>,
+    pub translation: Vec3,
 }
 
 /// An individual `Scene` geometry.
@@ -218,9 +218,9 @@ impl GeometryRef<'_> {
         &self.geometry().index_buf
     }
 
-    /// Returns `position` or the zero vector.
-    pub fn position(&self) -> Vec3 {
-        self.geometry().position
+    /// Returns `translation` or the zero vector.
+    pub fn translation(&self) -> Vec3 {
+        self.geometry().translation
     }
 
     /// Returns `rotation` or the identity quaternion.
@@ -281,9 +281,9 @@ struct Reference {
     id: Option<StringIndex>,
     materials: Box<[MaterialId]>,
     model: Option<ModelId>,
-    position: Vec3,
     rotation: Quat,
     tags: Box<[StringIndex]>,
+    translation: Vec3,
 }
 
 #[derive(Default)]
@@ -292,9 +292,9 @@ pub struct ReferenceData {
     pub id: Option<String>,
     pub materials: Vec<MaterialId>,
     pub model: Option<ModelId>,
-    pub position: Vec3,
     pub rotation: Quat,
     pub tags: Vec<String>,
+    pub translation: Vec3,
 }
 
 /// A container for scene entities.
@@ -333,10 +333,10 @@ impl Scene {
                         .collect(),
                     id: geometry.id.map(|id| st.get(id)),
                     index_buf,
-                    position: geometry.position,
                     rotation: geometry.rotation,
-                    vertex_buf: geometry.vertices.into_boxed_slice(),
                     tags,
+                    translation: geometry.translation,
+                    vertex_buf: geometry.vertices.into_boxed_slice(),
                 }
             })
             .collect();
@@ -360,9 +360,9 @@ impl Scene {
                     id: reference.id.map(|id| st.get(id)),
                     model: reference.model,
                     materials: reference.materials.into_boxed_slice(),
-                    position: reference.position,
                     rotation: reference.rotation,
                     tags,
+                    translation: reference.translation,
                 }
             })
             .collect();
@@ -444,9 +444,9 @@ impl ReferenceRef<'_> {
         self.reference().model
     }
 
-    /// Returns `position` or the zero vector.
-    pub fn position(&self) -> Vec3 {
-        self.reference().position
+    /// Returns `translation` or the zero vector.
+    pub fn translation(&self) -> Vec3 {
+        self.reference().translation
     }
 
     /// Returns `rotation` or the identity quaternion.

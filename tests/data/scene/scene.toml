@@ -6,13 +6,13 @@ model = 'model_01.toml'
 materials = [
     'material_01.toml',
 ]
-position = [1.0, 2.0, 3.0]
+translation = [1.0, 2.0, 3.0]
 rotation = [4.0, 5.0, 6.0]
 
 [[scene.ref]]
 id = 'model-with-zero-materials'
 model = 'model_01.toml'
-position = [1.0, 2.0, 3.0]
+translation = [1.0, 2.0, 3.0]
 rotation = [4.0, 5.0, 6.0]
 
 [[scene.ref]]
@@ -22,7 +22,7 @@ materials = [
     'material_01.toml',
     'material_01.toml',
 ]
-position = [1.0, 2.0, 3.0]
+translation = [1.0, 2.0, 3.0]
 rotation = [4.0, 5.0, 6.0]
 
 [[scene.ref]]
@@ -32,7 +32,7 @@ materials = [
     'material_01.toml',
     'material_02.png',
 ]
-position = [1.0, 2.0, 3.0]
+translation = [1.0, 2.0, 3.0]
 rotation = [4.0, 5.0, 6.0]
 
 [[scene.ref]]
@@ -60,5 +60,5 @@ indices = [0, 1, 2, 1, 2, 3]
 vertices = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0]
 tags = ['quad']
 data = { on-fire = true }
-position = [0.0, 0.0, 0.0]
+translation = [0.0, 0.0, 0.0]
 rotation = [0.0, 0.0, 0.0, 1.0]

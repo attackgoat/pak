@@ -120,9 +120,9 @@ pub struct Geometry {
     // Values
     euler: Option<Euler>,
     indices: Box<[u32]>,
-    vertices: Box<[OrderedFloat<f32>]>,
-    position: Option<[OrderedFloat<f32>; 3]>,
     rotation: Option<Rotation>,
+    translation: Option<[OrderedFloat<f32>; 3]>,
+    vertices: Box<[OrderedFloat<f32>]>,
 
     // Tables must follow values
     tags: Option<Box<[String]>>,
@@ -156,13 +156,6 @@ impl Geometry {
         self.id.as_deref()
     }
 
-    /// World location of a geometry.
-    pub fn position(&self) -> Vec3 {
-        self.position
-            .map(|position| vec3(position[0].0, position[1].0, position[2].0))
-            .unwrap_or(Vec3::ZERO)
-    }
-
     /// Orientation of a geometry.
     pub fn rotation(&self) -> Quat {
         match self.rotation {
@@ -182,6 +175,13 @@ impl Geometry {
     /// An arbitrary collection of program-specific strings.
     pub fn tags(&self) -> &[String] {
         self.tags.as_deref().unwrap_or_default()
+    }
+
+    /// Translation of a geometry.
+    pub fn translation(&self) -> Vec3 {
+        self.translation
+            .map(|translation| vec3(translation[0].0, translation[1].0, translation[2].0))
+            .unwrap_or(Vec3::ZERO)
     }
 }
 
@@ -246,9 +246,9 @@ impl SceneAsset {
                     id: geometry.id().map(|id| id.to_owned()),
                     indices: geometry.indices.to_vec(),
                     vertices,
-                    position: geometry.position().into(),
                     rotation: geometry.rotation().into(),
                     tags,
+                    translation: geometry.translation().into(),
                 }
             })
             .collect::<Box<_>>();
@@ -336,9 +336,9 @@ impl SceneAsset {
                     id: reference.id().map(str::to_owned),
                     materials,
                     model,
-                    position: reference.position().into(),
                     rotation: reference.rotation().into(),
                     tags,
+                    translation: reference.translation().into(),
                 }
             })
             .collect::<Box<_>>();
@@ -389,8 +389,8 @@ pub struct Reference {
     materials: Option<Vec<AssetRef<MaterialAsset>>>,
     #[serde(default, deserialize_with = "AssetRef::<ModelAsset>::de")]
     model: Option<AssetRef<ModelAsset>>,
-    position: Option<[OrderedFloat<f32>; 3]>,
     rotation: Option<Rotation>,
+    translation: Option<[OrderedFloat<f32>; 3]>,
 
     // Tables must follow values
     data: Option<BTreeMap<String, Data>>,
@@ -444,14 +444,6 @@ impl Reference {
         self.materials.as_deref().unwrap_or_default()
     }
 
-    /// Any 3D position or position-like data.
-    #[allow(unused)]
-    pub fn position(&self) -> Vec3 {
-        self.position
-            .map(|position| vec3(position[0].0, position[1].0, position[2].0))
-            .unwrap_or(Vec3::ZERO)
-    }
-
     /// Any 3D orientation or orientation-like data.
     #[allow(unused)]
     pub fn rotation(&self) -> Quat {
@@ -473,6 +465,14 @@ impl Reference {
     #[allow(unused)]
     pub fn tags(&self) -> &[String] {
         self.tags.as_deref().unwrap_or_default()
+    }
+
+    /// Any 3D position or position-like data.
+    #[allow(unused)]
+    pub fn translation(&self) -> Vec3 {
+        self.translation
+            .map(|translation| vec3(translation[0].0, translation[1].0, translation[2].0))
+            .unwrap_or(Vec3::ZERO)
     }
 }
 
