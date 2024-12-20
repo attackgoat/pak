@@ -38,7 +38,7 @@ struct DataIter<'a> {
     scene: &'a Scene,
 }
 
-impl<'a> ExactSizeIterator for DataIter<'a> {
+impl ExactSizeIterator for DataIter<'_> {
     fn len(&self) -> usize {
         self.data.len() - self.idx
     }
@@ -252,7 +252,7 @@ struct GeometryIter<'a> {
     scene: &'a Scene,
 }
 
-impl<'a> ExactSizeIterator for GeometryIter<'a> {
+impl ExactSizeIterator for GeometryIter<'_> {
     fn len(&self) -> usize {
         self.scene.geometries.len() - self.idx
     }
@@ -474,7 +474,7 @@ struct ReferenceIter<'a> {
     scene: &'a Scene,
 }
 
-impl<'a> ExactSizeIterator for ReferenceIter<'a> {
+impl ExactSizeIterator for ReferenceIter<'_> {
     fn len(&self) -> usize {
         self.scene.references.len() - self.idx
     }

@@ -281,9 +281,9 @@ impl SceneAsset {
                             (None, material)
                         }
                         AssetRef::Path(src) => {
-                            if is_toml(&src) {
+                            if is_toml(src) {
                                 // Asset file reference
-                                let mut material = Asset::read(&src)
+                                let mut material = Asset::read(src)
                                     .context("Reading material asset")
                                     .expect("Unable to read material asset")
                                     .into_material()
@@ -313,9 +313,9 @@ impl SceneAsset {
                             (None, model)
                         }
                         AssetRef::Path(src) => {
-                            if is_toml(&src) {
+                            if is_toml(src) {
                                 // Asset file reference
-                                let mut model = Asset::read(&src)
+                                let mut model = Asset::read(src)
                                     .context("Reading model asset")
                                     .expect("Unable to read model asset")
                                     .into_model()

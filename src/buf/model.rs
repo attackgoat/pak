@@ -164,7 +164,7 @@ impl ModelAsset {
 
         // If a path is given it will be available as a key inside the .pak (paths are not
         // given if the asset is specified inline - those are only available in the .pak via ID)
-        let key = path.as_ref().map(|path| file_key(&project_dir, &path));
+        let key = path.as_ref().map(|path| file_key(&project_dir, path));
         if let Some(key) = &key {
             // This model will be accessible using this key
             info!("Baking model: {}", key);
@@ -409,7 +409,7 @@ impl ModelAsset {
 
     fn read_skin(node: &Node, bufs: &[Data], transform: Mat4) -> Option<Skin> {
         node.skin()
-            .map(|skin| {
+            .and_then(|skin| {
                 let inverse_binds = skin
                     .reader(|buf| bufs.get(buf.index()).map(|data| data.0.as_slice()))
                     .read_inverse_bind_matrices()
@@ -475,7 +475,6 @@ impl ModelAsset {
 
                 Some(Skin::new(joints))
             })
-            .flatten()
     }
 
     fn read_vertices<'a, 's, F>(data: Reader<'a, 's, F>) -> (u32, VertexData)
@@ -929,7 +928,7 @@ impl ModelAsset {
     fn re_run_if_changed(&self) {
         // Watch the GLTF file for changes, only if we're in a cargo build
         let src = self.src();
-        re_run_if_changed(&src);
+        re_run_if_changed(src);
 
         // Just in case there is a GLTF bin file; also watch it for changes
         let mut src_bin = src.to_path_buf();

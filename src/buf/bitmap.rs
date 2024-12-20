@@ -328,7 +328,7 @@ impl BitmapSwizzle {
     {
         struct ScalarRefVisitor;
 
-        impl<'de> Visitor<'de> for ScalarRefVisitor {
+        impl Visitor<'_> for ScalarRefVisitor {
             type Value = Option<BitmapSwizzle>;
 
             fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {

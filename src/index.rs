@@ -177,7 +177,7 @@ mod tests {
 
         assert_eq!(buf.len(), 6);
         for (expected, actual) in indices.iter().copied().zip(buf) {
-            assert_eq!(expected, actual as u32);
+            assert_eq!(expected, actual);
         }
     }
 
@@ -202,7 +202,7 @@ mod tests {
 
         assert_eq!(buf.len(), 6);
         for (expected, actual) in indices.iter().copied().zip(buf) {
-            assert_eq!(expected, actual as u32);
+            assert_eq!(expected, actual);
         }
     }
 
@@ -221,7 +221,7 @@ mod tests {
 
         assert_eq!(buf.len(), 6);
         for (expected, actual) in indices.iter().copied().zip(buf) {
-            assert_eq!(expected, actual as u32);
+            assert_eq!(expected, actual);
         }
     }
 }

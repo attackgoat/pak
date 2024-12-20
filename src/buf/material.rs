@@ -334,7 +334,7 @@ impl MaterialAsset {
 
         // If a source is given it will be available as a key inside the .pak (sources are not
         // given if the asset is specified inline - those are only available in the .pak via ID)
-        let key = path.as_ref().map(|path| file_key(&project_dir, &path));
+        let key = path.as_ref().map(|path| file_key(&project_dir, path));
         if let Some(key) = &key {
             // This material will be accessible using this key
             info!("Baking material: {}", key);
@@ -698,7 +698,7 @@ impl MaterialAsset {
                     bitmap.canonicalize(&project_dir, src_dir);
                     bitmap
                 } else {
-                    BitmapAsset::new(&src)
+                    BitmapAsset::new(src)
                 }
             }
             .as_bitmap_buf()

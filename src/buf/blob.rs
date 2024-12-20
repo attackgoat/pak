@@ -95,14 +95,12 @@ impl BlobAsset {
         let def = BMFont::new(Cursor::new(&def_file), OrdinateOrientation::TopToBottom).unwrap();
         let pages = def
             .pages()
-            .map(|page| {
+            .flat_map(|page| {
                 let path = def_parent.join(page);
 
                 // Bake the pixels
                 BitmapAsset::read_pixels(path, Some(BitmapSwizzle::RGBA), None)
             })
-            .filter(|res| res.is_ok()) // TODO: Horrible!
-            .map(|res| res.unwrap())
             .map(|(_, width, pixels)| {
                 // TODO: Handle format correctly!
                 let mut better_pixels = Vec::with_capacity(pixels.len());

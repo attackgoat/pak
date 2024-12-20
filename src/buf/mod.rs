@@ -290,7 +290,6 @@ impl PakBuf {
 
         for asset_glob in content
             .groups()
-            .into_iter()
             .filter(|group| group.enabled())
             .flat_map(|group| group.asset_globs())
         {
@@ -348,7 +347,7 @@ impl PakBuf {
                                 for material in scene_ref.materials() {
                                     match material {
                                         AssetRef::Asset(material) => {
-                                            handle_material(&mut res, &material);
+                                            handle_material(&mut res, material);
                                         }
                                         AssetRef::Path(path) => {
                                             res.insert(path.to_path_buf());
@@ -384,7 +383,6 @@ impl PakBuf {
         // Process each file we find as a separate runtime task
         for asset_glob in content
             .groups()
-            .into_iter()
             .filter(|group| group.enabled())
             .flat_map(|group| group.asset_globs())
         {

@@ -91,7 +91,6 @@ impl AnimationAsset {
             let inputs = data
                 .read_inputs()
                 .unwrap()
-                .into_iter()
                 .map(|input| Duration::from_secs_f32(input).as_millis() as u32)
                 .collect::<Vec<_>>();
             if inputs.is_empty() {
