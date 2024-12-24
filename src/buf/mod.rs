@@ -338,14 +338,22 @@ impl PakBuf {
                             scene.canonicalize(&src_dir, &asset_parent);
 
                             for scene_ref in scene.refs() {
-                                match scene_ref.model() {
-                                    Some(AssetRef::Asset(model)) => {
-                                        handle_model(&mut res, model);
+                                if let Some(model) = scene_ref.model() {
+                                    match model {
+                                        AssetRef::Asset(model) => {
+                                            handle_model(&mut res, model);
+                                        }
+                                        AssetRef::Path(path) => {
+                                            if res.insert(path.to_path_buf()) {
+                                                if let Some(mut model) =
+                                                    Asset::read(path)?.into_model()
+                                                {
+                                                    model.canonicalize(&src_dir, parent(path));
+                                                    handle_model(&mut res, &model);
+                                                }
+                                            }
+                                        }
                                     }
-                                    Some(AssetRef::Path(path)) => {
-                                        res.insert(path.to_path_buf());
-                                    }
-                                    None => (),
                                 }
 
                                 for material in scene_ref.materials() {
@@ -354,7 +362,14 @@ impl PakBuf {
                                             handle_material(&mut res, material);
                                         }
                                         AssetRef::Path(path) => {
-                                            res.insert(path.to_path_buf());
+                                            if res.insert(path.to_path_buf()) {
+                                                if let Some(mut material) =
+                                                    Asset::read(path)?.into_material()
+                                                {
+                                                    material.canonicalize(&src_dir, parent(path));
+                                                    handle_material(&mut res, &material);
+                                                }
+                                            }
                                         }
                                     }
                                 }
