@@ -265,6 +265,10 @@ impl PakBuf {
         }
 
         fn handle_model(res: &mut BTreeSet<PathBuf>, model: &ModelAsset) {
+            if let Some(data) = model.data() {
+                res.insert(data.to_path_buf());
+            }
+
             res.insert(model.src().to_path_buf());
         }
 

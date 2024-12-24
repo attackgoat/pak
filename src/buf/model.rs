@@ -1,14 +1,14 @@
 use {
-    super::{file_key, re_run_if_changed, Canonicalize, Euler, Rotation, Writer},
+    super::{blob::BlobAsset, file_key, re_run_if_changed, Canonicalize, Euler, Rotation, Writer},
     crate::{
         model::{Joint, Mesh, MeshPart, Model, Skin, VertexType},
         ModelId,
     },
     anyhow::Context,
     glam::{vec3, EulerRot, Mat4, Quat, Vec3},
-    gltf::import,
     gltf::{
         buffer::Data,
+        import,
         mesh::{util::ReadIndices, Mode, Reader},
         Buffer, Node,
     },
@@ -71,6 +71,7 @@ impl MeshRef {
 /// Holds a description of `.glb` or `.gltf` 3D models.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct ModelAsset {
+    data: Option<PathBuf>,
     euler: Option<Euler>,
 
     #[serde(rename = "flip-x")]
@@ -124,6 +125,7 @@ impl ModelAsset {
 
     pub fn new(src: impl AsRef<Path>) -> Self {
         Self {
+            data: None,
             euler: None,
             flip_x: None,
             flip_y: None,
@@ -176,10 +178,18 @@ impl ModelAsset {
             );
         }
 
-        let model = self
+        let mut model = self
             .to_model()
             .map_err(|err| Error::new(ErrorKind::InvalidData, err))
             .context("Creating model buffer")?;
+
+        // Bake the unstructured data blob too
+        if let Some(data) = &self.data {
+            let data_id = BlobAsset::new(data)
+                .bake(writer, project_dir)
+                .context("Baking unstructered model data")?;
+            model.set_data(data_id);
+        }
 
         // Check again to see if we are the first one to finish this
         let mut writer = writer.lock();
@@ -249,6 +259,11 @@ impl ModelAsset {
 
     fn convert_triangle_strip_to_list(indices: &mut Vec<u32>, restart_index: u32) {
         *indices = unstripify(indices, restart_index).expect("Unable to unstripify index buffer");
+    }
+
+    /// Optional associated unstructured data.
+    pub fn data(&self) -> Option<&Path> {
+        self.data.as_deref()
     }
 
     /// When `true` levels of detail will be generated for all meshes.
@@ -408,73 +423,72 @@ impl ModelAsset {
     }
 
     fn read_skin(node: &Node, bufs: &[Data], transform: Mat4) -> Option<Skin> {
-        node.skin()
-            .and_then(|skin| {
-                let inverse_binds = skin
-                    .reader(|buf| bufs.get(buf.index()).map(|data| data.0.as_slice()))
-                    .read_inverse_bind_matrices()
-                    .map(|data| {
-                        data.map(|matrix| {
-                            let inverse_bind = Mat4::from_cols_array_2d(&matrix);
-                            let bind = inverse_bind.inverse();
+        node.skin().and_then(|skin| {
+            let inverse_binds = skin
+                .reader(|buf| bufs.get(buf.index()).map(|data| data.0.as_slice()))
+                .read_inverse_bind_matrices()
+                .map(|data| {
+                    data.map(|matrix| {
+                        let inverse_bind = Mat4::from_cols_array_2d(&matrix);
+                        let bind = inverse_bind.inverse();
 
-                            (transform * bind).inverse()
-                        })
-                        .collect::<Box<_>>()
+                        (transform * bind).inverse()
                     })
-                    .unwrap_or_default();
+                    .collect::<Box<_>>()
+                })
+                .unwrap_or_default();
 
-                if inverse_binds.is_empty() {
-                    warn!("Unable to read inverse bind matrices");
+            if inverse_binds.is_empty() {
+                warn!("Unable to read inverse bind matrices");
 
-                    return None;
-                }
+                return None;
+            }
 
-                if inverse_binds.len() != skin.joints().len() {
-                    warn!("Incompatible joints found");
+            if inverse_binds.len() != skin.joints().len() {
+                warn!("Incompatible joints found");
 
-                    return None;
-                }
+                return None;
+            }
 
-                if skin.joints().any(|joint| joint.name().is_none()) {
-                    warn!("Unnamed joints found");
+            if skin.joints().any(|joint| joint.name().is_none()) {
+                warn!("Unnamed joints found");
 
-                    return None;
-                }
+                return None;
+            }
 
-                {
-                    let mut joint_names = HashSet::new();
-                    for joint_name in skin.joints().map(|joint| joint.name().unwrap()) {
-                        if !joint_names.insert(joint_name) {
-                            warn!("Duplicate joint names found");
+            {
+                let mut joint_names = HashSet::new();
+                for joint_name in skin.joints().map(|joint| joint.name().unwrap()) {
+                    if !joint_names.insert(joint_name) {
+                        warn!("Duplicate joint names found");
 
-                            return None;
-                        }
+                        return None;
                     }
                 }
+            }
 
-                let mut parents = HashMap::with_capacity(skin.joints().len());
-                for (index, joint) in skin.joints().enumerate() {
-                    for child in joint.children() {
-                        if parents.insert(child.index(), index).is_some() {
-                            warn!("Invalid skeleton hierarchy found");
+            let mut parents = HashMap::with_capacity(skin.joints().len());
+            for (index, joint) in skin.joints().enumerate() {
+                for child in joint.children() {
+                    if parents.insert(child.index(), index).is_some() {
+                        warn!("Invalid skeleton hierarchy found");
 
-                            return None;
-                        }
+                        return None;
                     }
                 }
+            }
 
-                let mut joints = Vec::with_capacity(skin.joints().len());
-                for (idx, joint) in skin.joints().enumerate() {
-                    joints.push(Joint {
-                        parent_index: parents.get(&joint.index()).copied().unwrap_or(idx),
-                        inverse_bind: inverse_binds[idx].to_cols_array(),
-                        name: joint.name().unwrap_or_default().to_string(),
-                    });
-                }
+            let mut joints = Vec::with_capacity(skin.joints().len());
+            for (idx, joint) in skin.joints().enumerate() {
+                joints.push(Joint {
+                    parent_index: parents.get(&joint.index()).copied().unwrap_or(idx),
+                    inverse_bind: inverse_binds[idx].to_cols_array(),
+                    name: joint.name().unwrap_or_default().to_string(),
+                });
+            }
 
-                Some(Skin::new(joints))
-            })
+            Some(Skin::new(joints))
+        })
     }
 
     fn read_vertices<'a, 's, F>(data: Reader<'a, 's, F>) -> (u32, VertexData)
@@ -926,6 +940,11 @@ impl ModelAsset {
     }
 
     fn re_run_if_changed(&self) {
+        // Watch the unstructered data file for changes, only if we're in a cargo build
+        if let Some(data) = self.data() {
+            re_run_if_changed(data);
+        }
+
         // Watch the GLTF file for changes, only if we're in a cargo build
         let src = self.src();
         re_run_if_changed(src);
@@ -939,6 +958,14 @@ impl ModelAsset {
 
 impl Canonicalize for ModelAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
+        if let Some(data) = &self.data {
+            self.data = Some(Self::canonicalize_project_path(
+                &project_dir,
+                &src_dir,
+                data,
+            ));
+        }
+
         self.src = Self::canonicalize_project_path(project_dir, src_dir, &self.src);
     }
 }

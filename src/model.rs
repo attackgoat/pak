@@ -1,5 +1,6 @@
 use {
     super::{index::IndexBuffer, Mat4},
+    crate::BlobId,
     bitflags::bitflags,
     serde::{Deserialize, Serialize},
 };
@@ -43,10 +44,15 @@ impl Mesh {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Model {
+    data: Option<BlobId>,
     meshes: Vec<Mesh>,
 }
 
 impl Model {
+    pub fn data(&self) -> Option<BlobId> {
+        self.data
+    }
+
     pub fn meshes(&self) -> &[Mesh] {
         &self.meshes
     }
@@ -54,6 +60,10 @@ impl Model {
     pub fn push_mesh(&mut self, mesh: Mesh) {
         self.meshes.push(mesh);
         self.meshes.sort_by(|lhs, rhs| lhs.name().cmp(&rhs.name()));
+    }
+
+    pub fn set_data(&mut self, id: BlobId) {
+        self.data = Some(id);
     }
 }
 
