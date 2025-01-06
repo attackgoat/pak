@@ -17,7 +17,7 @@ pub struct Joint {
     pub parent_index: usize,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Mesh {
     name: Option<String>,
     parts: Vec<MeshPart>,
@@ -42,7 +42,7 @@ impl Mesh {
     }
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Model {
     data: Option<BlobId>,
     meshes: Vec<Mesh>,
@@ -67,7 +67,7 @@ impl Model {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone ,Debug, Deserialize, Serialize)]
 pub struct MeshPart {
     lods: Vec<IndexBuffer>,
     material: u8,
