@@ -1,5 +1,5 @@
 use {
-    super::{index::IndexBuffer, MaterialId, ModelId, Quat, Vec3},
+    super::{index::IndexBuffer, MaterialId, MeshId, Quat, Vec3},
     serde::{Deserialize, Serialize},
     std::collections::HashMap,
 };
@@ -280,7 +280,7 @@ struct Reference {
     data: Box<[(StringIndex, Data)]>,
     id: Option<StringIndex>,
     materials: Box<[MaterialId]>,
-    model: Option<ModelId>,
+    mesh: Option<MeshId>,
     rotation: Quat,
     tags: Box<[StringIndex]>,
     translation: Vec3,
@@ -291,7 +291,7 @@ pub struct ReferenceData {
     pub data: Vec<(String, DataData)>,
     pub id: Option<String>,
     pub materials: Vec<MaterialId>,
-    pub model: Option<ModelId>,
+    pub mesh: Option<MeshId>,
     pub rotation: Quat,
     pub tags: Vec<String>,
     pub translation: Vec3,
@@ -358,7 +358,7 @@ impl Scene {
                         .map(|(key, value)| (st.get(key), Data::parse(value, &mut st)))
                         .collect(),
                     id: reference.id.map(|id| st.get(id)),
-                    model: reference.model,
+                    mesh: reference.mesh,
                     materials: reference.materials.into_boxed_slice(),
                     rotation: reference.rotation,
                     tags,
@@ -439,9 +439,9 @@ impl ReferenceRef<'_> {
         &self.reference().materials
     }
 
-    /// Returns `model`, if set.
-    pub fn model(&self) -> Option<ModelId> {
-        self.reference().model
+    /// Returns `mesh`, if set.
+    pub fn mesh(&self) -> Option<MeshId> {
+        self.reference().mesh
     }
 
     /// Returns `translation` or the zero vector.

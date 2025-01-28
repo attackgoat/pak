@@ -19,22 +19,30 @@ pub struct Joint {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Mesh {
-    name: Option<String>,
-    parts: Vec<MeshPart>,
+    data: Option<BlobId>,
+    primitives: Vec<Primitive>,
     skin: Option<Skin>,
 }
 
 impl Mesh {
-    pub(super) fn new(name: Option<String>, parts: Vec<MeshPart>, skin: Option<Skin>) -> Self {
-        Self { name, parts, skin }
+    pub(super) fn new(primitives: Vec<Primitive>, skin: Option<Skin>) -> Self {
+        Self {
+            data: None,
+            primitives,
+            skin,
+        }
     }
 
-    pub fn name(&self) -> Option<&str> {
-        self.name.as_deref()
+    pub fn data(&self) -> Option<BlobId> {
+        self.data
     }
 
-    pub fn parts(&self) -> &[MeshPart] {
-        &self.parts
+    pub fn primitives(&self) -> &[Primitive] {
+        &self.primitives
+    }
+
+    pub fn set_data(&mut self, id: BlobId) {
+        self.data = Some(id);
     }
 
     pub fn skin(&self) -> Option<&Skin> {
@@ -42,33 +50,8 @@ impl Mesh {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct Model {
-    data: Option<BlobId>,
-    meshes: Vec<Mesh>,
-}
-
-impl Model {
-    pub fn data(&self) -> Option<BlobId> {
-        self.data
-    }
-
-    pub fn meshes(&self) -> &[Mesh] {
-        &self.meshes
-    }
-
-    pub fn push_mesh(&mut self, mesh: Mesh) {
-        self.meshes.push(mesh);
-        self.meshes.sort_by(|lhs, rhs| lhs.name().cmp(&rhs.name()));
-    }
-
-    pub fn set_data(&mut self, id: BlobId) {
-        self.data = Some(id);
-    }
-}
-
-#[derive(Clone ,Debug, Deserialize, Serialize)]
-pub struct MeshPart {
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Primitive {
     lods: Vec<IndexBuffer>,
     material: u8,
 
@@ -78,7 +61,7 @@ pub struct MeshPart {
     vertex_type: VertexType,
 }
 
-impl MeshPart {
+impl Primitive {
     pub fn new(material: u8, vertex_buf: &[u8], vertex_type: VertexType) -> Self {
         let vertex_buf = vertex_buf.to_vec();
 
@@ -126,11 +109,15 @@ impl MeshPart {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Skin {
-    joints: Vec<Joint>,
+    joints: Box<[Joint]>,
 }
 
 impl Skin {
-    pub(super) fn new(joints: Vec<Joint>) -> Self {
+    pub(super) fn new(joints: impl Into<Box<[Joint]>>) -> Self {
+        let joints = joints.into();
+
+        debug_assert!(!joints.is_empty());
+
         Self { joints }
     }
 

@@ -1,8 +1,8 @@
 [scene]
 
 [[scene.ref]]
-id = 'model-with-one-material'
-model = 'model_01.toml'
+id = 'mesh-with-one-material'
+mesh = 'mesh_01.toml'
 materials = [
     'material_01.toml',
 ]
@@ -10,14 +10,14 @@ translation = [1.0, 2.0, 3.0]
 rotation = [4.0, 5.0, 6.0]
 
 [[scene.ref]]
-id = 'model-with-zero-materials'
-model = 'model_01.toml'
+id = 'mesh-with-zero-materials'
+mesh = 'mesh_01.toml'
 translation = [1.0, 2.0, 3.0]
 rotation = [4.0, 5.0, 6.0]
 
 [[scene.ref]]
-id = 'model-with-two-materials-same'
-model = 'model_01.toml'
+id = 'mesh-with-two-materials-same'
+mesh = 'mesh_01.toml'
 materials = [
     'material_01.toml',
     'material_01.toml',
@@ -26,8 +26,8 @@ translation = [1.0, 2.0, 3.0]
 rotation = [4.0, 5.0, 6.0]
 
 [[scene.ref]]
-id = 'model-with-two-materials-different'
-model = 'model_01.toml'
+id = 'mesh-with-two-materials-different'
+mesh = 'mesh_01.toml'
 materials = [
     'material_01.toml',
     'material_02.png',

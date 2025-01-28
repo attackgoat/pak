@@ -8,7 +8,7 @@ mod bitmap;
 mod blob;
 mod content;
 mod material;
-mod model;
+mod mesh;
 mod scene;
 mod writer;
 
@@ -18,7 +18,7 @@ use {
         bitmap::BitmapAsset,
         blob::BlobAsset,
         material::{ColorRef, EmissiveRef, MaterialAsset, NormalRef, ScalarRef},
-        model::ModelAsset,
+        mesh::MeshAsset,
         scene::AssetRef,
         writer::Writer,
     },
@@ -264,12 +264,12 @@ impl PakBuf {
             }
         }
 
-        fn handle_model(res: &mut BTreeSet<PathBuf>, model: &ModelAsset) {
-            if let Some(data) = model.data() {
+        fn handle_mesh(res: &mut BTreeSet<PathBuf>, mesh: &MeshAsset) {
+            if let Some(data) = mesh.data() {
                 res.insert(data.to_path_buf());
             }
 
-            res.insert(model.src().to_path_buf());
+            res.insert(mesh.src().to_path_buf());
         }
 
         fn handle_scalar_ref(res: &mut BTreeSet<PathBuf>, scalar_ref: &ScalarRef) {
@@ -330,26 +330,26 @@ impl PakBuf {
                             material.canonicalize(&src_dir, &asset_parent);
                             handle_material(&mut res, &material);
                         }
-                        Asset::Model(mut model) => {
-                            model.canonicalize(&src_dir, &asset_parent);
-                            handle_model(&mut res, &model);
+                        Asset::Mesh(mut mesh) => {
+                            mesh.canonicalize(&src_dir, &asset_parent);
+                            handle_mesh(&mut res, &mesh);
                         }
                         Asset::Scene(mut scene) => {
                             scene.canonicalize(&src_dir, &asset_parent);
 
                             for scene_ref in scene.refs() {
-                                if let Some(model) = scene_ref.model() {
-                                    match model {
-                                        AssetRef::Asset(model) => {
-                                            handle_model(&mut res, model);
+                                if let Some(mesh) = scene_ref.mesh() {
+                                    match mesh {
+                                        AssetRef::Asset(mesh) => {
+                                            handle_mesh(&mut res, mesh);
                                         }
                                         AssetRef::Path(path) => {
                                             if res.insert(path.to_path_buf()) {
-                                                if let Some(mut model) =
-                                                    Asset::read(path)?.into_model()
+                                                if let Some(mut mesh) =
+                                                    Asset::read(path)?.into_mesh()
                                                 {
-                                                    model.canonicalize(&src_dir, parent(path));
-                                                    handle_model(&mut res, &model);
+                                                    mesh.canonicalize(&src_dir, parent(path));
+                                                    handle_mesh(&mut res, &mesh);
                                                 }
                                             }
                                         }
@@ -422,13 +422,13 @@ impl PakBuf {
                     .as_str()
                 {
                     "glb" | "gltf" => {
-                        // Note that direct references like this build a model, not an animation
+                        // Note that direct references like this build a mesh, not an animation
                         // To build an animation you must specify a .toml file
                         let writer = Arc::clone(&writer);
                         let src_dir = src_dir.clone();
                         let asset_path = asset_path.clone();
                         tasks.push(rt.spawn_blocking(move || {
-                            ModelAsset::new(&asset_path)
+                            MeshAsset::new(&asset_path)
                                 .bake(&writer, &src_dir, Some(&asset_path))
                                 .unwrap();
                         }));
@@ -500,14 +500,14 @@ impl PakBuf {
                                         .unwrap();
                                 }));
                             }
-                            Asset::Model(mut model) => {
+                            Asset::Mesh(mut mesh) => {
                                 let writer = Arc::clone(&writer);
                                 let src_dir = src_dir.clone();
                                 let asset_path = asset_path.clone();
                                 let asset_parent = asset_parent.clone();
                                 tasks.push(rt.spawn_blocking(move || {
-                                    model.canonicalize(&src_dir, &asset_parent);
-                                    model.bake(&writer, &src_dir, Some(&asset_path)).unwrap();
+                                    mesh.canonicalize(&src_dir, &asset_parent);
+                                    mesh.bake(&writer, &src_dir, Some(&asset_path)).unwrap();
                                 }));
                             }
                             Asset::Scene(mut scene) => {

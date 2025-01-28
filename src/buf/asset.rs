@@ -5,7 +5,7 @@ use {
         blob::BlobAsset,
         content::Content,
         material::{MaterialAsset, MaterialParams},
-        model::ModelAsset,
+        mesh::MeshAsset,
         scene::SceneAsset,
     },
     anyhow::{bail, Context},
@@ -21,7 +21,7 @@ use {
 /// A collection type containing all supported asset file types.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub enum Asset {
-    /// `.glb` or `.gltf` model animations.
+    /// `.glb` or `.gltf` mesh animations.
     Animation(AnimationAsset),
     /// `.jpeg` and other regular images.
     Bitmap(BitmapAsset),
@@ -35,12 +35,12 @@ pub enum Asset {
     ColorRgba([OrderedFloat<f32>; 4]),
     /// Top-level content files which simply group other asset files for ease of use.
     Content(Content),
-    /// Used for 3D model rendering.
+    /// Used for 3D mesh rendering.
     Material(MaterialAsset),
     /// Used to cache the params texture during material baking.
     MaterialParams(MaterialParams),
-    /// `.glb` or `.gltf` 3D models.
-    Model(ModelAsset),
+    /// `.glb` or `.gltf` 3D meshes.
+    Mesh(MeshAsset),
     /// Describes position/orientation/scale and tagged data specific to each program.
     ///
     /// You are expected to write some manner of and export tool in order to create this file type
@@ -63,8 +63,8 @@ impl Asset {
             Self::Content(val)
         } else if let Some(val) = val.material {
             Self::Material(val)
-        } else if let Some(val) = val.model {
-            Self::Model(val)
+        } else if let Some(val) = val.mesh {
+            Self::Mesh(val)
         } else if let Some(val) = val.scene {
             Self::Scene(val)
         } else {
@@ -98,10 +98,10 @@ impl Asset {
         }
     }
 
-    /// Attempts to extract a `Model` asset from this collection type.
-    pub fn into_model(self) -> Option<ModelAsset> {
+    /// Attempts to extract a `Mesh` asset from this collection type.
+    pub fn into_mesh(self) -> Option<MeshAsset> {
         match self {
-            Self::Model(model) => Some(model),
+            Self::Mesh(mesh) => Some(mesh),
             _ => None,
         }
     }
@@ -131,9 +131,9 @@ impl From<[OrderedFloat<f32>; 4]> for Asset {
     }
 }
 
-impl From<ModelAsset> for Asset {
-    fn from(val: ModelAsset) -> Self {
-        Self::Model(val)
+impl From<MeshAsset> for Asset {
+    fn from(val: MeshAsset) -> Self {
+        Self::Mesh(val)
     }
 }
 
@@ -167,7 +167,7 @@ struct Schema {
     #[allow(unused)]
     material: Option<MaterialAsset>,
     #[allow(unused)]
-    model: Option<ModelAsset>,
+    mesh: Option<MeshAsset>,
     #[allow(unused)]
     scene: Option<SceneAsset>,
 }

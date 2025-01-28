@@ -22,11 +22,11 @@ fn main() -> anyhow::Result<()> {
     TRACE screen_13::pak::buf::writer > Index 1 = 179196 bytes
     TRACE screen_13::pak::buf::writer > Writing bitmap fonts
     TRACE screen_13::pak::buf::writer > Index 0 = 23013 bytes
-    TRACE screen_13::pak::buf::writer > Writing models
+    TRACE screen_13::pak::buf::writer > Writing meshes
     TRACE screen_13::pak::buf::writer > Writing scenes
     */
 
-    PakBuf::bake("examples/res/models.toml", "models.pak")?;
+    PakBuf::bake("examples/res/meshes.toml", "meshes.pak")?;
 
     Ok(())
 }

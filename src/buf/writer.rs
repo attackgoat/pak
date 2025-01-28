@@ -1,9 +1,9 @@
 use {
     super::{super::compression::Compression, Asset},
     crate::{
-        anim::Animation, bitmap::Bitmap, bitmap_font::BitmapFont, model::Model, scene::Scene,
+        anim::Animation, bitmap::Bitmap, bitmap_font::BitmapFont, mesh::Mesh, scene::Scene,
         AnimationId, BitmapFontId, BitmapId, BlobId, Data, DataRef, Id, MaterialId, MaterialInfo,
-        ModelId, SceneId,
+        MeshId, SceneId,
     },
     log::trace,
     serde::Serialize,
@@ -92,9 +92,9 @@ impl Writer {
         id
     }
 
-    pub fn push_model(&mut self, model: Model, key: Option<String>) -> ModelId {
-        let id = ModelId(self.data.models.len());
-        self.data.models.push(DataRef::Data(model));
+    pub fn push_mesh(&mut self, mesh: Mesh, key: Option<String>) -> MeshId {
+        let id = MeshId(self.data.meshes.len());
+        self.data.meshes.push(DataRef::Data(mesh));
 
         if let Some(key) = key {
             assert!(self.data.ids.get(&key).is_none());
@@ -187,11 +187,15 @@ impl Writer {
         Self::write_refs(self.compression, &mut writer, &mut self.data.bitmap_fonts)?;
 
         trace!(
-            "Writing {} model{}",
-            self.data.models.len(),
-            if self.data.models.len() == 1 { "" } else { "s" }
+            "Writing {} mesh{}",
+            self.data.meshes.len(),
+            if self.data.meshes.len() == 1 {
+                ""
+            } else {
+                "es"
+            }
         );
-        Self::write_refs(self.compression, &mut writer, &mut self.data.models)?;
+        Self::write_refs(self.compression, &mut writer, &mut self.data.meshes)?;
 
         trace!(
             "Writing {} scene{}",

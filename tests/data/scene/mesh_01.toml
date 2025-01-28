@@ -1,4 +1,4 @@
-[model]
+[mesh]
 bake-tangent = true
 lod = false
 optimize = false

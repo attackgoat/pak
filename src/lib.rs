@@ -4,7 +4,7 @@ pub mod anim;
 pub mod bitmap;
 pub mod bitmap_font;
 pub mod index;
-pub mod model;
+pub mod mesh;
 pub mod scene;
 
 #[cfg(feature = "bake")]
@@ -15,7 +15,7 @@ mod compression;
 use {
     self::{
         anim::Animation, bitmap::Bitmap, bitmap_font::BitmapFont, compression::Compression,
-        model::Model, scene::Scene,
+        mesh::Mesh, scene::Scene,
     },
     log::{trace, warn},
     paste::paste,
@@ -45,7 +45,7 @@ struct Data {
     bitmap_fonts: Vec<DataRef<BitmapFont>>,
     bitmaps: Vec<DataRef<Bitmap>>,
     blobs: Vec<DataRef<Vec<u8>>>,
-    models: Vec<DataRef<Model>>,
+    meshes: Vec<DataRef<Mesh>>,
     scenes: Vec<DataRef<Scene>>,
 }
 
@@ -133,7 +133,7 @@ macro_rules! id_enum {
     };
 }
 
-id_enum!(Animation, Bitmap, BitmapFont, Blob, Material, Model, Scene);
+id_enum!(Animation, Bitmap, BitmapFont, Blob, Material, Mesh, Scene);
 
 macro_rules! id_struct {
     ($name: ident) => {
@@ -150,7 +150,7 @@ id_struct!(Bitmap);
 id_struct!(BitmapFont);
 id_struct!(Blob);
 id_struct!(Material);
-id_struct!(Model);
+id_struct!(Mesh);
 id_struct!(Scene);
 
 /// Holds bitmap handles to match what was setup in the asset `.toml` file.
@@ -189,8 +189,8 @@ pub trait Pak {
     /// Gets the pak-unique `MaterialId` corresponding to the given key, if one exsits.
     fn material_id(&self, key: impl AsRef<str>) -> Option<MaterialId>;
 
-    /// Gets the pak-unique `ModelId` corresponding to the given key, if one exsits.
-    fn model_id(&self, key: impl AsRef<str>) -> Option<ModelId>;
+    /// Gets the pak-unique `MeshId` corresponding to the given key, if one exsits.
+    fn mesh_id(&self, key: impl AsRef<str>) -> Option<MeshId>;
 
     /// Gets the pak-unique `SceneId` corresponding to the given key, if one exsits.
     fn scene_id(&self, key: impl AsRef<str>) -> Option<SceneId>;
@@ -212,10 +212,10 @@ pub trait Pak {
     /// Gets the material for the given handle, if one exsits.
     fn read_material_id(&self, id: impl Into<MaterialId>) -> Option<MaterialInfo>;
 
-    /// Gets the corresponding animation for the given ID.
-    fn read_model_id(&mut self, id: impl Into<ModelId>) -> Result<Model, Error>;
+    /// Gets the corresponding mesh for the given ID.
+    fn read_mesh_id(&mut self, id: impl Into<MeshId>) -> Result<Mesh, Error>;
 
-    /// Gets the corresponding animation for the given ID.
+    /// Gets the corresponding scene for the given ID.
     fn read_scene_id(&mut self, id: impl Into<SceneId>) -> Result<Scene, Error>;
 
     // --- Convenience functions
@@ -271,11 +271,11 @@ pub trait Pak {
         }
     }
 
-    fn read_model(&mut self, key: impl AsRef<str>) -> Result<Model, Error> {
-        trace!("Reading model {}", key.as_ref());
+    fn read_mesh(&mut self, key: impl AsRef<str>) -> Result<Mesh, Error> {
+        trace!("Reading mesh {}", key.as_ref());
 
-        if let Some(h) = self.model_id(key) {
-            self.read_model_id(h)
+        if let Some(h) = self.mesh_id(key) {
+            self.read_mesh_id(h)
         } else {
             Err(Error::from(ErrorKind::InvalidInput))
         }
@@ -403,8 +403,8 @@ impl PakBuf {
         self.data.ids.keys().map(|key| key.as_str())
     }
 
-    pub fn model_count(&self) -> usize {
-        self.data.models.len()
+    pub fn mesh_count(&self) -> usize {
+        self.data.meshes.len()
     }
 
     pub fn material_count(&self) -> usize {
@@ -463,9 +463,9 @@ impl Pak for PakBuf {
             .and_then(|id| id.as_material())
     }
 
-    /// Gets the pak-unique `ModelId` corresponding to the given key, if one exsits.
-    fn model_id(&self, key: impl AsRef<str>) -> Option<ModelId> {
-        self.data.ids.get(key.as_ref()).and_then(|id| id.as_model())
+    /// Gets the pak-unique `MeshId` corresponding to the given key, if one exsits.
+    fn mesh_id(&self, key: impl AsRef<str>) -> Option<MeshId> {
+        self.data.ids.get(key.as_ref()).and_then(|id| id.as_mesh())
     }
 
     /// Gets the pak-unique `SceneId` corresponding to the given key, if one exsits.
@@ -528,13 +528,13 @@ impl Pak for PakBuf {
         self.data.materials.get(id.0).copied()
     }
 
-    /// Gets the corresponding animation for the given ID.
-    fn read_model_id(&mut self, id: impl Into<ModelId>) -> Result<Model, Error> {
+    /// Gets the corresponding mesh for the given ID.
+    fn read_mesh_id(&mut self, id: impl Into<MeshId>) -> Result<Mesh, Error> {
         let id = id.into();
 
-        trace!("Deserializing model {}", id.0);
+        trace!("Deserializing mesh {}", id.0);
 
-        let (pos, len) = self.data.models[id.0]
+        let (pos, len) = self.data.meshes[id.0]
             .pos_len()
             .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
         self.deserialize(pos, len)

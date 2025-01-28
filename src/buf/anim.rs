@@ -22,7 +22,7 @@ use {
     },
 };
 
-/// Holds a description of `.glb` or `.gltf` model animations.
+/// Holds a description of `.glb` or `.gltf` mesh animations.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct AnimationAsset {
     name: Option<String>,

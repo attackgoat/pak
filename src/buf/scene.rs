@@ -1,6 +1,6 @@
 use {
     super::{
-        file_key, is_toml, material::MaterialAsset, model::ModelAsset, parent, Asset, Canonicalize,
+        file_key, is_toml, material::MaterialAsset, mesh::MeshAsset, parent, Asset, Canonicalize,
         Euler, Rotation, Writer,
     },
     crate::{
@@ -139,7 +139,7 @@ impl Geometry {
             .unwrap_or_default()
     }
 
-    /// Euler ordering of the model orientation.
+    /// Euler ordering of the mesh orientation.
     pub fn euler(&self) -> EulerRot {
         match self.euler.unwrap_or(Euler::XYZ) {
             Euler::XYZ => EulerRot::XYZ,
@@ -304,38 +304,38 @@ impl SceneAsset {
                     })
                     .collect();
 
-                let model = reference
-                    .model()
-                    .map(|model| match model {
-                        AssetRef::Asset(model) => {
-                            // Model asset specified inline
-                            let model = model.clone();
-                            (None, model)
+                let mesh = reference
+                    .mesh()
+                    .map(|mesh| match mesh {
+                        AssetRef::Asset(mesh) => {
+                            // Mesh asset specified inline
+                            let mesh = mesh.clone();
+                            (None, mesh)
                         }
                         AssetRef::Path(src) => {
                             if is_toml(src) {
                                 // Asset file reference
-                                let mut model = Asset::read(src)
-                                    .context("Reading model asset")
-                                    .expect("Unable to read model asset")
-                                    .into_model()
-                                    .expect("Not a model");
+                                let mut mesh = Asset::read(src)
+                                    .context("Reading mesh asset")
+                                    .expect("Unable to read mesh asset")
+                                    .into_mesh()
+                                    .expect("Not a mesh");
                                 let src_dir = parent(src);
-                                model.canonicalize(&project_dir, &src_dir);
-                                (Some(src), model)
+                                mesh.canonicalize(&project_dir, &src_dir);
+                                (Some(src), mesh)
                             } else {
-                                // Model file reference
-                                (None, ModelAsset::new(src))
+                                // Mesh file reference
+                                (None, MeshAsset::new(src))
                             }
                         }
                     })
-                    .map(|(src, model)| model.bake(writer, &project_dir, src).expect("bake model"));
+                    .map(|(src, mesh)| mesh.bake(writer, &project_dir, src).expect("bake mesh"));
 
                 ReferenceData {
                     data,
                     id: reference.id().map(str::to_owned),
                     materials,
-                    model,
+                    mesh,
                     rotation: reference.rotation().into(),
                     tags,
                     translation: reference.translation().into(),
@@ -387,8 +387,8 @@ pub struct Reference {
     // Values
     euler: Option<Euler>,
     materials: Option<Vec<AssetRef<MaterialAsset>>>,
-    #[serde(default, deserialize_with = "AssetRef::<ModelAsset>::de")]
-    model: Option<AssetRef<ModelAsset>>,
+    #[serde(default, deserialize_with = "AssetRef::<MeshAsset>::de")]
+    mesh: Option<AssetRef<MeshAsset>>,
     rotation: Option<Rotation>,
     translation: Option<[OrderedFloat<f32>; 3]>,
 
@@ -407,7 +407,7 @@ impl Reference {
             .unwrap_or_default()
     }
 
-    /// Euler ordering of the model orientation.
+    /// Euler ordering of the mesh orientation.
     pub fn euler(&self) -> EulerRot {
         match self.euler.unwrap_or(Euler::XYZ) {
             Euler::XYZ => EulerRot::XYZ,
@@ -425,15 +425,15 @@ impl Reference {
         self.id.as_deref()
     }
 
-    /// Optional direct reference to a model asset file.
+    /// Optional direct reference to a mesh asset file.
     ///
-    /// If specified, the model asset does not need to be referenced in any content file. If the
-    /// model is referenced in a content file it will not be duplicated or cause any problems.
+    /// If specified, the mesh asset does not need to be referenced in any content file. If the
+    /// mesh is referenced in a content file it will not be duplicated or cause any problems.
     ///
-    /// May either be a `Model` asset specified inline or a model source file. Model source files
-    /// may be either `.toml` `Model` asset files or direct references to `.glb`/`.gltf` files.
-    pub fn model(&self) -> Option<&AssetRef<ModelAsset>> {
-        self.model.as_ref()
+    /// May either be a `Mesh` asset specified inline or a mesh source file. Mesh source files
+    /// may be either `.toml` `Mesh` asset files or direct references to `.glb`/`.gltf` files.
+    pub fn mesh(&self) -> Option<&AssetRef<MeshAsset>> {
+        self.mesh.as_ref()
     }
 
     /// Optional direct reference to a material asset files.
@@ -484,8 +484,8 @@ impl Canonicalize for Reference {
             }
         }
 
-        if let Some(model) = self.model.as_mut() {
-            model.canonicalize(&project_dir, &src_dir);
+        if let Some(mesh) = self.mesh.as_mut() {
+            mesh.canonicalize(&project_dir, &src_dir);
         }
     }
 }

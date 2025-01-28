@@ -23,7 +23,7 @@ compression = 'snap'
 assets = [
     'bitmap/**/*.png',
     'font/**/*.toml',
-    'model/**/*.toml',
+    'mesh/**/*.toml',
     'sound/**/*.ogg',
     'music/*.mp3',
     'ui/*.png',
@@ -41,23 +41,23 @@ Item | Description
 ---- | -----------
 compression | May be omitted, `'snap'` or `'x'`
 
-## 3D Models
+## 3D Meshes
 
 
 
 _Example:_
 
 ```toml
-[model]
+[mesh]
 src = "some_file.gltf"
 
 ```
 
-_`[model]` Schema_
+_`[mesh]` Schema_
 
 Item | Description
 ---- | -----------
-`src` | File path to the `.gltf` or `.glb` model file. May be relative to the `[model]` TOML file or absolute where the root is the same folder as the `[content]` TOML file.
+`src` | File path to the `.gltf` or `.glb` mesh file. May be relative to the `[mesh]` TOML file or absolute where the root is the same folder as the `[content]` TOML file.
 
 ## Tests
 

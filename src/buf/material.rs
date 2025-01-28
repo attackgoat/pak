@@ -267,7 +267,7 @@ impl Default for EmissiveRef {
     }
 }
 
-/// Holds a description of data used for model rendering.
+/// Holds a description of data used for mesh rendering.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct MaterialAsset {
     /// A `Bitmap` asset, `Bitmap` asset file, three or four channel image source file, or single
@@ -278,7 +278,7 @@ pub struct MaterialAsset {
     #[serde(default, deserialize_with = "ScalarRef::de")]
     pub displacement: Option<ScalarRef>,
 
-    /// Whether or not the model will be rendered with back faces also enabled.
+    /// Whether or not the mesh will be rendered with back faces also enabled.
     #[serde(rename = "double-sided")]
     pub double_sided: Option<bool>,
 
@@ -317,7 +317,7 @@ impl MaterialAsset {
         }
     }
 
-    /// Reads and processes 3D model material source files into an existing `.pak` file buffer.
+    /// Reads and processes 3D mesh material source files into an existing `.pak` file buffer.
     pub(super) fn bake(
         &mut self,
         rt: &Runtime,
@@ -339,7 +339,7 @@ impl MaterialAsset {
             // This material will be accessible using this key
             info!("Baking material: {}", key);
         } else {
-            // This model will only be accessible using the ID
+            // This material will only be accessible using the ID
             info!("Baking material: (inline)");
         }
 

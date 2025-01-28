@@ -1,8 +1,8 @@
 use {
     super::{blob::BlobAsset, file_key, re_run_if_changed, Canonicalize, Euler, Rotation, Writer},
     crate::{
-        model::{Joint, Mesh, MeshPart, Model, Skin, VertexType},
-        ModelId,
+        mesh::{Joint, Mesh, Primitive, Skin, VertexType},
+        MeshId,
     },
     anyhow::Context,
     glam::{vec3, EulerRot, Mat4, Quat, Vec3},
@@ -12,7 +12,7 @@ use {
         mesh::{util::ReadIndices, Mode, Reader},
         Buffer, Node,
     },
-    log::{debug, info, trace, warn},
+    log::{info, trace, warn},
     meshopt::{
         optimize_overdraw_in_place, optimize_vertex_cache_in_place, quantize_unorm,
         remap_index_buffer, simplify, unstripify, SimplifyOptions, VertexDataAdapter,
@@ -24,7 +24,7 @@ use {
         Deserialize, Deserializer,
     },
     std::{
-        collections::{BTreeSet, HashMap, HashSet, VecDeque},
+        collections::{BTreeSet, HashMap, HashSet},
         fmt::Formatter,
         io::{Error, ErrorKind},
         iter::repeat,
@@ -44,64 +44,27 @@ fn extract_transform(node: &Node) -> Mat4 {
     Mat4::from_scale_rotation_translation(scale, rotation, translation)
 }
 
-/// Holds a description of individual meshes within a `.glb` or `.gltf` 3D model.
+/// Holds a description of `.glb` or `.gltf` 3D meshes.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
-pub struct MeshRef {
-    name: String,
-    rename: Option<String>,
-}
-
-impl MeshRef {
-    /// The artist-provided name of a mesh within the model.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Allows the artist-provided name to be different when referenced by a program.
-    pub fn rename(&self) -> Option<&str> {
-        let rename = self.rename.as_deref();
-        if matches!(rename, Some(rename) if rename.trim().is_empty()) {
-            None
-        } else {
-            rename
-        }
-    }
-}
-
-/// Holds a description of `.glb` or `.gltf` 3D models.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
-pub struct ModelAsset {
+#[serde(rename_all = "kebab-case")]
+pub struct MeshAsset {
     data: Option<PathBuf>,
     euler: Option<Euler>,
-
-    #[serde(rename = "flip-x")]
     flip_x: Option<bool>,
-
-    #[serde(rename = "flip-y")]
     flip_y: Option<bool>,
-
-    #[serde(rename = "flip-z")]
     flip_z: Option<bool>,
-
-    #[serde(rename = "ignore-skin")]
     ignore_skin: Option<bool>,
-
     lod: Option<bool>,
-
-    #[serde(rename = "lod-lock-border")]
     lod_lock_border: Option<bool>,
-
-    #[serde(rename = "lod-target-error")]
     lod_target_error: Option<OrderedFloat<f32>>,
-
-    #[serde(rename = "min-lod-triangles")]
     min_lod_triangles: Option<usize>,
+
+    /// The artist-provided name of a mesh within the source file.
+    name: Option<String>,
 
     normals: Option<bool>,
     offset: Option<[OrderedFloat<f32>; 3]>,
     optimize: Option<bool>,
-
-    #[serde(rename = "overdraw-threshold")]
     overdraw_threshold: Option<OrderedFloat<f32>>,
 
     rotation: Option<Rotation>,
@@ -109,17 +72,13 @@ pub struct ModelAsset {
     #[serde(default, deserialize_with = "Scale::de")]
     scale: Option<Scale>,
 
+    scene_name: Option<String>,
     shadow: Option<bool>,
     src: PathBuf,
-
     tangents: Option<bool>,
-
-    // Tables must follow values
-    #[serde(rename = "mesh")]
-    meshes: Option<Box<[MeshRef]>>,
 }
 
-impl ModelAsset {
+impl MeshAsset {
     pub const DEFAULT_LOD_MIN: usize = 64;
     pub const DEFAULT_LOD_TARGET_ERROR: f32 = 0.05;
 
@@ -134,32 +93,33 @@ impl ModelAsset {
             lod: None,
             lod_lock_border: None,
             lod_target_error: None,
-            meshes: None,
             min_lod_triangles: None,
+            name: None,
             normals: None,
             offset: None,
             optimize: None,
             overdraw_threshold: None,
             rotation: None,
             scale: None,
+            scene_name: None,
             shadow: None,
             src: src.as_ref().to_path_buf(),
             tangents: None,
         }
     }
 
-    /// Reads and processes 3D model source files into an existing `.pak` file buffer.
+    /// Reads and processes 3D mesh source files into an existing `.pak` file buffer.
     pub fn bake(
         &self,
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
         path: Option<impl AsRef<Path>>,
-    ) -> anyhow::Result<ModelId> {
-        // Early-out if we have already baked this model
+    ) -> anyhow::Result<MeshId> {
+        // Early-out if we have already baked this mesh
         let asset = self.clone().into();
 
         if let Some(id) = writer.lock().ctx.get(&asset) {
-            return Ok(id.as_model().unwrap());
+            return Ok(id.as_mesh().unwrap());
         }
 
         self.re_run_if_changed();
@@ -168,36 +128,36 @@ impl ModelAsset {
         // given if the asset is specified inline - those are only available in the .pak via ID)
         let key = path.as_ref().map(|path| file_key(&project_dir, path));
         if let Some(key) = &key {
-            // This model will be accessible using this key
-            info!("Baking model: {}", key);
+            // This mesh will be accessible using this key
+            info!("Baking mesh: {}", key);
         } else {
-            // This model will only be accessible using the handle
+            // This mesh will only be accessible using the handle
             info!(
-                "Baking model: {} (inline)",
+                "Baking mesh: {} (inline)",
                 file_key(&project_dir, self.src())
             );
         }
 
-        let mut model = self
-            .to_model()
+        let mut mesh = self
+            .to_mesh()
             .map_err(|err| Error::new(ErrorKind::InvalidData, err))
-            .context("Creating model buffer")?;
+            .context("Creating mesh buffer")?;
 
         // Bake the unstructured data blob too
         if let Some(data) = &self.data {
             let data_id = BlobAsset::new(data)
                 .bake(writer, project_dir)
-                .context("Baking unstructered model data")?;
-            model.set_data(data_id);
+                .context("Baking unstructered mesh data")?;
+            mesh.set_data(data_id);
         }
 
         // Check again to see if we are the first one to finish this
         let mut writer = writer.lock();
         if let Some(id) = writer.ctx.get(&asset) {
-            return Ok(id.as_model().unwrap());
+            return Ok(id.as_mesh().unwrap());
         }
 
-        let id = writer.push_model(model, key);
+        let id = writer.push_mesh(mesh, key);
         writer.ctx.insert(asset, id.into());
 
         Ok(id)
@@ -302,14 +262,14 @@ impl ModelAsset {
         self.normals.unwrap_or(true)
     }
 
-    /// Translation of the model origin.
+    /// Translation of the mesh origin.
     pub fn offset(&self) -> Vec3 {
         self.offset
             .map(|offset| vec3(offset[0].0, offset[1].0, offset[2].0))
             .unwrap_or(Vec3::ZERO)
     }
 
-    /// When `true` this model will be optmizied using the meshopt library.
+    /// When `true` this mesh will be optmizied using the meshopt library.
     ///
     /// Optimization includes vertex cache, overdraw, and fetch support.
     pub fn optimize(&self) -> bool {
@@ -637,7 +597,7 @@ impl ModelAsset {
         )
     }
 
-    /// Orientation of the model.
+    /// Orientation of the mesh.
     pub fn rotation(&self) -> Quat {
         match self.rotation {
             Some(Rotation::Euler(rotation)) => Quat::from_euler(
@@ -653,7 +613,7 @@ impl ModelAsset {
         }
     }
 
-    /// Euler ordering of the model orientation.
+    /// Euler ordering of the mesh orientation.
     pub fn euler(&self) -> EulerRot {
         match self.euler.unwrap_or(Euler::XYZ) {
             Euler::XYZ => EulerRot::XYZ,
@@ -665,7 +625,7 @@ impl ModelAsset {
         }
     }
 
-    /// Scaling of the model.
+    /// Scaling of the mesh.
     pub fn scale(&self) -> Vec3 {
         self.scale
             .map(|scale| match scale {
@@ -682,7 +642,7 @@ impl ModelAsset {
         self.shadow.unwrap_or_default()
     }
 
-    /// The model file source.
+    /// The mesh file source.
     pub fn src(&self) -> &Path {
         self.src.as_path()
     }
@@ -692,134 +652,99 @@ impl ModelAsset {
         self.tangents.unwrap_or(true)
     }
 
-    fn to_model(&self) -> anyhow::Result<Model> {
-        // Gather a map of the importable mesh names and the renamed name they should get
-        let mut mesh_names = HashMap::<_, _>::default();
-        if let Some(meshes) = &self.meshes {
-            for mesh in meshes.iter() {
-                mesh_names
-                    .entry(mesh.name())
-                    .and_modify(|_| warn!("Duplicate mesh name: {}", mesh.name()))
-                    .or_insert_with(|| mesh.rename());
-            }
-        }
-
-        trace!(
-            "{} mesh names specified",
-            self.meshes
-                .as_ref()
-                .map(|meshes| meshes.len())
-                .unwrap_or_default()
-        );
-
+    fn to_mesh(&self) -> anyhow::Result<Mesh> {
         // Load the mesh nodes from this GLTF file
         let (doc, bufs, _) = import(self.src())
-            .with_context(|| format!("Importing model {}", self.src().display()))?;
-        let scene = doc
-            .default_scene()
+            .with_context(|| format!("Importing mesh {}", self.src().display()))?;
+        let scene = self
+            .scene_name
+            .as_deref()
+            .and_then(|name| doc.scenes().find(|scene| scene.name() == Some(&name)))
+            .or_else(|| doc.default_scene())
             .or_else(|| doc.scenes().next())
             .expect("No scene found");
-        let mut nodes = VecDeque::from_iter(scene.nodes().filter_map(|node| {
-            if !mesh_names.is_empty() {
-                if let Some(name) = node.name() {
-                    if !mesh_names.contains_key(name) {
-                        debug!("Ignoring mesh {}", name);
-
-                        return None;
-                    }
-                }
-            }
-
-            Some(node)
-        }));
-        let mut meshes = vec![];
+        let mut mesh_nodes = scene.nodes().filter(|node| node.mesh().is_some());
+        let node = self
+            .name
+            .as_deref()
+            .and_then(|name| mesh_nodes.find(|node| node.name() == Some(&name)))
+            .or_else(|| mesh_nodes.next())
+            .expect("No mesh found");
         let allow_skin = !self.ignore_skin.unwrap_or_default();
-        let model_transform =
+        let mesh_transform =
             Mat4::from_scale_rotation_translation(Vec3::ONE, self.rotation(), self.offset());
 
-        while !nodes.is_empty() {
-            let node = nodes.pop_front().unwrap();
+        info!("Loading mesh {}", node.name().unwrap_or_default());
 
-            for child_node in node.children() {
-                nodes.push_back(child_node);
-            }
-
-            if let Some(mesh) = node.mesh() {
-                info!("Loading mesh {}", node.name().unwrap_or_default());
-
-                let skin = allow_skin
-                    .then(|| Self::read_skin(&node, &bufs, model_transform))
-                    .flatten();
-                let transform = model_transform * extract_transform(&node);
-                let parts = mesh
-                    .primitives()
-                    .filter_map(|primitive| match primitive.mode() {
-                        Mode::TriangleFan | Mode::TriangleStrip | Mode::Triangles => {
-                            trace!(
-                                "Reading mesh \"{}\" (material index {})",
-                                node.name().unwrap_or_default(),
-                                if primitive.material().index().is_some() {
-                                    format!("{}", primitive.material().index().unwrap_or_default())
-                                } else {
-                                    "unset".to_string()
-                                }
-                            );
-
-                            // Read material and vertex data
-                            let material = primitive.material().index().unwrap_or_default();
-                            let (restart_index, mut vertices) =
-                                Self::read_vertices(primitive.reader(|buf| {
-                                    bufs.get(buf.index()).map(|data| data.0.as_slice())
-                                }));
-
-                            // Convert unsupported modes (meshopt requires triangles)
-                            match primitive.mode() {
-                                Mode::TriangleFan => {
-                                    Self::convert_triangle_fan_to_list(&mut vertices.indices)
-                                }
-                                Mode::TriangleStrip => Self::convert_triangle_strip_to_list(
-                                    &mut vertices.indices,
-                                    restart_index,
-                                ),
-                                _ => (),
-                            }
-
-                            if self.flip_x.unwrap_or_default() {
-                                for [x, _y, _z] in &mut vertices.positions {
-                                    *x *= -1.0;
-                                }
-                            }
-
-                            if self.flip_y.unwrap_or_default() {
-                                for [_x, y, _z] in &mut vertices.positions {
-                                    *y *= -1.0;
-                                }
-                            }
-
-                            if self.flip_z.unwrap_or_default() {
-                                for [_x, _y, z] in &mut vertices.positions {
-                                    *z *= -1.0;
-                                }
-                            }
-
-                            vertices.transform(transform);
-
-                            Some((material, vertices))
+        let skin = allow_skin
+            .then(|| Self::read_skin(&node, &bufs, mesh_transform))
+            .flatten();
+        let transform = mesh_transform * extract_transform(&node);
+        let parts = node
+            .mesh()
+            .unwrap()
+            .primitives()
+            .filter_map(|primitive| match primitive.mode() {
+                Mode::TriangleFan | Mode::TriangleStrip | Mode::Triangles => {
+                    trace!(
+                        "Reading mesh \"{}\" (material index {})",
+                        node.name().unwrap_or_default(),
+                        if primitive.material().index().is_some() {
+                            format!("{}", primitive.material().index().unwrap_or_default())
+                        } else {
+                            "unset".to_string()
                         }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
+                    );
 
-                meshes.push((node, skin, parts));
-            }
-        }
+                    // Read material and vertex data
+                    let material = primitive.material().index().unwrap_or_default();
+                    let (restart_index, mut vertices) = Self::read_vertices(
+                        primitive.reader(|buf| bufs.get(buf.index()).map(|data| data.0.as_slice())),
+                    );
+
+                    // Convert unsupported modes (meshopt requires triangles)
+                    match primitive.mode() {
+                        Mode::TriangleFan => {
+                            Self::convert_triangle_fan_to_list(&mut vertices.indices)
+                        }
+                        Mode::TriangleStrip => Self::convert_triangle_strip_to_list(
+                            &mut vertices.indices,
+                            restart_index,
+                        ),
+                        _ => (),
+                    }
+
+                    if self.flip_x.unwrap_or_default() {
+                        for [x, _y, _z] in &mut vertices.positions {
+                            *x *= -1.0;
+                        }
+                    }
+
+                    if self.flip_y.unwrap_or_default() {
+                        for [_x, y, _z] in &mut vertices.positions {
+                            *y *= -1.0;
+                        }
+                    }
+
+                    if self.flip_z.unwrap_or_default() {
+                        for [_x, _y, z] in &mut vertices.positions {
+                            *z *= -1.0;
+                        }
+                    }
+
+                    vertices.transform(transform);
+
+                    Some((material, vertices))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
 
         // Figure out which unique materials are used on these target mesh primitives and convert
         // those to a map of "Mesh Local" material index from "Gltf File" material index
         // This makes the final materials used index as 0, 1, 2, etc
-        let materials = meshes
+        let materials = parts
             .iter()
-            .flat_map(|(.., parts)| parts)
             .map(|(material, ..)| *material)
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -828,115 +753,88 @@ impl ModelAsset {
             .collect::<HashMap<_, _>>();
 
         trace!(
-            "Document contains {} mesh{} ({} material{})",
-            meshes.len(),
-            if meshes.len() == 1 { "" } else { "es" },
+            "Document contains {} material{}",
             materials.len(),
             if materials.len() == 1 { "" } else { "s" },
         );
 
         let shadow = self.shadow();
 
-        // Build a Model from the meshes in this document
-        let mut model = Model::default();
-        for (node, skin, parts) in meshes {
-            let name = if mesh_names.is_empty() {
-                node.name().map(|name| name.to_owned())
-            } else {
-                mesh_names
-                    .get(node.name().unwrap_or_default())
-                    .map(|name| name.map(|name| name.to_owned()))
-                    .unwrap_or(None)
-            };
+        // Build a Mesh from the parts in this document
+        let mut primitives = Vec::with_capacity(parts.len() + (parts.len() * shadow as usize));
 
-            trace!(
-                "Mesh \"{}\" -> \"{}\"",
-                node.name().unwrap_or_default(),
-                name.as_deref().unwrap_or_default()
-            );
+        for (material, mut data) in parts {
+            let material = materials.get(&material).copied().unwrap_or_default();
 
-            let mut mesh_parts = Vec::with_capacity(parts.len() + (parts.len() * shadow as usize));
+            if skin.is_none() {
+                data.skin = None;
+            }
 
-            for (material, mut data) in parts {
-                let material = materials.get(&material).copied().unwrap_or_default();
+            if !self.normals() {
+                data.normals.clear();
+            } else if data.normals.is_empty() {
+                data.generate_normals();
+            }
 
-                if skin.is_none() {
-                    data.skin = None;
-                }
+            if !self.tangents() {
+                data.tangents.clear();
+            } else if data.tangents.is_empty() {
+                warn!(
+                    "Tangent data requested but not found: {} (will generate)",
+                    self.src().display()
+                );
 
-                if !self.normals() {
-                    data.normals.clear();
-                } else if data.normals.is_empty() {
+                if data.normals.is_empty() {
                     data.generate_normals();
                 }
 
-                if !self.tangents() {
-                    data.tangents.clear();
-                } else if data.tangents.is_empty() {
-                    warn!(
-                        "Tangent data requested but not found: {} (will generate)",
-                        self.src().display()
-                    );
-
-                    if data.normals.is_empty() {
-                        data.generate_normals();
-                    }
-
-                    if data.textures.0.is_empty() {
-                        // We must generate totally fake texture coordinates too
-                        data.textures
-                            .0
-                            .resize(data.positions.len(), Default::default());
-                    }
-
-                    data.tangents
-                        .extend(repeat([0.0; 4]).take(data.positions.len()));
-
-                    assert!(mikktspace::generate_tangents(&mut data));
+                if data.textures.0.is_empty() {
+                    // We must generate totally fake texture coordinates too
+                    data.textures
+                        .0
+                        .resize(data.positions.len(), Default::default());
                 }
 
-                // Main mesh part
-                {
-                    let (vertex, mut vertex_buf) = data.to_vertex_buf();
-                    let vertex_stride = vertex.stride();
+                data.tangents
+                    .extend(repeat([0.0; 4]).take(data.positions.len()));
 
-                    self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride);
-
-                    let mut part = MeshPart::new(material, &vertex_buf, vertex);
-
-                    for lod_indices in
-                        self.calculate_lods(&data.indices, &vertex_buf, vertex_stride)
-                    {
-                        part.push_lod(&lod_indices);
-                    }
-
-                    mesh_parts.push(part);
-                }
-
-                // Optional shadow mesh part
-                if shadow {
-                    let (vertex, mut vertex_buf) = data.to_shadow_buf();
-                    let vertex_stride = vertex.stride();
-
-                    self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride);
-
-                    let mut part = MeshPart::new(material, &vertex_buf, vertex);
-
-                    for lod_indices in
-                        self.calculate_lods(&data.indices, &vertex_buf, vertex_stride)
-                    {
-                        part.push_lod(&lod_indices);
-                    }
-
-                    mesh_parts.push(part);
-                }
+                assert!(mikktspace::generate_tangents(&mut data));
             }
 
-            // Build a MeshBuf from the parts in this node
-            model.push_mesh(Mesh::new(name, mesh_parts, skin));
+            // Main mesh part
+            {
+                let (vertex, mut vertex_buf) = data.to_vertex_buf();
+                let vertex_stride = vertex.stride();
+
+                self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride);
+
+                let mut primitive = Primitive::new(material, &vertex_buf, vertex);
+
+                for lod_indices in self.calculate_lods(&data.indices, &vertex_buf, vertex_stride) {
+                    primitive.push_lod(&lod_indices);
+                }
+
+                primitives.push(primitive);
+            }
+
+            // Optional shadow mesh part
+            if shadow {
+                let (vertex, mut vertex_buf) = data.to_shadow_buf();
+                let vertex_stride = vertex.stride();
+
+                self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride);
+
+                let mut primitive = Primitive::new(material, &vertex_buf, vertex);
+
+                for lod_indices in self.calculate_lods(&data.indices, &vertex_buf, vertex_stride) {
+                    primitive.push_lod(&lod_indices);
+                }
+
+                primitives.push(primitive);
+            }
         }
 
-        Ok(model)
+        Ok(Mesh::new(primitives, skin))
     }
 
     fn re_run_if_changed(&self) {
@@ -956,7 +854,7 @@ impl ModelAsset {
     }
 }
 
-impl Canonicalize for ModelAsset {
+impl Canonicalize for MeshAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
         if let Some(data) = &self.data {
             self.data = Some(Self::canonicalize_project_path(
