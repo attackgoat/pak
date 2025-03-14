@@ -58,7 +58,7 @@ enum DataRef<T> {
 impl<T> DataRef<T> {
     fn as_data(&self) -> Option<&T> {
         match self {
-            Self::Data(ref t) => Some(t),
+            Self::Data(t) => Some(t),
             _ => {
                 warn!("Expected data but found position and length");
 
@@ -85,8 +85,12 @@ where
 {
     fn serialize(&self) -> Result<Vec<u8>, Error> {
         let mut buf = vec![];
-        bincode::serialize_into(&mut buf, &self.as_data().unwrap())
-            .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+        bincode::serde::encode_into_std_write(
+            self.as_data().unwrap(),
+            &mut buf,
+            bincode::config::legacy(),
+        )
+        .map_err(|_| Error::from(ErrorKind::InvalidData))?;
 
         Ok(buf)
     }
@@ -333,9 +337,12 @@ impl PakBuf {
 
         // Optionally create a compression reader (or just use the one we have)
         if let Some(compressed) = self.compression {
-            bincode::deserialize_from(compressed.new_reader(data))
+            bincode::serde::decode_from_std_read(
+                &mut compressed.new_reader(data),
+                bincode::config::legacy(),
+            )
         } else {
-            bincode::deserialize_from(data)
+            bincode::serde::decode_from_slice(data, bincode::config::legacy()).map(|(data, _)| data)
         }
         .map_err(|err| {
             warn!("Unable to deserialize: {}", err);
@@ -345,11 +352,14 @@ impl PakBuf {
     }
 
     pub fn from_stream(mut stream: impl Stream + 'static) -> Result<Self, Error> {
-        let magic_bytes: [u8; 20] = bincode::deserialize_from(&mut stream).map_err(|_| {
-            warn!("Unable to read magic bytes");
+        let magic_bytes: [u8; 20] =
+            bincode::serde::decode_from_std_read(&mut stream, bincode::config::legacy()).map_err(
+                |_| {
+                    warn!("Unable to read magic bytes");
 
-            Error::from(ErrorKind::InvalidData)
-        })?;
+                    Error::from(ErrorKind::InvalidData)
+                },
+            )?;
 
         if String::from_utf8(magic_bytes.into()).unwrap_or_default() != "ATTACKGOAT-PAK-V1.0 " {
             warn!("Unsupported magic bytes");
@@ -358,18 +368,23 @@ impl PakBuf {
         }
 
         // Read the number of bytes we must 'skip' in order to read the main data
-        let skip: u32 = bincode::deserialize_from(&mut stream).map_err(|_| {
-            warn!("Unable to read skip length");
+        let skip: u32 =
+            bincode::serde::decode_from_std_read(&mut stream, bincode::config::legacy()).map_err(
+                |_| {
+                    warn!("Unable to read skip length");
 
-            Error::from(ErrorKind::InvalidData)
-        })?;
+                    Error::from(ErrorKind::InvalidData)
+                },
+            )?;
 
         let compression: Option<Compression> =
-            bincode::deserialize_from(&mut stream).map_err(|_| {
-                warn!("Unable to read compression data");
+            bincode::serde::decode_from_std_read(&mut stream, bincode::config::legacy()).map_err(
+                |_| {
+                    warn!("Unable to read compression data");
 
-                Error::from(ErrorKind::InvalidData)
-            })?;
+                    Error::from(ErrorKind::InvalidData)
+                },
+            )?;
 
         // Read the compressed main data
         stream.seek(SeekFrom::Start(skip as _))?;
@@ -379,11 +394,12 @@ impl PakBuf {
             } else {
                 Box::new(&mut stream)
             };
-            bincode::deserialize_from(&mut compressed).map_err(|_| {
-                warn!("Unable to read header");
+            bincode::serde::decode_from_std_read(&mut compressed, bincode::config::legacy())
+                .map_err(|_| {
+                    warn!("Unable to read header");
 
-                Error::from(ErrorKind::InvalidData)
-            })?
+                    Error::from(ErrorKind::InvalidData)
+                })?
         };
 
         trace!(

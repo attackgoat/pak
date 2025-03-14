@@ -135,18 +135,22 @@ impl Writer {
         magic_bytes.copy_from_slice(b"ATTACKGOAT-PAK-V1.0 ");
 
         // Write a known value so we can identify this file
-        bincode::serialize_into(&mut writer, &magic_bytes)
+        bincode::serde::encode_into_std_write(&magic_bytes, &mut writer, bincode::config::legacy())
             .map_err(|_| Error::from(ErrorKind::InvalidData))?;
 
         let skip_position = writer.stream_position()?;
 
         // Write a blank spot that we'll use for the skip header later
-        bincode::serialize_into(&mut writer, &0u32)
+        bincode::serde::encode_into_std_write(&0u32, &mut writer, bincode::config::legacy())
             .map_err(|_| Error::from(ErrorKind::InvalidData))?;
 
         // Write the compression we're going to be using, if any
-        bincode::serialize_into(&mut writer, &self.compression)
-            .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+        bincode::serde::encode_into_std_write(
+            &self.compression,
+            &mut writer,
+            bincode::config::legacy(),
+        )
+        .map_err(|_| Error::from(ErrorKind::InvalidData))?;
 
         // Update these items with the refs we created; saving with bincode was very
         // slow when serializing the byte vectors - that is why those are saved raw.
@@ -207,17 +211,21 @@ impl Writer {
         // Write the data portion and then re-seek to the beginning to write the skip header
         let skip = writer.stream_position()? as u32;
         {
-            let compressed = if let Some(compressed) = self.compression {
+            let mut compressed = if let Some(compressed) = self.compression {
                 compressed.new_writer(&mut writer)
             } else {
                 Box::new(&mut writer)
             };
-            bincode::serialize_into(compressed, &self.data)
-                .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+            bincode::serde::encode_into_std_write(
+                &self.data,
+                &mut compressed,
+                bincode::config::legacy(),
+            )
+            .map_err(|_| Error::from(ErrorKind::InvalidData))?;
         }
 
         writer.seek(SeekFrom::Start(skip_position))?;
-        bincode::serialize_into(&mut writer, &skip)
+        bincode::serde::encode_into_std_write(&skip, &mut writer, bincode::config::legacy())
             .map_err(|_| Error::from(ErrorKind::InvalidData))?;
 
         Ok(())
