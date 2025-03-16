@@ -1,27 +1,27 @@
 use {
-    super::{blob::BlobAsset, file_key, re_run_if_changed, Canonicalize, Euler, Rotation, Writer},
+    super::{Canonicalize, Euler, Rotation, Writer, blob::BlobAsset, file_key, re_run_if_changed},
     crate::{
-        mesh::{Joint, Mesh, Primitive, Skin, VertexType},
         MeshId,
+        mesh::{Joint, Mesh, Primitive, Skin, VertexType},
     },
     anyhow::Context,
-    glam::{vec3, EulerRot, Mat4, Quat, Vec3},
+    glam::{EulerRot, Mat4, Quat, Vec3, vec3},
     gltf::{
+        Buffer, Node,
         buffer::Data,
         import,
-        mesh::{util::ReadIndices, Mode, Reader},
-        Buffer, Node,
+        mesh::{Mode, Reader, util::ReadIndices},
     },
     log::{info, trace, warn},
     meshopt::{
-        optimize_overdraw_in_place, optimize_vertex_cache_in_place, quantize_unorm,
-        remap_index_buffer, simplify, unstripify, SimplifyOptions, VertexDataAdapter,
+        SimplifyOptions, VertexDataAdapter, optimize_overdraw_in_place,
+        optimize_vertex_cache_in_place, quantize_unorm, remap_index_buffer, simplify, unstripify,
     },
     ordered_float::OrderedFloat,
     parking_lot::Mutex,
     serde::{
-        de::{value::SeqAccessDeserializer, SeqAccess, Visitor},
         Deserialize, Deserializer,
+        de::{SeqAccess, Visitor, value::SeqAccessDeserializer},
     },
     std::{
         collections::{BTreeSet, HashMap, HashSet},

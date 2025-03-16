@@ -1,20 +1,20 @@
 use {
     super::{
-        file_key, is_toml, material::MaterialAsset, mesh::MeshAsset, parent, Asset, Canonicalize,
-        Euler, Rotation, Writer,
+        Asset, Canonicalize, Euler, Rotation, Writer, file_key, is_toml, material::MaterialAsset,
+        mesh::MeshAsset, parent,
     },
     crate::{
-        scene::{DataData, GeometryData, ReferenceData, Scene},
         SceneId,
+        scene::{DataData, GeometryData, ReferenceData, Scene},
     },
     anyhow::Context,
-    glam::{vec3, EulerRot, Quat, Vec3},
+    glam::{EulerRot, Quat, Vec3, vec3},
     log::info,
     ordered_float::OrderedFloat,
     parking_lot::Mutex,
     serde::{
-        de::{value::MapAccessDeserializer, Error, MapAccess, Visitor},
         Deserialize, Deserializer,
+        de::{Error, MapAccess, Visitor, value::MapAccessDeserializer},
     },
     std::{
         collections::BTreeMap,

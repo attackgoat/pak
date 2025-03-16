@@ -1,23 +1,24 @@
 use {
     super::{
+        Asset, Canonicalize, Writer,
         bitmap::{BitmapAsset, BitmapSwizzle},
-        file_key, is_toml, parse_hex_color, parse_hex_scalar, Asset, Canonicalize, Writer,
+        file_key, is_toml, parse_hex_color, parse_hex_scalar,
     },
     crate::{
-        bitmap::{Bitmap, BitmapColor, BitmapFormat},
         MaterialId, MaterialInfo,
+        bitmap::{Bitmap, BitmapColor, BitmapFormat},
     },
     anyhow::Context as _,
-    image::{imageops::FilterType, DynamicImage, GenericImageView, GrayImage},
+    image::{DynamicImage, GenericImageView, GrayImage, imageops::FilterType},
     log::info,
     ordered_float::OrderedFloat,
     parking_lot::Mutex,
     serde::{
-        de::{
-            value::{MapAccessDeserializer, SeqAccessDeserializer},
-            MapAccess, SeqAccess, Visitor,
-        },
         Deserialize, Deserializer,
+        de::{
+            MapAccess, SeqAccess, Visitor,
+            value::{MapAccessDeserializer, SeqAccessDeserializer},
+        },
     },
     std::{
         fmt::Formatter,

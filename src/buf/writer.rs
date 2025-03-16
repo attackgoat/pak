@@ -1,9 +1,9 @@
 use {
     super::{super::compression::Compression, Asset},
     crate::{
-        anim::Animation, bitmap::Bitmap, bitmap_font::BitmapFont, mesh::Mesh, scene::Scene,
         AnimationId, BitmapFontId, BitmapId, BlobId, Data, DataRef, Id, MaterialId, MaterialInfo,
-        MeshId, SceneId,
+        MeshId, SceneId, anim::Animation, bitmap::Bitmap, bitmap_font::BitmapFont, mesh::Mesh,
+        scene::Scene,
     },
     log::trace,
     serde::Serialize,

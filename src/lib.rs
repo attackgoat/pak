@@ -19,7 +19,7 @@ use {
     },
     log::{trace, warn},
     paste::paste,
-    serde::{de::DeserializeOwned, Deserialize, Serialize},
+    serde::{Deserialize, Serialize, de::DeserializeOwned},
     std::{
         collections::HashMap,
         fmt::{Debug, Formatter},

@@ -1,5 +1,5 @@
 use {
-    super::{index::IndexBuffer, Mat4},
+    super::{Mat4, index::IndexBuffer},
     crate::BlobId,
     bitflags::bitflags,
     serde::{Deserialize, Serialize},

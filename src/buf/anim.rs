@@ -1,17 +1,17 @@
 use {
-    super::{file_key, Asset, Canonicalize, Writer},
+    super::{Asset, Canonicalize, Writer, file_key},
     crate::{
-        anim::{Animation, Channel, Outputs},
         AnimationId,
+        anim::{Animation, Channel, Outputs},
     },
     gltf::{
         animation::{
-            util::{ReadOutputs, Rotations},
             Interpolation as GltfInterpolation,
+            util::{ReadOutputs, Rotations},
         },
         import,
     },
-    log::{debug, info, log_enabled, warn, Level::Debug},
+    log::{Level::Debug, debug, info, log_enabled, warn},
     parking_lot::Mutex,
     serde::Deserialize,
     std::{

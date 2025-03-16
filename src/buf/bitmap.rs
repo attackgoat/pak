@@ -1,14 +1,14 @@
 use {
-    super::{file_key, re_run_if_changed, Canonicalize, Writer},
+    super::{Canonicalize, Writer, file_key, re_run_if_changed},
     crate::{
-        bitmap::{Bitmap, BitmapColor, BitmapFormat},
         BitmapId,
+        bitmap::{Bitmap, BitmapColor, BitmapFormat},
     },
     anyhow::Context,
-    image::{buffer::ConvertBuffer, imageops::FilterType, open, DynamicImage, RgbaImage},
+    image::{DynamicImage, RgbaImage, buffer::ConvertBuffer, imageops::FilterType, open},
     log::info,
     parking_lot::Mutex,
-    serde::{de::Visitor, Deserialize, Deserializer},
+    serde::{Deserialize, Deserializer, de::Visitor},
     std::{
         fmt::Formatter,
         path::{Path, PathBuf},
@@ -389,10 +389,10 @@ mod tests {
         assert!(
             BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = '' }")).is_err(),
         );
-        assert!(BitmapAsset::deserialize(ValueDeserializer::new(
-            "{ src = '', swizzle = 'rrggbb' }"
-        ))
-        .is_err(),);
+        assert!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'rrggbb' }"))
+                .is_err(),
+        );
         assert!(
             BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'z' }"))
                 .is_err(),

@@ -29,8 +29,8 @@ use {
     ordered_float::OrderedFloat,
     parking_lot::Mutex,
     serde::{
-        de::{value::SeqAccessDeserializer, SeqAccess, Visitor},
         Deserialize, Deserializer,
+        de::{SeqAccess, Visitor, value::SeqAccessDeserializer},
     },
     std::{
         collections::BTreeSet,

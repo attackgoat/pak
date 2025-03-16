@@ -1,5 +1,5 @@
 use {
-    super::{index::IndexBuffer, MaterialId, MeshId, Quat, Vec3},
+    super::{MaterialId, MeshId, Quat, Vec3, index::IndexBuffer},
     serde::{Deserialize, Serialize},
     std::collections::HashMap,
 };

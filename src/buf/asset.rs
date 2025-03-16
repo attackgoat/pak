@@ -8,7 +8,7 @@ use {
         mesh::MeshAsset,
         scene::SceneAsset,
     },
-    anyhow::{bail, Context},
+    anyhow::{Context, bail},
     ordered_float::OrderedFloat,
     serde::Deserialize,
     std::{

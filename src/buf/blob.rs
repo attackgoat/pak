@@ -1,20 +1,21 @@
 use {
     super::{
+        Canonicalize, Writer,
         bitmap::{BitmapAsset, BitmapSwizzle},
-        file_key, re_run_if_changed, Canonicalize, Writer,
+        file_key, re_run_if_changed,
     },
     crate::{
+        BitmapFontId, BlobId,
         bitmap::{Bitmap, BitmapColor, BitmapFormat},
         bitmap_font::BitmapFont,
-        BitmapFontId, BlobId,
     },
     bmfont::{BMFont, OrdinateOrientation},
     log::info,
     parking_lot::Mutex,
     serde::Deserialize,
     std::{
-        fs::read_to_string,
         fs::File,
+        fs::read_to_string,
         io::{Cursor, Error, Read},
         path::{Path, PathBuf},
         sync::Arc,
