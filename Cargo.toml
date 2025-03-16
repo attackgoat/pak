@@ -29,7 +29,7 @@ gltf = { version = "1.4", features = ["names"] }
 image = { version = "0.25", optional = true }
 log = "0.4"
 meshopt = "0.2"
-mikktspace = "0.3"
+mikktspace = { version = "0.15", package = "bevy_mikktspace" }
 parking_lot = { version = "0.12", optional = true }
 ordered-float = { version = "5.0", features = ["serde"] }
 paste = "1.0"
