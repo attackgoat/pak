@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct Bitmap {
     color: BitmapColor,
     fmt: BitmapFormat,
+    mip_levels: u32,
 
     #[serde(with = "serde_bytes")]
     pixels: Vec<u8>,
@@ -18,6 +19,7 @@ impl Bitmap {
         color: BitmapColor,
         fmt: BitmapFormat,
         width: u32,
+        mip_levels: u32,
         pixels: impl Into<Vec<u8>>,
     ) -> Self {
         let pixels = pixels.into();
@@ -25,6 +27,7 @@ impl Bitmap {
         Self {
             color,
             fmt,
+            mip_levels,
             pixels,
             width,
         }
@@ -55,6 +58,10 @@ impl Bitmap {
             BitmapFormat::Rgb => byte_height / 3,
             BitmapFormat::Rgba => byte_height >> 2,
         }
+    }
+
+    pub fn mip_levels(&self) -> u32 {
+        self.mip_levels
     }
 
     pub fn pixel(&self, x: u32, y: u32) -> &[u8] {

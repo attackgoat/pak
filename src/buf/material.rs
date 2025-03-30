@@ -270,36 +270,36 @@ impl Default for EmissiveRef {
 
 /// Holds a description of data used for mesh rendering.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
+#[serde(default, rename_all = "kebab-case")]
 pub struct MaterialAsset {
     /// A `Bitmap` asset, `Bitmap` asset file, three or four channel image source file, or single
     /// four channel color.
-    #[serde(default, deserialize_with = "ColorRef::de")]
+    #[serde(deserialize_with = "ColorRef::de")]
     pub color: ColorRef,
 
-    #[serde(default, deserialize_with = "ScalarRef::de")]
+    #[serde(deserialize_with = "ScalarRef::de")]
     pub displacement: Option<ScalarRef>,
 
     /// Whether or not the mesh will be rendered with back faces also enabled.
-    #[serde(rename = "double-sided")]
     pub double_sided: Option<bool>,
 
     /// A `Bitmap` asset, `Bitmap` asset file, three channel image source file, or a single
     /// three channel color.
-    #[serde(default, deserialize_with = "EmissiveRef::de")]
+    #[serde(deserialize_with = "EmissiveRef::de")]
     pub emissive: Option<EmissiveRef>,
 
     /// A `Bitmap` asset, `Bitmap` asset file, single channel image source file, or a single
     /// normalized value.
-    #[serde(default, deserialize_with = "ScalarRef::de")]
+    #[serde(deserialize_with = "ScalarRef::de")]
     pub metal: Option<ScalarRef>,
 
     /// A bitmap asset, bitmap asset file, or a three channel image.
-    #[serde(default, deserialize_with = "NormalRef::de")]
+    #[serde(deserialize_with = "NormalRef::de")]
     pub normal: Option<NormalRef>,
 
     /// A `Bitmap` asset, `Bitmap` asset file, single channel image source file, or a single
     /// normalized value.
-    #[serde(default, deserialize_with = "ScalarRef::de")]
+    #[serde(deserialize_with = "ScalarRef::de")]
     pub rough: Option<ScalarRef>,
 }
 
@@ -410,6 +410,7 @@ impl MaterialAsset {
                             BitmapColor::Linear,
                             BitmapFormat::Rgba,
                             1,
+                            1,
                             [
                                 (val[0].0 * u8::MAX as f32) as u8,
                                 (val[1].0 * u8::MAX as f32) as u8,
@@ -470,6 +471,7 @@ impl MaterialAsset {
                         let bitmap = Bitmap::new(
                             BitmapColor::Linear,
                             BitmapFormat::Rgb,
+                            1,
                             1,
                             [
                                 (normal_val[0].0 * u8::MAX as f32) as u8,
@@ -533,6 +535,7 @@ impl MaterialAsset {
                         let bitmap = Bitmap::new(
                             BitmapColor::Linear,
                             BitmapFormat::Rgb,
+                            1,
                             1,
                             [
                                 (val[0].0 * u8::MAX as f32) as u8,
@@ -656,6 +659,7 @@ impl MaterialAsset {
                             BitmapFormat::Rgb
                         },
                         width,
+                        1,
                         params,
                     );
                     writer.push_bitmap(params, None)
@@ -708,9 +712,10 @@ impl MaterialAsset {
                 BitmapColor::Linear,
                 BitmapFormat::R,
                 1,
+                1,
                 [(val.0 * u8::MAX as f32) as _],
             ),
-            None => Bitmap::new(BitmapColor::Linear, BitmapFormat::R, 1, [128]),
+            None => Bitmap::new(BitmapColor::Linear, BitmapFormat::R, 1, 1, [128]),
         };
         let image =
             GrayImage::from_raw(bitmap.width(), bitmap.height(), bitmap.pixels().to_vec()).unwrap();

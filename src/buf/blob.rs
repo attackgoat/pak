@@ -144,7 +144,9 @@ impl BlobAsset {
 
         let page_bufs = pages
             .into_iter()
-            .map(|(_, pixels)| Bitmap::new(BitmapColor::Linear, BitmapFormat::Rgb, width, pixels))
+            .map(|(_, pixels)| {
+                Bitmap::new(BitmapColor::Linear, BitmapFormat::Rgb, width, 1, pixels)
+            })
             .collect();
 
         let mut writer = writer.lock();

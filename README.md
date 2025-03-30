@@ -135,6 +135,7 @@ _`[bitmap]` Schema_
 Item | Description
 ---- | -----------
 `src` | File path to an image file. May be relative to the `[bitmap]` TOML file or absolute where the root is the same folder as the `[content]` TOML file.
+`mip-levels` | (_Optional, `boolean` or `non-zero unsigned integer`_) When set (default `1`), allows configuration of the desired count of mip levels to be stored with a bitmap for later use by a program.
 `resize` | (_Optional, `unsigned integer`_) When set, the image is uniformally resized to have this maximum dimension.
 `color` | (_Optional, `string`_) When set (default `srgb`), the image is imported as either `linear` or `srgb` color data.
 `swizzle` | (_Optional, `string`_) When set (default `rgba` for four channel images), the specified image color channels are imported in the given order (example: `r`, `rg` or `bgr`).

@@ -4,7 +4,7 @@ use {
         BitmapId,
         bitmap::{Bitmap, BitmapColor, BitmapFormat},
     },
-    anyhow::Context,
+    anyhow::{Context, bail},
     image::{DynamicImage, RgbaImage, buffer::ConvertBuffer, imageops::FilterType, open},
     log::info,
     parking_lot::Mutex,
@@ -16,10 +16,64 @@ use {
     },
 };
 
+const MIP_LEVELS_MAX: u32 = u32::BITS;
+const MIP_LEVELS_MIN: u32 = 1;
+
+fn de_mip_levels<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct MipLevelsVisitor;
+
+    impl Visitor<'_> for MipLevelsVisitor {
+        type Value = Option<u32>;
+
+        fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+            formatter.write_str("either boolean or an non-zero unsigned integer")
+        }
+
+        fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            let mip_levels = if v { MIP_LEVELS_MAX } else { MIP_LEVELS_MIN };
+
+            Ok(Some(mip_levels))
+        }
+
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if v > 0 {
+                Ok(Some(v.min(MIP_LEVELS_MAX as _) as _))
+            } else {
+                Err(E::invalid_value(
+                    serde::de::Unexpected::Unsigned(v as _),
+                    &"a non-zero unsigned integer",
+                ))
+            }
+        }
+    }
+
+    deserializer
+        .deserialize_any(MipLevelsVisitor)
+        .map(|res| res.unwrap_or(MIP_LEVELS_MIN))
+}
+
+fn default_mip_levels() -> u32 {
+    MIP_LEVELS_MIN
+}
+
 /// Holds a description of `.jpeg` and other regular images.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
+#[serde(rename_all = "kebab-case")]
 pub struct BitmapAsset {
     color: Option<BitmapColor>,
+
+    #[serde(default = "default_mip_levels", deserialize_with = "de_mip_levels")]
+    mip_levels: u32,
+
     resize: Option<u32>,
     src: PathBuf,
 
@@ -36,6 +90,7 @@ impl BitmapAsset {
     {
         Self {
             color: None,
+            mip_levels: 1,
             resize: None,
             src: src.as_ref().to_path_buf(),
             swizzle: None,
@@ -45,6 +100,12 @@ impl BitmapAsset {
     #[allow(dead_code)]
     pub fn with_color(mut self, color: BitmapColor) -> Self {
         self.color = Some(color);
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn with_mip_levels(mut self, mip_levels: u32) -> Self {
+        self.mip_levels = mip_levels;
         self
     }
 
@@ -107,7 +168,25 @@ impl BitmapAsset {
         let (format, width, pixels) = Self::read_pixels(self.src(), self.swizzle, self.resize)
             .context("Unable to read pixels")?;
 
-        Ok(Bitmap::new(self.color(), format, width, pixels))
+        let row_length = format.byte_len() * width as usize;
+
+        assert_eq!(pixels.len() % row_length, 0);
+
+        let height = (pixels.len() / row_length) as u32;
+
+        if width == 0 || height == 0 {
+            bail!("invalid image size");
+        }
+
+        let mip_levels_max = u32::BITS - width.leading_zeros().min(height.leading_zeros());
+
+        Ok(Bitmap::new(
+            self.color(),
+            format,
+            width,
+            self.mip_levels.clamp(MIP_LEVELS_MIN, mip_levels_max),
+            pixels,
+        ))
     }
 
     pub fn color(&self) -> BitmapColor {
@@ -385,7 +464,62 @@ mod tests {
     use {super::*, toml::de::ValueDeserializer};
 
     #[test]
-    fn bitmap_swizzle() {
+    fn mip_levels() {
+        assert!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = '' }"))
+                .is_err()
+        );
+        assert!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = 42.0 }"))
+                .is_err()
+        );
+        assert!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = -42 }"))
+                .is_err()
+        );
+        assert!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = [] }"))
+                .is_err()
+        );
+        assert!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = {} }"))
+                .is_err()
+        );
+
+        assert!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = 0 }"))
+                .is_err(),
+        );
+
+        assert_eq!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '' }")).unwrap(),
+            BitmapAsset::new(PathBuf::new()).with_mip_levels(MIP_LEVELS_MIN),
+        );
+
+        assert_eq!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = 100 }"))
+                .unwrap(),
+            BitmapAsset::new(PathBuf::new()).with_mip_levels(MIP_LEVELS_MAX),
+        );
+        assert_eq!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = false }"))
+                .unwrap(),
+            BitmapAsset::new(PathBuf::new()).with_mip_levels(MIP_LEVELS_MIN),
+        );
+        assert_eq!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = true }"))
+                .unwrap(),
+            BitmapAsset::new(PathBuf::new()).with_mip_levels(MIP_LEVELS_MAX),
+        );
+        assert_eq!(
+            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = 16 }"))
+                .unwrap(),
+            BitmapAsset::new(PathBuf::new()).with_mip_levels(16),
+        );
+    }
+
+    #[test]
+    fn swizzle() {
         assert!(
             BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = '' }")).is_err(),
         );
