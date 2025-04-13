@@ -32,6 +32,7 @@ impl Data {
     }
 }
 
+#[derive(Debug)]
 struct DataIter<'a> {
     data: &'a [Data],
     idx: usize,
@@ -178,7 +179,7 @@ pub struct GeometryData {
 }
 
 /// An individual `Scene` geometry.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct GeometryRef<'a> {
     idx: usize,
     scene: &'a Scene,
@@ -246,7 +247,7 @@ impl GeometryRef<'_> {
 }
 
 /// An `Iterator` of [`Geometry`] items.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct GeometryIter<'a> {
     idx: usize,
     scene: &'a Scene,
@@ -396,7 +397,7 @@ impl Scene {
 }
 
 /// An individual `Scene` reference.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct ReferenceRef<'a> {
     idx: usize,
     scene: &'a Scene,
@@ -468,7 +469,7 @@ impl ReferenceRef<'_> {
 }
 
 /// An `Iterator` of [`Reference`] items.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ReferenceIter<'a> {
     idx: usize,
     scene: &'a Scene,
