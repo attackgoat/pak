@@ -129,6 +129,46 @@ impl<'a> DataRef<'a> {
         }
     }
 
+    fn as_type_str(self) -> &'static str {
+        match self.data {
+            Data::Array(_) => "iter",
+            Data::Bool(_) => "bool",
+            Data::Float(_) => "f32",
+            Data::Number(_) => "i32",
+            Data::String(_) => "str",
+        }
+    }
+
+    /// Returns a boolean.
+    pub fn expect_bool(self) -> bool {
+        self.as_bool()
+            .unwrap_or_else(|| panic!("expected bool, found {}", self.as_type_str()))
+    }
+
+    /// Returns a float.
+    pub fn expect_f32(self) -> f32 {
+        self.as_f32()
+            .unwrap_or_else(|| panic!("expected f32, found {}", self.as_type_str()))
+    }
+
+    /// Returns a number.
+    pub fn expect_i32(self) -> i32 {
+        self.as_i32()
+            .unwrap_or_else(|| panic!("expected i32, found {}", self.as_type_str()))
+    }
+
+    /// Returns an array.
+    pub fn expect_iter(self) -> impl ExactSizeIterator<Item = DataRef<'a>> + 'a {
+        self.as_iter()
+            .unwrap_or_else(|| panic!("expected iter, found {}", self.as_type_str()))
+    }
+
+    /// Returns a string.
+    pub fn expect_str(self) -> &'a str {
+        self.as_str()
+            .unwrap_or_else(|| panic!("expected str, found {}", self.as_type_str()))
+    }
+
     /// Returns `true` if the data is a boolean.
     pub fn is_bool(self) -> bool {
         matches!(self.data, Data::Bool(_))
