@@ -27,11 +27,10 @@ use {
         collections::{BTreeSet, HashMap, HashSet},
         fmt::Formatter,
         io::{Error, ErrorKind},
-        iter::repeat,
+        iter::repeat_n,
         num::FpCategory,
         path::{Path, PathBuf},
         sync::Arc,
-        u16,
     },
 };
 
@@ -659,7 +658,7 @@ impl MeshAsset {
         let scene = self
             .scene_name
             .as_deref()
-            .and_then(|name| doc.scenes().find(|scene| scene.name() == Some(&name)))
+            .and_then(|name| doc.scenes().find(|scene| scene.name() == Some(name)))
             .or_else(|| doc.default_scene())
             .or_else(|| doc.scenes().next())
             .expect("No scene found");
@@ -667,7 +666,7 @@ impl MeshAsset {
         let node = self
             .name
             .as_deref()
-            .and_then(|name| mesh_nodes.find(|node| node.name() == Some(&name)))
+            .and_then(|name| mesh_nodes.find(|node| node.name() == Some(name)))
             .or_else(|| mesh_nodes.next())
             .expect("No mesh found");
         let allow_skin = !self.ignore_skin.unwrap_or_default();
@@ -796,7 +795,7 @@ impl MeshAsset {
                 }
 
                 data.tangents
-                    .extend(repeat([0.0; 4]).take(data.positions.len()));
+                    .extend(repeat_n([0.0; 4], data.positions.len()));
 
                 assert!(mikktspace::generate_tangents(&mut data));
             }

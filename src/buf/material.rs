@@ -115,15 +115,15 @@ impl ColorRef {
             where
                 E: serde::de::Error,
             {
-                if str.starts_with('#') {
-                    if let Some(val) = parse_hex_color(str) {
-                        return Ok(ColorRef::Value([
-                            OrderedFloat(val[0] as f32 / u8::MAX as f32),
-                            OrderedFloat(val[1] as f32 / u8::MAX as f32),
-                            OrderedFloat(val[2] as f32 / u8::MAX as f32),
-                            OrderedFloat(val[3] as f32 / u8::MAX as f32),
-                        ]));
-                    }
+                if str.starts_with('#')
+                    && let Some(val) = parse_hex_color(str)
+                {
+                    return Ok(ColorRef::Value([
+                        OrderedFloat(val[0] as f32 / u8::MAX as f32),
+                        OrderedFloat(val[1] as f32 / u8::MAX as f32),
+                        OrderedFloat(val[2] as f32 / u8::MAX as f32),
+                        OrderedFloat(val[3] as f32 / u8::MAX as f32),
+                    ]));
                 }
 
                 Ok(ColorRef::Path(PathBuf::from(str)))
@@ -232,16 +232,16 @@ impl EmissiveRef {
             where
                 E: serde::de::Error,
             {
-                if str.starts_with('#') {
-                    if let Some(val) = parse_hex_color(str) {
-                        assert_eq!(val[3], u8::MAX);
+                if str.starts_with('#')
+                    && let Some(val) = parse_hex_color(str)
+                {
+                    assert_eq!(val[3], u8::MAX);
 
-                        return Ok(Some(EmissiveRef::Value([
-                            OrderedFloat(val[0] as f32 / u8::MAX as f32),
-                            OrderedFloat(val[1] as f32 / u8::MAX as f32),
-                            OrderedFloat(val[2] as f32 / u8::MAX as f32),
-                        ])));
-                    }
+                    return Ok(Some(EmissiveRef::Value([
+                        OrderedFloat(val[0] as f32 / u8::MAX as f32),
+                        OrderedFloat(val[1] as f32 / u8::MAX as f32),
+                        OrderedFloat(val[2] as f32 / u8::MAX as f32),
+                    ])));
                 }
 
                 Ok(Some(EmissiveRef::Path(PathBuf::from(str))))
@@ -648,7 +648,8 @@ impl MaterialAsset {
                 }
 
                 let mut writer = writer.lock();
-                let res = if let Some(id) = writer.ctx.get(&params_asset) {
+
+                if let Some(id) = writer.ctx.get(&params_asset) {
                     id.as_bitmap().unwrap()
                 } else {
                     let params = Bitmap::new(
@@ -663,9 +664,7 @@ impl MaterialAsset {
                         params,
                     );
                     writer.push_bitmap(params, None)
-                };
-
-                res
+                }
             })
         };
 
@@ -915,12 +914,12 @@ impl ScalarRef {
             where
                 E: serde::de::Error,
             {
-                if str.starts_with('#') {
-                    if let Some(val) = parse_hex_scalar(str) {
-                        return Ok(Some(ScalarRef::Value(OrderedFloat(
-                            val as f32 / u8::MAX as f32,
-                        ))));
-                    }
+                if str.starts_with('#')
+                    && let Some(val) = parse_hex_scalar(str)
+                {
+                    return Ok(Some(ScalarRef::Value(OrderedFloat(
+                        val as f32 / u8::MAX as f32,
+                    ))));
                 }
 
                 Ok(Some(ScalarRef::Path(PathBuf::from(str))))

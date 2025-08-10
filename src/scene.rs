@@ -227,7 +227,7 @@ pub struct GeometryRef<'a> {
 
 impl GeometryRef<'_> {
     /// Returns the data for the given key, if it exists.
-    pub fn data(&self, key: &str) -> Option<DataRef> {
+    pub fn data(&self, key: &str) -> Option<DataRef<'_>> {
         let geometry = self.geometry();
 
         match geometry
@@ -445,7 +445,7 @@ pub struct ReferenceRef<'a> {
 
 impl ReferenceRef<'_> {
     /// Returns the data for the given key, if it exists.
-    pub fn data(&self, key: &str) -> Option<DataRef> {
+    pub fn data(&self, key: &str) -> Option<DataRef<'_>> {
         let reference = self.reference();
 
         match reference

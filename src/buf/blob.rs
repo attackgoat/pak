@@ -133,10 +133,10 @@ impl BlobAsset {
             let page_height = page_pixels.len() as u32 / 3 / page_width;
             if page_size.is_none() {
                 page_size = Some((*page_width, page_height));
-            } else if let Some((width, height)) = page_size {
-                if *page_width != width || page_height != height {
-                    panic!("Unexpected page size");
-                }
+            } else if let Some((width, height)) = page_size
+                && (*page_width != width || page_height != height)
+            {
+                panic!("Unexpected page size");
             }
         }
 

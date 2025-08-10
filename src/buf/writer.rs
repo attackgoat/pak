@@ -28,7 +28,7 @@ impl Writer {
         self.data.anims.push(DataRef::Data(animation));
 
         if let Some(key) = key {
-            assert!(self.data.ids.get(&key).is_none());
+            assert!(!self.data.ids.contains_key(&key));
 
             self.data.ids.insert(key, id.into());
         }
@@ -45,7 +45,7 @@ impl Writer {
         self.data.bitmap_fonts.push(DataRef::Data(bitmap_font));
 
         if let Some(key) = key {
-            assert!(self.data.ids.get(&key).is_none());
+            assert!(!self.data.ids.contains_key(&key));
 
             self.data.ids.insert(key, id.into());
         }
@@ -58,7 +58,7 @@ impl Writer {
         self.data.bitmaps.push(DataRef::Data(bitmap));
 
         if let Some(key) = key {
-            assert!(self.data.ids.get(&key).is_none());
+            assert!(!self.data.ids.contains_key(&key));
 
             self.data.ids.insert(key, id.into());
         }
@@ -71,7 +71,7 @@ impl Writer {
         self.data.blobs.push(DataRef::Data(blob));
 
         if let Some(key) = key {
-            assert!(self.data.ids.get(&key).is_none());
+            assert!(!self.data.ids.contains_key(&key));
 
             self.data.ids.insert(key, id.into());
         }
@@ -84,7 +84,7 @@ impl Writer {
         self.data.materials.push(info);
 
         if let Some(key) = key {
-            assert!(self.data.ids.get(&key).is_none());
+            assert!(!self.data.ids.contains_key(&key));
 
             self.data.ids.insert(key, id.into());
         }
@@ -97,7 +97,7 @@ impl Writer {
         self.data.meshes.push(DataRef::Data(mesh));
 
         if let Some(key) = key {
-            assert!(self.data.ids.get(&key).is_none());
+            assert!(!self.data.ids.contains_key(&key));
 
             self.data.ids.insert(key, id.into());
         }
@@ -109,7 +109,7 @@ impl Writer {
         let id = SceneId(self.data.scenes.len());
         self.data.scenes.push(DataRef::Data(scene));
 
-        assert!(self.data.ids.get(&key).is_none());
+        assert!(!self.data.ids.contains_key(&key));
 
         self.data.ids.insert(key, id.into());
 
@@ -135,18 +135,18 @@ impl Writer {
         magic_bytes.copy_from_slice(b"ATTACKGOAT-PAK-V1.0 ");
 
         // Write a known value so we can identify this file
-        bincode::serde::encode_into_std_write(&magic_bytes, &mut writer, bincode::config::legacy())
+        bincode::serde::encode_into_std_write(magic_bytes, &mut writer, bincode::config::legacy())
             .map_err(|_| Error::from(ErrorKind::InvalidData))?;
 
         let skip_position = writer.stream_position()?;
 
         // Write a blank spot that we'll use for the skip header later
-        bincode::serde::encode_into_std_write(&0u32, &mut writer, bincode::config::legacy())
+        bincode::serde::encode_into_std_write(0u32, &mut writer, bincode::config::legacy())
             .map_err(|_| Error::from(ErrorKind::InvalidData))?;
 
         // Write the compression we're going to be using, if any
         bincode::serde::encode_into_std_write(
-            &self.compression,
+            self.compression,
             &mut writer,
             bincode::config::legacy(),
         )
@@ -225,7 +225,7 @@ impl Writer {
         }
 
         writer.seek(SeekFrom::Start(skip_position))?;
-        bincode::serde::encode_into_std_write(&skip, &mut writer, bincode::config::legacy())
+        bincode::serde::encode_into_std_write(skip, &mut writer, bincode::config::legacy())
             .map_err(|_| Error::from(ErrorKind::InvalidData))?;
 
         Ok(())

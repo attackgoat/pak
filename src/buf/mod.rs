@@ -344,13 +344,12 @@ impl PakBuf {
                                             handle_mesh(&mut res, mesh);
                                         }
                                         AssetRef::Path(path) => {
-                                            if res.insert(path.to_path_buf()) {
-                                                if let Some(mut mesh) =
+                                            if res.insert(path.to_path_buf())
+                                                && let Some(mut mesh) =
                                                     Asset::read(path)?.into_mesh()
-                                                {
-                                                    mesh.canonicalize(&src_dir, parent(path));
-                                                    handle_mesh(&mut res, &mesh);
-                                                }
+                                            {
+                                                mesh.canonicalize(&src_dir, parent(path));
+                                                handle_mesh(&mut res, &mesh);
                                             }
                                         }
                                     }
@@ -362,13 +361,12 @@ impl PakBuf {
                                             handle_material(&mut res, material);
                                         }
                                         AssetRef::Path(path) => {
-                                            if res.insert(path.to_path_buf()) {
-                                                if let Some(mut material) =
+                                            if res.insert(path.to_path_buf())
+                                                && let Some(mut material) =
                                                     Asset::read(path)?.into_material()
-                                                {
-                                                    material.canonicalize(&src_dir, parent(path));
-                                                    handle_material(&mut res, &material);
-                                                }
+                                            {
+                                                material.canonicalize(&src_dir, parent(path));
+                                                handle_material(&mut res, &material);
                                             }
                                         }
                                     }
