@@ -73,7 +73,7 @@ pub struct MeshAsset {
 
     scene_name: Option<String>,
     shadow: Option<bool>,
-    src: PathBuf,
+    src: Option<PathBuf>,
     tangents: Option<bool>,
 }
 
@@ -102,7 +102,7 @@ impl MeshAsset {
             scale: None,
             scene_name: None,
             shadow: None,
-            src: src.as_ref().to_path_buf(),
+            src: Some(src.as_ref().to_path_buf()),
             tangents: None,
         }
     }
@@ -114,6 +114,10 @@ impl MeshAsset {
         project_dir: impl AsRef<Path>,
         path: Option<impl AsRef<Path>>,
     ) -> anyhow::Result<MeshId> {
+        let Some(src) = self.src() else {
+            return Err(anyhow::Error::msg("unspecified mesh source"));
+        };
+
         // Early-out if we have already baked this mesh
         let asset = self.clone().into();
 
@@ -131,16 +135,13 @@ impl MeshAsset {
             info!("Baking mesh: {}", key);
         } else {
             // This mesh will only be accessible using the handle
-            info!(
-                "Baking mesh: {} (inline)",
-                file_key(&project_dir, self.src())
-            );
+            info!("Baking mesh: {} (inline)", file_key(&project_dir, src));
         }
 
         let mut mesh = self
-            .to_mesh()
+            .to_mesh(src)
             .map_err(|err| Error::new(ErrorKind::InvalidData, err))
-            .context("Creating mesh buffer")?;
+            .with_context(|| format!("Creating mesh buffer from {}", src.display()))?;
 
         // Bake the unstructured data blob too
         if let Some(data) = &self.data {
@@ -624,6 +625,11 @@ impl MeshAsset {
         }
     }
 
+    /// Sets the mesh file source.
+    pub fn set_src(&mut self, src: impl AsRef<Path>) {
+        self.src = Some(src.as_ref().to_path_buf());
+    }
+
     /// Scaling of the mesh.
     pub fn scale(&self) -> Vec3 {
         self.scale
@@ -642,8 +648,8 @@ impl MeshAsset {
     }
 
     /// The mesh file source.
-    pub fn src(&self) -> &Path {
-        self.src.as_path()
+    pub fn src(&self) -> Option<&Path> {
+        self.src.as_deref()
     }
 
     /// When `true` (the default) tangent values will be stored (or generated if needed).
@@ -651,24 +657,37 @@ impl MeshAsset {
         self.tangents.unwrap_or(true)
     }
 
-    fn to_mesh(&self) -> anyhow::Result<Mesh> {
+    fn to_mesh(&self, src: impl AsRef<Path>) -> anyhow::Result<Mesh> {
+        let src = src.as_ref();
+
         // Load the mesh nodes from this GLTF file
-        let (doc, bufs, _) = import(self.src())
-            .with_context(|| format!("Importing mesh {}", self.src().display()))?;
+        let (doc, bufs, _) =
+            import(src).with_context(|| format!("Importing mesh {}", src.display()))?;
         let scene = self
             .scene_name
             .as_deref()
             .and_then(|name| doc.scenes().find(|scene| scene.name() == Some(name)))
             .or_else(|| doc.default_scene())
             .or_else(|| doc.scenes().next())
-            .expect("No scene found");
-        let mut mesh_nodes = scene.nodes().filter(|node| node.mesh().is_some());
+            .ok_or(anyhow::Error::msg("No scene found"))?;
+        let all_nodes = {
+            let mut nodes = vec![];
+            let mut todo = scene.nodes().collect::<Vec<_>>();
+
+            while let Some(node) = todo.pop() {
+                todo.extend(node.children());
+                nodes.push(node);
+            }
+
+            nodes
+        };
+        let mut mesh_nodes = all_nodes.iter().filter(|node| node.mesh().is_some());
         let node = self
             .name
             .as_deref()
             .and_then(|name| mesh_nodes.find(|node| node.name() == Some(name)))
             .or_else(|| mesh_nodes.next())
-            .expect("No mesh found");
+            .ok_or(anyhow::Error::msg("No mesh found"))?;
         let allow_skin = !self.ignore_skin.unwrap_or_default();
         let mesh_transform =
             Mat4::from_scale_rotation_translation(Vec3::ONE, self.rotation(), self.offset());
@@ -676,9 +695,9 @@ impl MeshAsset {
         info!("Loading mesh {}", node.name().unwrap_or_default());
 
         let skin = allow_skin
-            .then(|| Self::read_skin(&node, &bufs, mesh_transform))
+            .then(|| Self::read_skin(node, &bufs, mesh_transform))
             .flatten();
-        let transform = mesh_transform * extract_transform(&node);
+        let transform = mesh_transform * extract_transform(node);
         let parts = node
             .mesh()
             .unwrap()
@@ -780,7 +799,7 @@ impl MeshAsset {
             } else if data.tangents.is_empty() {
                 warn!(
                     "Tangent data requested but not found: {} (will generate)",
-                    self.src().display()
+                    src.display()
                 );
 
                 if data.normals.is_empty() {
@@ -842,14 +861,15 @@ impl MeshAsset {
             re_run_if_changed(data);
         }
 
-        // Watch the GLTF file for changes, only if we're in a cargo build
-        let src = self.src();
-        re_run_if_changed(src);
+        if let Some(src) = &self.src {
+            // Watch the GLTF file for changes, only if we're in a cargo build
+            re_run_if_changed(src);
 
-        // Just in case there is a GLTF bin file; also watch it for changes
-        let mut src_bin = src.to_path_buf();
-        src_bin.set_extension("bin");
-        re_run_if_changed(src_bin);
+            // Just in case there is a GLTF bin file; also watch it for changes
+            let mut src_bin = src.to_path_buf();
+            src_bin.set_extension("bin");
+            re_run_if_changed(src_bin);
+        }
     }
 }
 
@@ -863,7 +883,9 @@ impl Canonicalize for MeshAsset {
             ));
         }
 
-        self.src = Self::canonicalize_project_path(project_dir, src_dir, &self.src);
+        if let Some(src) = &mut self.src {
+            self.src = Some(Self::canonicalize_project_path(project_dir, src_dir, src))
+        }
     }
 }
 

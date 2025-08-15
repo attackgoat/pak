@@ -26,7 +26,7 @@ use {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct AnimationAsset {
     name: Option<String>,
-    src: PathBuf,
+    src: Option<PathBuf>,
 
     // Tables must follow values
     exclude: Option<Vec<String>>,
@@ -41,6 +41,10 @@ impl AnimationAsset {
         project_dir: impl AsRef<Path>,
         path: impl AsRef<Path>,
     ) -> anyhow::Result<AnimationId> {
+        let Some(src) = self.src() else {
+            return Err(anyhow::Error::msg("unspecified animation source"));
+        };
+
         let asset = self.clone().into();
 
         if let Some(h) = writer.lock().ctx.get(&asset) {
@@ -51,7 +55,7 @@ impl AnimationAsset {
         info!("Baking animation: {}", &key);
 
         let name = self.name();
-        let (doc, bufs, _) = import(self.src()).unwrap();
+        let (doc, bufs, _) = import(src).unwrap();
 
         if log_enabled!(Debug) {
             for anim in doc.animations() {
@@ -191,16 +195,23 @@ impl AnimationAsset {
         self.name.as_deref()
     }
 
+    /// Sets the mesh file source.
+    pub fn set_src(&mut self, src: impl AsRef<Path>) {
+        self.src = Some(src.as_ref().to_path_buf());
+    }
+
     /// The animation file source.
     #[allow(unused)]
-    pub fn src(&self) -> &Path {
-        self.src.as_path()
+    pub fn src(&self) -> Option<&Path> {
+        self.src.as_deref()
     }
 }
 
 impl Canonicalize for AnimationAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
-        self.src = Self::canonicalize_project_path(project_dir, src_dir, &self.src);
+        if let Some(src) = self.src() {
+            self.src = Some(Self::canonicalize_project_path(project_dir, src_dir, src));
+        }
     }
 }
 

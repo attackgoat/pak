@@ -16,7 +16,7 @@ use {
     std::{
         fs::File,
         fs::read_to_string,
-        io::{Cursor, Error, Read},
+        io::{Cursor, Read},
         path::{Path, PathBuf},
         sync::Arc,
     },
@@ -26,14 +26,14 @@ use {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct BlobAsset {
     /// The file source.
-    src: PathBuf,
+    src: Option<PathBuf>,
 }
 
 impl BlobAsset {
     pub fn new(src: impl AsRef<Path>) -> Self {
         let src = src.as_ref().to_path_buf();
 
-        Self { src }
+        Self { src: Some(src) }
     }
 
     /// Reads and processes arbitrary binary source files into an existing `.pak` file buffer.
@@ -42,6 +42,10 @@ impl BlobAsset {
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
     ) -> anyhow::Result<BlobId> {
+        let Some(src) = self.src() else {
+            return Err(anyhow::Error::msg("unspecified bitmap source"));
+        };
+
         let asset = self.clone().into();
 
         // Early-out if we have already baked this blob
@@ -49,13 +53,13 @@ impl BlobAsset {
             return Ok(id.as_blob().unwrap());
         }
 
-        let key = file_key(&project_dir, &self.src);
+        let key = file_key(&project_dir, src);
 
         info!("Baking blob: {}", key);
 
-        re_run_if_changed(&self.src);
+        re_run_if_changed(src);
 
-        let mut file = File::open(&self.src).unwrap();
+        let mut file = File::open(src).unwrap();
         let mut value = vec![];
         file.read_to_end(&mut value).unwrap();
 
@@ -76,7 +80,11 @@ impl BlobAsset {
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
         path: impl AsRef<Path>,
-    ) -> Result<BitmapFontId, Error> {
+    ) -> anyhow::Result<BitmapFontId> {
+        let Some(src) = self.src() else {
+            return Err(anyhow::Error::msg("unspecified bitmap source"));
+        };
+
         let asset = self.clone().into();
 
         // Early-out if we have already baked this blob
@@ -88,11 +96,11 @@ impl BlobAsset {
 
         info!("Baking bitmap font: {}", key);
 
-        re_run_if_changed(&self.src);
+        re_run_if_changed(src);
 
         // Get the fs objects for this asset
-        let def_parent = self.src.parent().unwrap();
-        let def_file = read_to_string(&self.src).unwrap();
+        let def_parent = src.parent().unwrap();
+        let def_file = read_to_string(src).unwrap();
         let def = BMFont::new(Cursor::new(&def_file), OrdinateOrientation::TopToBottom).unwrap();
         let pages = def
             .pages()
@@ -160,13 +168,20 @@ impl BlobAsset {
         Ok(id)
     }
 
-    pub fn src(&self) -> &Path {
-        &self.src
+    /// Sets the blob file source.
+    pub fn set_src(&mut self, src: impl AsRef<Path>) {
+        self.src = Some(src.as_ref().to_path_buf());
+    }
+
+    pub fn src(&self) -> Option<&Path> {
+        self.src.as_deref()
     }
 }
 
 impl Canonicalize for BlobAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
-        self.src = Self::canonicalize_project_path(project_dir, src_dir, &self.src);
+        if let Some(src) = self.src() {
+            self.src = Some(Self::canonicalize_project_path(project_dir, src_dir, src));
+        }
     }
 }

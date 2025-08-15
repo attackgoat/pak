@@ -223,7 +223,9 @@ impl PakBuf {
     /// Includes the provided `src` parameter.
     pub fn source_files(src: impl AsRef<Path>) -> anyhow::Result<Box<[PathBuf]>> {
         fn handle_bitmap(res: &mut BTreeSet<PathBuf>, bitmap: &BitmapAsset) {
-            res.insert(bitmap.src().to_path_buf());
+            if let Some(src) = bitmap.src() {
+                res.insert(src.to_path_buf());
+            }
         }
 
         fn handle_material(res: &mut BTreeSet<PathBuf>, material: &MaterialAsset) {
@@ -269,7 +271,9 @@ impl PakBuf {
                 res.insert(data.to_path_buf());
             }
 
-            res.insert(mesh.src().to_path_buf());
+            if let Some(src) = mesh.src() {
+                res.insert(src.to_path_buf());
+            }
         }
 
         fn handle_scalar_ref(res: &mut BTreeSet<PathBuf>, scalar_ref: &ScalarRef) {
@@ -316,7 +320,10 @@ impl PakBuf {
                     match asset {
                         Asset::Animation(mut anim) => {
                             anim.canonicalize(&src_dir, &asset_parent);
-                            res.insert(anim.src().to_path_buf());
+
+                            if let Some(src) = anim.src() {
+                                res.insert(src.to_path_buf());
+                            }
                         }
                         Asset::Bitmap(mut bitmap) => {
                             bitmap.canonicalize(&src_dir, &asset_parent);
@@ -324,7 +331,10 @@ impl PakBuf {
                         }
                         Asset::BitmapFont(mut blob) => {
                             blob.canonicalize(&src_dir, &asset_parent);
-                            res.insert(blob.src().to_path_buf());
+
+                            if let Some(src) = blob.src() {
+                                res.insert(src.to_path_buf());
+                            }
                         }
                         Asset::Material(mut material) => {
                             material.canonicalize(&src_dir, &asset_parent);
@@ -428,6 +438,7 @@ impl PakBuf {
                         tasks.push(rt.spawn_blocking(move || {
                             MeshAsset::new(&asset_path)
                                 .bake(&writer, &src_dir, Some(&asset_path))
+                                .context(asset_path.as_os_str().to_string_lossy().into_owned())
                                 .unwrap();
                         }));
                     }
@@ -438,7 +449,8 @@ impl PakBuf {
                         let asset_path = asset_path.clone();
                         tasks.push(rt.spawn_blocking(move || {
                             BitmapAsset::new(&asset_path)
-                                .bake_from_path(&writer, src_dir, Some(asset_path))
+                                .bake_from_path(&writer, src_dir, Some(&asset_path))
+                                .context(asset_path.as_os_str().to_string_lossy().into_owned())
                                 .unwrap();
                         }));
                     }
@@ -454,7 +466,11 @@ impl PakBuf {
                                 let asset_parent = asset_parent.clone();
                                 tasks.push(rt.spawn_blocking(move || {
                                     anim.canonicalize(&src_dir, &asset_parent);
-                                    anim.bake(&writer, src_dir, asset_path).unwrap();
+                                    anim.bake(&writer, src_dir, &asset_path)
+                                        .context(
+                                            asset_path.as_os_str().to_string_lossy().into_owned(),
+                                        )
+                                        .unwrap();
                                 }));
                             }
                             Asset::Bitmap(mut bitmap) => {
@@ -465,7 +481,10 @@ impl PakBuf {
                                 tasks.push(rt.spawn_blocking(move || {
                                     bitmap.canonicalize(&src_dir, &asset_parent);
                                     bitmap
-                                        .bake_from_path(&writer, src_dir, Some(asset_path))
+                                        .bake_from_path(&writer, src_dir, Some(&asset_path))
+                                        .context(
+                                            asset_path.as_os_str().to_string_lossy().into_owned(),
+                                        )
                                         .unwrap();
                                 }));
                             }
@@ -476,7 +495,11 @@ impl PakBuf {
                                 let asset_parent = asset_parent.clone();
                                 tasks.push(rt.spawn_blocking(move || {
                                     blob.canonicalize(&src_dir, &asset_parent);
-                                    blob.bake_bitmap_font(&writer, src_dir, asset_path).unwrap();
+                                    blob.bake_bitmap_font(&writer, src_dir, &asset_path)
+                                        .context(
+                                            asset_path.as_os_str().to_string_lossy().into_owned(),
+                                        )
+                                        .unwrap();
                                 }));
                             }
                             Asset::Material(mut material) => {
@@ -493,7 +516,10 @@ impl PakBuf {
                                             &writer,
                                             src_dir,
                                             asset_parent,
-                                            Some(asset_path),
+                                            Some(&asset_path),
+                                        )
+                                        .context(
+                                            asset_path.as_os_str().to_string_lossy().into_owned(),
                                         )
                                         .unwrap();
                                 }));
@@ -505,7 +531,11 @@ impl PakBuf {
                                 let asset_parent = asset_parent.clone();
                                 tasks.push(rt.spawn_blocking(move || {
                                     mesh.canonicalize(&src_dir, &asset_parent);
-                                    mesh.bake(&writer, &src_dir, Some(&asset_path)).unwrap();
+                                    mesh.bake(&writer, &src_dir, Some(&asset_path))
+                                        .context(
+                                            asset_path.as_os_str().to_string_lossy().into_owned(),
+                                        )
+                                        .unwrap();
                                 }));
                             }
                             Asset::Scene(mut scene) => {
@@ -516,7 +546,12 @@ impl PakBuf {
                                 let rt2 = rt.clone();
                                 tasks.push(rt.spawn_blocking(move || {
                                     scene.canonicalize(&src_dir, &asset_parent);
-                                    scene.bake(&rt2, &writer, &src_dir, &asset_path).unwrap();
+                                    scene
+                                        .bake(&rt2, &writer, &src_dir, &asset_path)
+                                        .context(
+                                            asset_path.as_os_str().to_string_lossy().into_owned(),
+                                        )
+                                        .unwrap();
                                 }));
                             }
                             _ => unimplemented!(),
@@ -527,8 +562,10 @@ impl PakBuf {
                         let src_dir = src_dir.clone();
                         let asset_path = asset_path.clone();
                         tasks.push(rt.spawn_blocking(move || {
-                            let blob = BlobAsset::new(asset_path);
-                            blob.bake(&writer, &src_dir).unwrap();
+                            let blob = BlobAsset::new(&asset_path);
+                            blob.bake(&writer, &src_dir)
+                                .context(asset_path.as_os_str().to_string_lossy().into_owned())
+                                .unwrap();
                         }));
                     }
                 }

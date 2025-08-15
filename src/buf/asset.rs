@@ -12,7 +12,7 @@ use {
     ordered_float::OrderedFloat,
     serde::Deserialize,
     std::{
-        fs::read_to_string,
+        fs::{exists, read_to_string},
         io::{Error, ErrorKind},
         path::Path,
     },
@@ -53,20 +53,70 @@ impl Asset {
     pub fn read(filename: impl AsRef<Path>) -> anyhow::Result<Self> {
         let str = read_to_string(&filename).context("Reading asset file as a string")?;
         let val: Schema = toml::from_str(&str).context("Parsing asset toml")?;
-        let res = if let Some(val) = val.anim {
-            Self::Animation(val)
-        } else if let Some(val) = val.bitmap {
-            Self::Bitmap(val)
-        } else if let Some(val) = val.bitmap_font {
-            Self::BitmapFont(val)
-        } else if let Some(val) = val.content {
-            Self::Content(val)
-        } else if let Some(val) = val.material {
-            Self::Material(val)
-        } else if let Some(val) = val.mesh {
-            Self::Mesh(val)
-        } else if let Some(val) = val.scene {
-            Self::Scene(val)
+        let res = if let Some(mut anim) = val.anim {
+            // If the source was not set, infer it from the toml filename
+            if anim.src().is_none() {
+                for ext in ["glb", "gltf"] {
+                    let src = filename.as_ref().with_extension(ext);
+                    if let Ok(true) = exists(&src) {
+                        // Source is just the filename; it is relative to the toml being read
+                        anim.set_src(src.file_name().unwrap_or_default());
+                        break;
+                    }
+                }
+            }
+
+            Self::Animation(anim)
+        } else if let Some(mut bitmap) = val.bitmap {
+            // If the source was not set, infer it from the toml filename
+            if bitmap.src().is_none() {
+                for ext in [
+                    "jpg", "jpeg", "png", "bmp", "tga", "dds", "webp", "gif", "ico", "tiff",
+                ] {
+                    let src = filename.as_ref().with_extension(ext);
+                    if let Ok(true) = exists(&src) {
+                        // Source is just the filename; it is relative to the toml being read
+                        bitmap.set_src(src.file_name().unwrap_or_default());
+                        break;
+                    }
+                }
+            }
+
+            Self::Bitmap(bitmap)
+        } else if let Some(mut blob) = val.bitmap_font {
+            // If the source was not set, infer it from the toml filename
+            if blob.src().is_none() {
+                for ext in ["fon", "fnt"] {
+                    let src = filename.as_ref().with_extension(ext);
+                    if let Ok(true) = exists(&src) {
+                        // Source is just the filename; it is relative to the toml being read
+                        blob.set_src(src.file_name().unwrap_or_default());
+                        break;
+                    }
+                }
+            }
+
+            Self::BitmapFont(blob)
+        } else if let Some(content) = val.content {
+            Self::Content(content)
+        } else if let Some(material) = val.material {
+            Self::Material(material)
+        } else if let Some(mut mesh) = val.mesh {
+            // If the source was not set, infer it from the toml filename
+            if mesh.src().is_none() {
+                for ext in ["glb", "gltf"] {
+                    let src = filename.as_ref().with_extension(ext);
+                    if let Ok(true) = exists(&src) {
+                        // Source is just the filename; it is relative to the toml being read
+                        mesh.set_src(src.file_name().unwrap_or_default());
+                        break;
+                    }
+                }
+            }
+
+            Self::Mesh(mesh)
+        } else if let Some(scene) = val.scene {
+            Self::Scene(scene)
         } else {
             bail!(Error::from(ErrorKind::InvalidData));
         };

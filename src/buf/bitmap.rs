@@ -75,7 +75,7 @@ pub struct BitmapAsset {
     mip_levels: u32,
 
     resize: Option<u32>,
-    src: PathBuf,
+    src: Option<PathBuf>,
 
     /// Controls the number and order of the channels output into the final image
     #[serde(default, deserialize_with = "BitmapSwizzle::de")]
@@ -84,15 +84,12 @@ pub struct BitmapAsset {
 
 impl BitmapAsset {
     /// Constructs a new Bitmap with the given image file source.
-    pub fn new<P>(src: P) -> Self
-    where
-        P: AsRef<Path>,
-    {
+    pub fn new(src: impl AsRef<Path>) -> Self {
         Self {
             color: None,
             mip_levels: 1,
             resize: None,
-            src: src.as_ref().to_path_buf(),
+            src: Some(src.as_ref().to_path_buf()),
             swizzle: None,
         }
     }
@@ -131,6 +128,10 @@ impl BitmapAsset {
         project_dir: impl AsRef<Path>,
         path: Option<impl AsRef<Path>>,
     ) -> anyhow::Result<BitmapId> {
+        let Some(src) = self.src() else {
+            return Err(anyhow::Error::msg("unspecified bitmap source"));
+        };
+
         // Early-out if we have already baked this bitmap
         let asset = self.clone().into();
         if let Some(id) = writer.lock().ctx.get(&asset) {
@@ -143,10 +144,7 @@ impl BitmapAsset {
             info!("Baking bitmap: {}", key);
         } else {
             // This bitmap will only be accessible using the id
-            info!(
-                "Baking bitmap: {} (inline)",
-                file_key(&project_dir, self.src())
-            );
+            info!("Baking bitmap: {} (inline)", file_key(&project_dir, src));
         }
 
         let bitmap = self
@@ -165,8 +163,12 @@ impl BitmapAsset {
     }
 
     pub fn as_bitmap_buf(&self) -> anyhow::Result<Bitmap> {
-        let (format, width, pixels) = Self::read_pixels(self.src(), self.swizzle, self.resize)
-            .context("Unable to read pixels")?;
+        let Some(src) = self.src() else {
+            return Err(anyhow::Error::msg("unspecified bitmap source"));
+        };
+
+        let (format, width, pixels) =
+            Self::read_pixels(src, self.swizzle, self.resize).context("Unable to read pixels")?;
 
         let row_length = format.byte_len() * width as usize;
 
@@ -351,15 +353,22 @@ impl BitmapAsset {
         buf
     }
 
+    /// Sets the mesh file source.
+    pub fn set_src(&mut self, src: impl AsRef<Path>) {
+        self.src = Some(src.as_ref().to_path_buf());
+    }
+
     /// The image file source.
-    pub fn src(&self) -> &Path {
-        self.src.as_path()
+    pub fn src(&self) -> Option<&Path> {
+        self.src.as_deref()
     }
 }
 
 impl Canonicalize for BitmapAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
-        self.src = Self::canonicalize_project_path(project_dir, src_dir, &self.src);
+        if let Some(src) = self.src() {
+            self.src = Some(Self::canonicalize_project_path(project_dir, src_dir, src));
+        }
     }
 }
 

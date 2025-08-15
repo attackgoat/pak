@@ -3,6 +3,11 @@
 [![Crates.io](https://img.shields.io/crates/v/pak.svg)](https://crates.io/crates/pak)
 [![Docs.rs](https://docs.rs/pak/badge.svg)](https://docs.rs/pak)
 
+Bundles many assets into a single file with compression, string tables, and other game-related
+special handling functions.
+
+A `.pak` file is baked at build time and streamed in at runtime.
+
 ## `.pak` Configuration File
 
 Each asset package is "baked" from a configuration source file. _Example:_
@@ -13,7 +18,7 @@ _Rust code_
 PakBuf::bake("game_art.toml", "game_art.pak")?;
 ```
 
-_`game_art.toml`_
+_`game_art.toml`:_
 
 ```toml
 [content]
@@ -52,13 +57,21 @@ _Example:_
 src = 'some_file.gltf'
 ```
 
-_`[animation] Schema`_
+_Or to simply load `some_file.gltf` using `some_file.toml`:_
+
+```toml
+[animation]
+```
+
+### _`[animation]` Schema_
+
+All fields are optional.
 
 Item | Description
 ---- | -----------
-`src` | File path to the `.gltf` or `.glb` animation file. May be relative to the `[animation]` TOML file or absolute where the root is the same folder as the `[content]` TOML file.
-`name` | (_Optional_) Specific animation name (for use with files containing more than one animation).
-`exclude` | (_Optional_) Array of animation channel names to exclude from the import.
+`src` | File path to a `.gltf` or `.glb` animation. May be relative to the `[animation]` TOML file or absolute where the root is the same folder as the `[content]` TOML file. When unspecified, attempts to load an animation with the same name as the `[animation]` TOML file.
+`name` | Specific animation name (for use with files containing more than one animation).
+`exclude` | Array of animation channel names to exclude from the import.
 
 ## 3D Meshes
 
@@ -71,30 +84,32 @@ _Example:_
 src = 'some_file.gltf'
 ```
 
-_`[mesh]` Schema_
+### _`[mesh]` Schema_
+
+All fields are optional.
 
 Item | Description
 ---- | -----------
-`src` | File path to the `.gltf` or `.glb` mesh file. May be relative to the `[mesh]` TOML file or absolute where the root is the same folder as the `[content]` TOML file.
-`euler` | (_Optional, `string`_) Order of operations applied to 3-channel `rotation` values (example: `xyz`, `zyx`, _etc_).
-`flip-x` | (_Optional, `boolean`_) When set, flips the X component of all position vertices.
-`flip-y` | (_Optional, `boolean`_) When set, flips the Y component of all position vertices.
-`flip-z` | (_Optional, `boolean`_) When set, flips the Z component of all position vertices.
-`ignore-skin` | (_Optional, `boolean`_) When set, any embedded boke structure data is ignored.
-`lod` | (_Optional, `boolean`_) When set, generates level of detail meshes using MeshOpt.
-`lod-lock-border` | (_Optional, `boolean`_) When set, tells MeshOpt to generate level of detail meshes using only interior vertices.
-`lod-target-error` | (_Optional, `float`_) When set, tells MeshOpt to attempt to hit a certain error threshold between level of detail meshes.
-`min-lod-triangles` | (_Optional, `unsigned integer`_) When set, tells MeshOpt to stop generating level of detail meshes below this threshold.
-`name` | (_Optional, `string`_) When set, imports this named mesh. Otherwise, imports the first mesh.
-`normals` | (_Optional, `boolean`_) When set (default `true`), imports geometry normals.
-`offset` | (_Optional, array of `float` with a length of 3_) When set, offsets geometry positions by the given amount.
-`optimize` | (_Optional, `boolean`_) When set (default `true`), reorders geometry indices and vertices using MeshOpt.
-`overdraw-threshold` | (_Optional, `float`_) When set (default `1.05`), controls MeshOpt optimization.
-`rotation` | (_Optional, array of `float` with a length of 3 or 4_) When set, the vector (XYZ) or quaternion (XYZW) rotation applied to geometry.
-`scale` | (_Optional, array of `float` with a length of 3_) When set, the vector (XYZ) scale applied to geometry.
-`scene-name` | (_Optional, `string`_) When set, controls which GLTF scene is imported from the source file.
-`shadow` | (_Optional, `boolean`_) When set, imports position-only geometry optimized for use in shadow or other similiar rendering techniques.
-`tangents` | (_Optional, `boolean`_) When set (default `true`), imports geometry tangents. If missing, tangents are generated using the MikkTSpace algorithm
+`src` | File path to a `.gltf` or `.glb` mesh. May be relative to the `[mesh]` TOML file or absolute where the root is the same folder as the `[content]` TOML file. When unspecified, attempts to load a mesh with the same name as the `[mesh]` TOML file.
+`euler` | (_`string`_) Order of operations applied to 3-channel `rotation` values (example: `xyz`, `zyx`, _etc_).
+`flip-x` | (_`boolean`_) When set, flips the X component of all position vertices.
+`flip-y` | (_`boolean`_) When set, flips the Y component of all position vertices.
+`flip-z` | (_`boolean`_) When set, flips the Z component of all position vertices.
+`ignore-skin` | (_`boolean`_) When set, any embedded boke structure data is ignored.
+`lod` | (_`boolean`_) When set, generates level of detail meshes using MeshOpt.
+`lod-lock-border` | (_`boolean`_) When set, tells MeshOpt to generate level of detail meshes using only interior vertices.
+`lod-target-error` | (_`float`_) When set, tells MeshOpt to attempt to hit a certain error threshold between level of detail meshes.
+`min-lod-triangles` | (_`unsigned integer`_) When set, tells MeshOpt to stop generating level of detail meshes below this threshold.
+`name` | (_`string`_) When set, imports this named mesh. Otherwise, imports the first mesh.
+`normals` | (_`boolean`_) When set (default `true`), imports geometry normals.
+`offset` | (_array of `float` with a length of 3_) When set, offsets geometry positions by the given amount.
+`optimize` | (_`boolean`_) When set (default `true`), reorders geometry indices and vertices using MeshOpt.
+`overdraw-threshold` | (_`float`_) When set (default `1.05`), controls MeshOpt optimization.
+`rotation` | (_array of `float` with a length of 3 or 4_) When set, the vector (XYZ) or quaternion (XYZW) rotation applied to geometry.
+`scale` | (_array of `float` with a length of 3_) When set, the vector (XYZ) scale applied to geometry.
+`scene-name` | (_`string`_) When set, controls which GLTF scene is imported from the source file.
+`shadow` | (_`boolean`_) When set, imports position-only geometry optimized for use in shadow or other similiar rendering techniques.
+`tangents` | (_`boolean`_) When set (default `true`), imports geometry tangents. If missing, tangents are generated using the MikkTSpace algorithm
 
 ## PBR Materials
 
@@ -107,7 +122,7 @@ _Example:_
 color = 'my-texture.png'
 ```
 
-_`[material]` Schema_
+### _`[material]` Schema_
 
 Item | Description
 ---- | -----------
@@ -130,15 +145,17 @@ _Example:_
 src = 'my-texture.png'
 ```
 
-_`[bitmap]` Schema_
+### _`[bitmap]` Schema_
+
+All fields are optional.
 
 Item | Description
 ---- | -----------
-`src` | File path to an image file. May be relative to the `[bitmap]` TOML file or absolute where the root is the same folder as the `[content]` TOML file.
-`mip-levels` | (_Optional, `boolean` or `non-zero unsigned integer`_) When set (default `1`), allows configuration of the desired count of mip levels to be stored with a bitmap for later use by a program.
-`resize` | (_Optional, `unsigned integer`_) When set, the image is uniformally resized to have this maximum dimension.
-`color` | (_Optional, `string`_) When set (default `srgb`), the image is imported as either `linear` or `srgb` color data.
-`swizzle` | (_Optional, `string`_) When set (default `rgba` for four channel images), the specified image color channels are imported in the given order (example: `r`, `rg` or `bgr`).
+`src` | File path to an image. May be relative to the `[bitmap]` TOML file or absolute where the root is the same folder as the `[content]` TOML file. When unspecified, attempts to load a bitmap with the same name as the `[bitmap]` TOML file.
+`mip-levels` | (_`boolean` or `non-zero unsigned integer`_) When set (default `1`), allows configuration of the desired count of mip levels to be stored with a bitmap for later use by a program.
+`resize` | (_`unsigned integer`_) When set, the image is uniformally resized to have this maximum dimension.
+`color` | (_`string`_) When set (default `srgb`), the image is imported as either `linear` or `srgb` color data.
+`swizzle` | (_`string`_) When set (default `rgba` for four channel images), the specified image color channels are imported in the given order (example: `r`, `rg` or `bgr`).
 
 ### Bitmap Fonts
 
@@ -152,6 +169,14 @@ src = 'blocky-letters.fon'
 ```
 
 The specified file is imported as a raw AngelCode bitmap font file, and any associated page images are loaded as bitmaps.
+
+### _`[bitmap-font]` Schema_
+
+All fields are optional.
+
+Item | Description
+---- | -----------
+`src` | File path to a bitmap font definition. May be relative to the `[bitmap-font]` TOML file or absolute where the root is the same folder as the `[content]` TOML file. When unspecified, attempts to load a bitmap font definition with the same name as the `[bitmap-font]` TOML file.
 
 ## Scenes
 
