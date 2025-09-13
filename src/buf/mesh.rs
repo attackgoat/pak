@@ -114,9 +114,9 @@ impl MeshAsset {
         project_dir: impl AsRef<Path>,
         path: Option<impl AsRef<Path>>,
     ) -> anyhow::Result<MeshId> {
-        let Some(src) = self.src() else {
-            return Err(anyhow::Error::msg("unspecified mesh source"));
-        };
+        let src = self
+            .src()
+            .ok_or(anyhow::Error::msg("unspecified mesh source"))?;
 
         // Early-out if we have already baked this mesh
         let asset = self.clone().into();
@@ -141,7 +141,7 @@ impl MeshAsset {
         let mut mesh = self
             .to_mesh(src)
             .map_err(|err| Error::new(ErrorKind::InvalidData, err))
-            .with_context(|| format!("Creating mesh buffer from {}", src.display()))?;
+            .context("Baking mesh data")?;
 
         // Bake the unstructured data blob too
         if let Some(data) = &self.data {
@@ -661,8 +661,7 @@ impl MeshAsset {
         let src = src.as_ref();
 
         // Load the mesh nodes from this GLTF file
-        let (doc, bufs, _) =
-            import(src).with_context(|| format!("Importing mesh {}", src.display()))?;
+        let (doc, bufs, _) = import(src).context("Importing mesh source")?;
         let scene = self
             .scene_name
             .as_deref()

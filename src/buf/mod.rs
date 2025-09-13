@@ -230,8 +230,8 @@ impl PakBuf {
 
         fn handle_material(res: &mut BTreeSet<PathBuf>, material: &MaterialAsset) {
             match &material.color {
-                ColorRef::Asset(bitmap) => handle_bitmap(res, bitmap),
-                ColorRef::Path(path) => {
+                Some(ColorRef::Asset(bitmap)) => handle_bitmap(res, bitmap),
+                Some(ColorRef::Path(path)) => {
                     res.insert(path.to_path_buf());
                 }
                 _ => (),

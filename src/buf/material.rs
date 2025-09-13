@@ -63,14 +63,14 @@ impl ColorRef {
     ///
     /// src of a `Bitmap` asset:
     /// .. = { src = "file.png", format = "rgb" }
-    fn de<'de, D>(deserializer: D) -> Result<Self, D::Error>
+    fn de<'de, D>(deserializer: D) -> Result<Option<Self>, D::Error>
     where
         D: Deserializer<'de>,
     {
         struct ColorRefVisitor;
 
         impl<'de> Visitor<'de> for ColorRefVisitor {
-            type Value = ColorRef;
+            type Value = Option<ColorRef>;
 
             fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
                 formatter.write_str("hex string, path string, bitmap asset, or seqeunce")
@@ -82,7 +82,7 @@ impl ColorRef {
             {
                 let asset = Deserialize::deserialize(MapAccessDeserializer::new(map))?;
 
-                Ok(ColorRef::Asset(asset))
+                Ok(Some(ColorRef::Asset(asset)))
             }
 
             fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
@@ -103,12 +103,12 @@ impl ColorRef {
                     _ => panic!("Unexpected color length"),
                 }
 
-                Ok(ColorRef::Value([
+                Ok(Some(ColorRef::Value([
                     OrderedFloat(val[0]),
                     OrderedFloat(val[1]),
                     OrderedFloat(val[2]),
                     OrderedFloat(val[3]),
-                ]))
+                ])))
             }
 
             fn visit_str<E>(self, str: &str) -> Result<Self::Value, E>
@@ -118,15 +118,15 @@ impl ColorRef {
                 if str.starts_with('#')
                     && let Some(val) = parse_hex_color(str)
                 {
-                    return Ok(ColorRef::Value([
+                    return Ok(Some(ColorRef::Value([
                         OrderedFloat(val[0] as f32 / u8::MAX as f32),
                         OrderedFloat(val[1] as f32 / u8::MAX as f32),
                         OrderedFloat(val[2] as f32 / u8::MAX as f32),
                         OrderedFloat(val[3] as f32 / u8::MAX as f32),
-                    ]));
+                    ])));
                 }
 
-                Ok(ColorRef::Path(PathBuf::from(str)))
+                Ok(Some(ColorRef::Path(PathBuf::from(str))))
             }
         }
 
@@ -269,13 +269,13 @@ impl Default for EmissiveRef {
 }
 
 /// Holds a description of data used for mesh rendering.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct MaterialAsset {
     /// A `Bitmap` asset, `Bitmap` asset file, three or four channel image source file, or single
     /// four channel color.
     #[serde(deserialize_with = "ColorRef::de")]
-    pub color: ColorRef,
+    pub color: Option<ColorRef>,
 
     #[serde(deserialize_with = "ScalarRef::de")]
     pub displacement: Option<ScalarRef>,
@@ -313,7 +313,7 @@ impl MaterialAsset {
         P: AsRef<Path>,
     {
         Self {
-            color: ColorRef::Path(src.as_ref().to_owned()),
+            color: Some(ColorRef::Path(src.as_ref().to_owned())),
             ..Default::default()
         }
     }
@@ -365,7 +365,7 @@ impl MaterialAsset {
         src_dir: impl AsRef<Path>,
     ) -> anyhow::Result<MaterialInfo> {
         let color = match &self.color {
-            ColorRef::Asset(bitmap) => {
+            Some(ColorRef::Asset(bitmap)) => {
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
                 let mut bitmap = bitmap.clone();
@@ -377,7 +377,7 @@ impl MaterialAsset {
                         .unwrap()
                 })
             }
-            ColorRef::Path(src) => {
+            Some(ColorRef::Path(src)) => {
                 let mut bitmap = if is_toml(src) {
                     let mut bitmap = Asset::read(src)
                         .context("Unable to read color bitmap asset")?
@@ -398,7 +398,7 @@ impl MaterialAsset {
                         .unwrap()
                 })
             }
-            &ColorRef::Value(val) => {
+            &Some(ColorRef::Value(val)) => {
                 let writer = writer.clone();
 
                 rt.spawn_blocking(move || {
@@ -416,6 +416,37 @@ impl MaterialAsset {
                                 (val[1].0 * u8::MAX as f32) as u8,
                                 (val[2].0 * u8::MAX as f32) as u8,
                                 (val[3].0 * u8::MAX as f32) as u8,
+                            ],
+                        );
+                        writer.push_bitmap(bitmap, None)
+                    }
+                })
+            }
+            None => {
+                let writer = writer.clone();
+
+                rt.spawn_blocking(move || {
+                    let potters_clay = parse_hex_color("#8C5738").unwrap();
+                    let potters_clay = [
+                        OrderedFloat(potters_clay[0] as f32 / u8::MAX as f32),
+                        OrderedFloat(potters_clay[1] as f32 / u8::MAX as f32),
+                        OrderedFloat(potters_clay[2] as f32 / u8::MAX as f32),
+                        OrderedFloat(1.0),
+                    ];
+                    let mut writer = writer.lock();
+                    if let Some(id) = writer.ctx.get(&Asset::ColorRgba(potters_clay)) {
+                        id.as_bitmap().unwrap()
+                    } else {
+                        let bitmap = Bitmap::new(
+                            BitmapColor::Linear,
+                            BitmapFormat::Rgb,
+                            1,
+                            1,
+                            [
+                                (potters_clay[0].0 * u8::MAX as f32) as u8,
+                                (potters_clay[1].0 * u8::MAX as f32) as u8,
+                                (potters_clay[2].0 * u8::MAX as f32) as u8,
+                                (potters_clay[3].0 * u8::MAX as f32) as u8,
                             ],
                         );
                         writer.push_bitmap(bitmap, None)
@@ -725,7 +756,9 @@ impl MaterialAsset {
 
 impl Canonicalize for MaterialAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
-        self.color.canonicalize(&project_dir, &src_dir);
+        if let Some(color) = self.color.as_mut() {
+            color.canonicalize(&project_dir, &src_dir);
+        }
 
         if let Some(displacement) = self.displacement.as_mut() {
             displacement.canonicalize(&project_dir, &src_dir);
@@ -745,20 +778,6 @@ impl Canonicalize for MaterialAsset {
 
         if let Some(rough) = self.rough.as_mut() {
             rough.canonicalize(&project_dir, &src_dir);
-        }
-    }
-}
-
-impl Default for MaterialAsset {
-    fn default() -> Self {
-        Self {
-            color: ColorRef::WHITE,
-            displacement: None,
-            double_sided: None,
-            emissive: None,
-            metal: None,
-            normal: None,
-            rough: None,
         }
     }
 }

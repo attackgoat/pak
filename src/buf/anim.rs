@@ -4,6 +4,7 @@ use {
         AnimationId,
         anim::{Animation, Channel, Outputs},
     },
+    anyhow::Context as _,
     gltf::{
         animation::{
             Interpolation as GltfInterpolation,
@@ -41,9 +42,9 @@ impl AnimationAsset {
         project_dir: impl AsRef<Path>,
         path: impl AsRef<Path>,
     ) -> anyhow::Result<AnimationId> {
-        let Some(src) = self.src() else {
-            return Err(anyhow::Error::msg("unspecified animation source"));
-        };
+        let src = self
+            .src()
+            .ok_or(anyhow::Error::msg("unspecified animation source"))?;
 
         let asset = self.clone().into();
 
@@ -55,7 +56,7 @@ impl AnimationAsset {
         info!("Baking animation: {}", &key);
 
         let name = self.name();
-        let (doc, bufs, _) = import(src).unwrap();
+        let (doc, bufs, _) = import(src).context("Importing animation source")?;
 
         if log_enabled!(Debug) {
             for anim in doc.animations() {
@@ -68,7 +69,7 @@ impl AnimationAsset {
             anim = doc.animations().next();
         }
 
-        let anim = anim.unwrap();
+        let anim = anim.ok_or(anyhow::Error::msg("no animation found"))?;
         let exclude = self
             .exclude()
             .unwrap_or_default()
