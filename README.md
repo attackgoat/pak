@@ -115,6 +115,8 @@ Item | Description
 
 Material data for use in rendering.
 
+All fields are optional.
+
 _Example:_
 
 ```toml
@@ -127,12 +129,12 @@ color = 'my-texture.png'
 Item | Description
 ---- | -----------
 `color` | Hex string, path string, inline bitmap asset, or seqeunce.
-`displacement` | (_Optional_) Hex string, path string, inline bitmap asset, or floating point value.
-`double-sided` | (_Optional, `boolean`_) When set, indicates the material is double-sided.
-`emissive` | (_Optional_) Hex string, path string, inline bitmap asset, or array of three floating point values.
-`metal` | (_Optional_) Hex string, path string, inline bitmap asset, or floating point value.
-`normal` | (_Optional_) Path string or inline bitmap asset.
-`rough` | (_Optional_) Hex string, path string, inline bitmap asset, or floating point value.
+`displacement` | Hex string, path string, inline bitmap asset, or floating point value.
+`double-sided` | (`boolean`_) When set, indicates the material is double-sided.
+`emissive` | Hex string, path string, inline bitmap asset, or array of three floating point values.
+`metal` | Hex string, path string, inline bitmap asset, or floating point value.
+`normal` | Path string or inline bitmap asset.
+`rough` | Hex string, path string, inline bitmap asset, or floating point value.
 
 ## Bitmaps
 

@@ -661,7 +661,8 @@ impl MeshAsset {
         let src = src.as_ref();
 
         // Load the mesh nodes from this GLTF file
-        let (doc, bufs, _) = import(src).context("Importing mesh source")?;
+        let (doc, bufs, _) =
+            import(src).with_context(|| format!("Importing mesh source: {}", src.display()))?;
         let scene = self
             .scene_name
             .as_deref()
