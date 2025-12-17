@@ -33,7 +33,7 @@ use {
         de::{SeqAccess, Visitor, value::SeqAccessDeserializer},
     },
     std::{
-        collections::BTreeSet,
+        collections::{BTreeSet, HashSet},
         env::var,
         fmt::{Debug, Formatter},
         fs::create_dir_all,
@@ -296,15 +296,25 @@ impl PakBuf {
 
         res.insert(src.as_ref().to_path_buf());
 
-        for asset_glob in content
-            .groups()
-            .filter(|group| group.enabled())
-            .flat_map(|group| group.asset_globs())
-        {
+        let enabled_groups = || content.groups().filter(|group| group.enabled());
+
+        let mut excluded_assets = HashSet::new();
+        for pattern in enabled_groups().flat_map(|group| group.exclude_globs()) {
+            for path in glob(src_dir.join(pattern).to_string_lossy().as_ref())? {
+                let path = path?;
+
+                excluded_assets.insert(path);
+            }
+        }
+
+        for asset_glob in enabled_groups().flat_map(|group| group.asset_globs()) {
             let asset_paths = glob(src_dir.join(asset_glob).to_string_lossy().as_ref())
                 .context("Unable to glob source directory")?;
             for asset_path in asset_paths {
                 let asset_path = asset_path?;
+                if excluded_assets.contains(&asset_path) {
+                    continue;
+                }
 
                 if asset_path
                     .extension()
@@ -407,16 +417,26 @@ impl PakBuf {
             .into_content()
             .context("Unable to read asset file")?;
 
+        let enabled_groups = || content.groups().filter(|group| group.enabled());
+
+        let mut excluded_assets = HashSet::new();
+        for pattern in enabled_groups().flat_map(|group| group.exclude_globs()) {
+            for path in glob(src_dir.join(pattern).to_string_lossy().as_ref())? {
+                let path = path?;
+
+                excluded_assets.insert(path);
+            }
+        }
+
         // Process each file we find as a separate runtime task
-        for asset_glob in content
-            .groups()
-            .filter(|group| group.enabled())
-            .flat_map(|group| group.asset_globs())
-        {
+        for asset_glob in enabled_groups().flat_map(|group| group.asset_globs()) {
             let asset_paths = glob(src_dir.join(asset_glob).to_string_lossy().as_ref())
                 .context("Unable to glob source directory")?;
             for asset_path in asset_paths {
                 let asset_path = asset_path.context("Unable to get asset path")?;
+                if excluded_assets.contains(&asset_path) {
+                    continue;
+                }
 
                 info!("processing {}", asset_path.display());
 

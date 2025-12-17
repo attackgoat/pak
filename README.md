@@ -6,17 +6,15 @@
 Bundles many assets into a single file with compression, string tables, and other game-related
 special handling functions.
 
-A `.pak` file is baked at build time and streamed in at runtime.
-
-## `.pak` Configuration File
-
-Each asset package is "baked" from a configuration source file. _Example:_
+A `.pak` file is written at build time and streamed in at runtime. Each asset package is "baked" from a configuration source file. _Example:_
 
 _Rust code_
 
 ```rust
 PakBuf::bake("game_art.toml", "game_art.pak")?;
 ```
+
+## Main `.pak` Configuration File
 
 _`game_art.toml`:_
 
@@ -35,22 +33,34 @@ assets = [
 ]
 ```
 
+### _`[content]` Schema_
+
+All fields are optional.
+
+Item | Description
+---- | -----------
+compression | `'snap'` or `'brotli'` or unspecified (_no compression_)
+
+### _`[content.group]` Schema_
+
+All fields are optional.
+
 _Note:_
 
 Additional `[[content.group]]` tables may be appended. All groups are added to the package and these
 individual groups are not distinct entities in the runtime file.
 
-_`[content]` Schema_
-
 Item | Description
 ---- | -----------
-compression | (_Optional_) `'snap'` or `'brotli'`
+assets | (_`string array`_) File paths or glob patterns of assets to bake. Assets may be native file types (_such as `.png` and `.glb`_) or asset (_`.toml`_) files as detailed in the following sections.
+exlcude | (_`string array`_) File paths or glob patterns to exclude from the baking process when considering `assets`.
+enabled | (_`boolean`_) Global flag which may be used to prevent baking of this group.
 
 ## 3D Animations
 
 Bone structures and per-channel frame sample data may be loaded from `.gltf` or `.glb` files.
 
-_Example:_
+_Example, `cool-walk.toml`:_
 
 ```toml
 [animation]
@@ -77,7 +87,7 @@ Item | Description
 
 Geometry may be loaded from `.gltf` or `.glb` files.
 
-_Example:_
+_Example, `large-goblet.toml`:_
 
 ```toml
 [mesh]
@@ -117,7 +127,7 @@ Material data for use in rendering.
 
 All fields are optional.
 
-_Example:_
+_Example, `glowing-lava.toml`:_
 
 ```toml
 [material]
@@ -140,7 +150,7 @@ Item | Description
 
 Variable-channel bitap data (stored raw and compressed using the setting of the `[content]` compression).
 
-_Example:_
+_Example, `ui-skin-001.toml`:_
 
 ```toml
 [bitmap]
@@ -163,7 +173,7 @@ Item | Description
 
 Special handling is given to `[bitmap-font]` asset files.
 
-_Example:_
+_Example, `font-h4.toml`:_
 
 ```toml
 [bitmap-font]
@@ -184,7 +194,7 @@ Item | Description
 
 Scene files may contain custom geometry and spatial reference data, each with the ability to store generic data as well.
 
-_Example:_
+_Example, `large-castle.toml`:_
 
 ```toml
 [scene]

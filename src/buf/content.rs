@@ -60,11 +60,19 @@ pub enum CompressionType {
 /// Holds a description of asset files.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Group {
+    #[serde(default)]
     assets: Vec<String>,
-    enabled: Option<bool>,
+
+    #[serde(default = "Group::default_enabled")]
+    enabled: bool,
+
+    #[serde(default)]
+    exclude: Vec<String>,
 }
 
 impl Group {
+    const DEFAULT_ENABLED: bool = true;
+
     /// Individual asset file specification globs.
     ///
     /// May be a filename, might be folder/**/other.jpeg
@@ -73,12 +81,24 @@ impl Group {
         self.assets.iter()
     }
 
+    const fn default_enabled() -> bool {
+        Self::DEFAULT_ENABLED
+    }
+
     /// Allows a group to be selectively removed with a single flag, as opposed to physically
     /// removing a group from the content file.
     ///
     /// This is useful for debugging.
     #[allow(unused)]
     pub fn enabled(&self) -> bool {
-        self.enabled.unwrap_or(true)
+        self.enabled
+    }
+
+    /// Individual asset file specification globs to exclude from baking.
+    ///
+    /// May be a filename, might be folder/**/other.jpeg
+    #[allow(unused)]
+    pub fn exclude_globs(&self) -> impl Iterator<Item = &String> {
+        self.exclude.iter()
     }
 }
