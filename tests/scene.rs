@@ -1,16 +1,14 @@
 use {
     glam::{EulerRot, Quat},
-    lazy_static::lazy_static,
     pak::{Pak, PakBuf},
-    std::{io::Error, path::PathBuf},
+    std::{io::Error, path::PathBuf, sync::LazyLock},
 };
 
 const EPSILON: f32 = 0.0001;
 
-lazy_static! {
-    static ref CARGO_MANIFEST_DIR: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    static ref TESTS_DATA_DIR: PathBuf = CARGO_MANIFEST_DIR.join("tests/data");
-}
+static CARGO_MANIFEST_DIR: LazyLock<PathBuf> =
+    LazyLock::new(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+static TESTS_DATA_DIR: LazyLock<PathBuf> = LazyLock::new(|| CARGO_MANIFEST_DIR.join("tests/data"));
 
 #[test]
 fn deserialize_scene_materials() -> Result<(), Error> {

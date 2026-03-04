@@ -474,103 +474,67 @@ mod tests {
 
     #[test]
     fn mip_levels() {
-        assert!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = '' }"))
-                .is_err()
-        );
-        assert!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = 42.0 }"))
-                .is_err()
-        );
-        assert!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = -42 }"))
-                .is_err()
-        );
-        assert!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = [] }"))
-                .is_err()
-        );
-        assert!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = {} }"))
-                .is_err()
-        );
+        assert!(BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = '' }")).is_err());
+        assert!(BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = 42.0 }")).is_err());
+        assert!(BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = -42 }")).is_err());
+        assert!(BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = [] }")).is_err());
+        assert!(BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = {} }")).is_err());
 
-        assert!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = 0 }"))
-                .is_err(),
-        );
+        assert!(BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = 0 }")).is_err(),);
 
         assert_eq!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '' }")).unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '' }")).unwrap(),
             BitmapAsset::new(PathBuf::new()).with_mip_levels(MIP_LEVELS_MIN),
         );
 
         assert_eq!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = 100 }"))
-                .unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = 100 }")).unwrap(),
             BitmapAsset::new(PathBuf::new()).with_mip_levels(MIP_LEVELS_MAX),
         );
         assert_eq!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = false }"))
-                .unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = false }")).unwrap(),
             BitmapAsset::new(PathBuf::new()).with_mip_levels(MIP_LEVELS_MIN),
         );
         assert_eq!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = true }"))
-                .unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = true }")).unwrap(),
             BitmapAsset::new(PathBuf::new()).with_mip_levels(MIP_LEVELS_MAX),
         );
         assert_eq!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', mip-levels = 16 }"))
-                .unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = 16 }")).unwrap(),
             BitmapAsset::new(PathBuf::new()).with_mip_levels(16),
         );
     }
 
     #[test]
     fn swizzle() {
-        assert!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = '' }")).is_err(),
-        );
-        assert!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'rrggbb' }"))
-                .is_err(),
-        );
-        assert!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'z' }"))
-                .is_err(),
-        );
+        assert!(BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = '' }")).is_err(),);
+        assert!(BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'rrggbb' }")).is_err(),);
+        assert!(BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'z' }")).is_err(),);
 
         assert_eq!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'r' }"))
-                .unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'r' }")).unwrap(),
             BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::R))
         );
         assert_eq!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'g' }"))
-                .unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'g' }")).unwrap(),
             BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::G))
         );
         assert_eq!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'b' }"))
-                .unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'b' }")).unwrap(),
             BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::B))
         );
         assert_eq!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'a' }"))
-                .unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'a' }")).unwrap(),
             BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::A))
         );
 
         assert_eq!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'gg' }"))
-                .unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'gg' }")).unwrap(),
             BitmapAsset::new(PathBuf::new())
                 .with_swizzle(BitmapSwizzle::Two([BitmapChannel::G, BitmapChannel::G]))
         );
         assert_eq!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'bgr' }"))
-                .unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'bgr' }")).unwrap(),
             BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::Three([
                 BitmapChannel::B,
                 BitmapChannel::G,
@@ -578,8 +542,7 @@ mod tests {
             ]))
         );
         assert_eq!(
-            BitmapAsset::deserialize(ValueDeserializer::new("{ src = '', swizzle = 'rrrr' }"))
-                .unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'rrrr' }")).unwrap(),
             BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::Four([
                 BitmapChannel::R,
                 BitmapChannel::R,
@@ -587,5 +550,9 @@ mod tests {
                 BitmapChannel::R
             ]))
         );
+    }
+
+    fn parse_toml<'a>(raw: &'a str) -> ValueDeserializer<'a> {
+        ValueDeserializer::parse(raw).unwrap()
     }
 }

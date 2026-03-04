@@ -18,31 +18,30 @@ bake = ["bmfont", "glob", "image", "parking_lot", "tokio"]
 
 [dependencies]
 anyhow = "1.0"
-bincode = { version = "2.0", features = ["serde"] }
-bitflags = { version = "2.9", features = ["serde"] }
+bincode = { version = "=2.0", features = ["serde"] }
+bitflags = { version = "2.10", features = ["serde"] }
 bmfont = { version = "0.3", default-features = false, optional = true }
-brotli = "6.0"
+brotli = "8.0"
 dunce = "1.0"
-glam = "0.30"
+glam = "0.31"
 glob = { version = "0.3", optional = true }
 gltf = { version = "1.4", features = ["names"] }
 image = { version = "0.25", optional = true }
 log = "0.4"
-meshopt = "0.2"
-mikktspace = { version = "0.15", package = "bevy_mikktspace" }
+meshopt = "0.6"
+mikktspace = { version = "0.16", package = "bevy_mikktspace" }
 parking_lot = { version = "0.12", optional = true }
-ordered-float = { version = "5.0", features = ["serde"] }
+ordered-float = { version = "5.1", features = ["serde"] }
 paste = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_bytes = "0.11"
 snap = "1.1"
-tokio = { version = "1.39", default-features = false, features = [
+tokio = { version = "1.49", default-features = false, features = [
     "rt-multi-thread",
 ], optional = true }
-toml = "0.8"
+toml = "0.9"
 
 [dev-dependencies]
-lazy_static = "1.4"
 pretty_env_logger = "0.5"
 
 [[example]]
