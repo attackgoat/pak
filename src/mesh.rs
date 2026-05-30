@@ -134,7 +134,7 @@ bitflags! {
         const NORMAL = Self::POSITION.bits() | (1 << 2);
         const TANGENT = Self::POSITION.bits() | (1 << 3);
         const TEXTURE0 = Self::POSITION.bits() | (1 << 4);
-        const TEXTURE1 = Self::TEXTURE0.bits() | (1 << 5);
+        const TEXTURE1 = Self::POSITION.bits() | (1 << 5);
     }
 }
 
