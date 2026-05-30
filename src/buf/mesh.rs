@@ -924,7 +924,7 @@ impl Scale {
                 let val = val as f32;
                 match val.classify() {
                     FpCategory::Zero | FpCategory::Normal => (),
-                    _ => panic!("Unexpected scalar value"),
+                    _ => return Err(E::custom("expected a normal floating point value")),
                 }
 
                 Ok(Some(Scale::Value(OrderedFloat(val))))
@@ -937,13 +937,17 @@ impl Scale {
                 let val: Vec<f32> = Deserialize::deserialize(SeqAccessDeserializer::new(seq))?;
 
                 if val.len() != 3 {
-                    panic!("Unexpected sequence length");
+                    return Err(serde::de::Error::custom("expected 3 values"));
                 }
 
                 for val in &val {
                     match val.classify() {
                         FpCategory::Zero | FpCategory::Normal => (),
-                        _ => panic!("Unexpected sequence value"),
+                        _ => {
+                            return Err(serde::de::Error::custom(
+                                "expected a normal floating point value",
+                            ));
+                        }
                     }
                 }
 

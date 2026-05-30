@@ -16,7 +16,7 @@ use {
     serde::{
         Deserialize, Deserializer,
         de::{
-            MapAccess, SeqAccess, Visitor,
+            Error, MapAccess, SeqAccess, Visitor,
             value::{MapAccessDeserializer, SeqAccessDeserializer},
         },
     },
@@ -93,14 +93,16 @@ impl ColorRef {
                 for val in &val {
                     match val.classify() {
                         FpCategory::Zero | FpCategory::Normal if *val <= 1.0 => (),
-                        _ => panic!("Unexpected color value"),
+                        _ => {
+                            return Err(Error::custom("expected a color value between 0.0 and 1.0"));
+                        }
                     }
                 }
 
                 match val.len() {
                     3 => val.push(1.0),
                     4 => (),
-                    _ => panic!("Unexpected color length"),
+                    _ => return Err(Error::custom("expected 3 or 4 color channels")),
                 }
 
                 Ok(Some(ColorRef::Value([
@@ -208,17 +210,18 @@ impl EmissiveRef {
             where
                 A: SeqAccess<'de>,
             {
-                let mut val: Vec<f32> = Deserialize::deserialize(SeqAccessDeserializer::new(seq))?;
+                let val: Vec<f32> = Deserialize::deserialize(SeqAccessDeserializer::new(seq))?;
                 for val in &val {
                     match val.classify() {
                         FpCategory::Zero | FpCategory::Normal if *val <= 1.0 => (),
-                        _ => panic!("Unexpected color value"),
+                        _ => {
+                            return Err(Error::custom("expected a color value between 0.0 and 1.0"));
+                        }
                     }
                 }
 
-                match val.len() {
-                    3 => val.push(1.0),
-                    _ => panic!("Unexpected color length"),
+                if val.len() != 3 {
+                    return Err(Error::custom("expected 3 color channels"));
                 }
 
                 Ok(Some(EmissiveRef::Value([
@@ -914,7 +917,7 @@ impl ScalarRef {
                 let val = val as f32;
                 match val.classify() {
                     FpCategory::Zero | FpCategory::Normal if val <= 1.0 => (),
-                    _ => panic!("Unexpected scalar value"),
+                    _ => return Err(E::custom("expected a scalar value between 0.0 and 1.0")),
                 }
 
                 Ok(Some(ScalarRef::Value(OrderedFloat(val))))

@@ -30,7 +30,7 @@ use {
     parking_lot::Mutex,
     serde::{
         Deserialize, Deserializer,
-        de::{SeqAccess, Visitor, value::SeqAccessDeserializer},
+        de::{Error, SeqAccess, Visitor, value::SeqAccessDeserializer},
     },
     std::{
         collections::{BTreeSet, HashSet},
@@ -655,13 +655,13 @@ impl<'de> Rotation {
                 let val: Vec<f32> = Deserialize::deserialize(SeqAccessDeserializer::new(seq))?;
 
                 if !matches!(val.len(), 3 | 4) {
-                    panic!("Unexpected sequence length");
+                    return Err(Error::custom("expected 3 or 4 values"));
                 }
 
                 for val in &val {
                     match val.classify() {
                         FpCategory::Zero | FpCategory::Normal => (),
-                        _ => panic!("Unexpected sequence value"),
+                        _ => return Err(Error::custom("expected a normal floating point value")),
                     }
                 }
 
