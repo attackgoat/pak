@@ -2,6 +2,7 @@ use {
     super::{Canonicalize, Euler, Rotation, Writer, blob::BlobAsset, file_key, re_run_if_changed},
     crate::{
         MeshId,
+        index::IndexBuffer,
         mesh::{Joint, Mesh, Primitive, Skin, VertexType},
     },
     anyhow::Context,
@@ -122,7 +123,7 @@ impl MeshAsset {
         let asset = self.clone().into();
 
         if let Some(id) = writer.lock().ctx.get(&asset) {
-            return Ok(id.as_mesh().unwrap());
+            return id.as_mesh().context("asset context returned non-mesh id");
         }
 
         self.re_run_if_changed();
@@ -154,7 +155,7 @@ impl MeshAsset {
         // Check again to see if we are the first one to finish this
         let mut writer = writer.lock();
         if let Some(id) = writer.ctx.get(&asset) {
-            return Ok(id.as_mesh().unwrap());
+            return id.as_mesh().context("asset context returned non-mesh id");
         }
 
         let id = writer.push_mesh(mesh, key);
@@ -168,25 +169,26 @@ impl MeshAsset {
         indices: &[u32],
         vertex_buf: &[u8],
         vertex_stride: usize,
-    ) -> Vec<Vec<u32>> {
+    ) -> anyhow::Result<Vec<Vec<u32>>> {
         let mut res = vec![Vec::from(indices)];
 
         if !self.lod() {
-            return res;
+            return Ok(res);
         }
 
         let target_error = self.lod_target_error();
         let target_ratio = 1.0 + target_error;
         let min_triangles = self.min_lod_triangles();
-        let vertices = VertexDataAdapter::new(vertex_buf, vertex_stride, 0).unwrap();
+        let vertices = VertexDataAdapter::new(vertex_buf, vertex_stride, 0)
+            .context("creating vertex data adapter for LOD calculation")?;
         let opts = if self.lod_lock_border() {
             SimplifyOptions::LockBorder
         } else {
             SimplifyOptions::None
         };
 
-        loop {
-            let target_count = (res.last().unwrap().len() / 3) >> 1;
+        while let Some(last) = res.last() {
+            let target_count = (last.len() / 3) >> 1;
             if target_count < min_triangles {
                 break;
             }
@@ -201,7 +203,7 @@ impl MeshAsset {
             res.push(lod);
         }
 
-        res
+        Ok(res)
     }
 
     fn convert_triangle_fan_to_list(indices: &mut Vec<u32>) {
@@ -221,8 +223,13 @@ impl MeshAsset {
         *indices = result;
     }
 
-    fn convert_triangle_strip_to_list(indices: &mut Vec<u32>, restart_index: u32) {
-        *indices = unstripify(indices, restart_index).expect("Unable to unstripify index buffer");
+    fn convert_triangle_strip_to_list(
+        indices: &mut Vec<u32>,
+        restart_index: u32,
+    ) -> anyhow::Result<()> {
+        *indices =
+            unstripify(indices, restart_index).context("unable to unstripify index buffer")?;
+        Ok(())
     }
 
     /// Optional associated unstructured data.
@@ -287,7 +294,7 @@ impl MeshAsset {
         indices: &mut Vec<u32>,
         vertex_buf: &mut Vec<u8>,
         vertex_stride: usize,
-    ) {
+    ) -> anyhow::Result<()> {
         // TODO: PR these functions
         // HACK: Need to have a version of these functions which specify stride
         mod hack {
@@ -367,7 +374,8 @@ impl MeshAsset {
 
         // Run the suggested routines from meshopt: https://github.com/gwihlidal/meshopt-rs#pipeline
         if self.optimize() {
-            let vertices = VertexDataAdapter::new(vertex_buf, vertex_stride, 0).unwrap();
+            let vertices = VertexDataAdapter::new(vertex_buf, vertex_stride, 0)
+                .context("creating vertex data adapter for mesh optimization")?;
 
             // HACK: These functions take immutable borrows, BUT USE MUTABLE!
             // See: https://github.com/gwihlidal/meshopt-rs/pull/26 not yet released
@@ -376,6 +384,8 @@ impl MeshAsset {
 
             hack::optimize_vertex_fetch_in_place(indices, vertex_buf, vertex_stride);
         }
+
+        Ok(())
     }
 
     /// Determines how much the optimization algorithm can compromise the vertex cache hit ratio.
@@ -422,7 +432,7 @@ impl MeshAsset {
 
             {
                 let mut joint_names = HashSet::new();
-                for joint_name in skin.joints().map(|joint| joint.name().unwrap()) {
+                for joint_name in skin.joints().filter_map(|joint| joint.name()) {
                     if !joint_names.insert(joint_name) {
                         warn!("Duplicate joint names found");
 
@@ -635,6 +645,7 @@ impl MeshAsset {
     }
 
     /// Scaling of the mesh.
+    #[allow(dead_code)]
     pub fn scale(&self) -> Vec3 {
         self.scale
             .map(|scale| match scale {
@@ -704,7 +715,7 @@ impl MeshAsset {
         let transform = mesh_transform * extract_transform(node);
         let parts = node
             .mesh()
-            .unwrap()
+            .context("node has no mesh")?
             .primitives()
             .filter_map(|primitive| match primitive.mode() {
                 Mode::TriangleFan | Mode::TriangleStrip | Mode::Triangles => {
@@ -732,7 +743,8 @@ impl MeshAsset {
                         Mode::TriangleStrip => Self::convert_triangle_strip_to_list(
                             &mut vertices.indices,
                             restart_index,
-                        ),
+                        )
+                        .ok()?,
                         _ => (),
                     }
 
@@ -828,12 +840,12 @@ impl MeshAsset {
                 let (vertex, mut vertex_buf) = data.to_vertex_buf();
                 let vertex_stride = vertex.stride();
 
-                self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride);
+                self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride)?;
 
                 let mut primitive = Primitive::new(material, &vertex_buf, vertex);
 
-                for lod_indices in self.calculate_lods(&data.indices, &vertex_buf, vertex_stride) {
-                    primitive.push_lod(&lod_indices);
+                for lod_indices in self.calculate_lods(&data.indices, &vertex_buf, vertex_stride)? {
+                    primitive.push_lod(IndexBuffer::new(&lod_indices)?)
                 }
 
                 primitives.push(primitive);
@@ -844,12 +856,12 @@ impl MeshAsset {
                 let (vertex, mut vertex_buf) = data.to_shadow_buf();
                 let vertex_stride = vertex.stride();
 
-                self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride);
+                self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride)?;
 
                 let mut primitive = Primitive::new(material, &vertex_buf, vertex);
 
-                for lod_indices in self.calculate_lods(&data.indices, &vertex_buf, vertex_stride) {
-                    primitive.push_lod(&lod_indices);
+                for lod_indices in self.calculate_lods(&data.indices, &vertex_buf, vertex_stride)? {
+                    primitive.push_lod(IndexBuffer::new(&lod_indices)?);
                 }
 
                 primitives.push(primitive);
@@ -1071,9 +1083,7 @@ impl VertexData {
                 buf.extend_from_slice(&tangent[3].to_ne_bytes());
             }
 
-            if vertex_type.contains(VertexType::JOINTS_WEIGHTS) {
-                let skin = self.skin.as_ref().unwrap();
-
+            if let Some(skin) = self.skin.as_ref() {
                 let joints = skin.0[idx];
                 buf.extend_from_slice(&joints.to_ne_bytes());
 
@@ -1106,9 +1116,7 @@ impl VertexData {
             buf.extend_from_slice(&position[1].to_ne_bytes());
             buf.extend_from_slice(&position[2].to_ne_bytes());
 
-            if vertex_type.contains(VertexType::JOINTS_WEIGHTS) {
-                let skin = self.skin.as_ref().unwrap();
-
+            if let Some(skin) = self.skin.as_ref() {
                 let joints = skin.0[idx];
                 buf.extend_from_slice(&joints.to_ne_bytes());
 

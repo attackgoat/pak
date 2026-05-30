@@ -1,8 +1,13 @@
 use {
     super::{Quat, Vec3},
-    gltf::animation::Interpolation as GltfInterpolation,
     serde::{Deserialize, Serialize},
 };
+
+#[cfg(feature = "bake")]
+use gltf::animation::Interpolation as GltfInterpolation;
+
+#[cfg(feature = "bake")]
+use anyhow::bail;
 
 /// Holds an `Animation` in a `.pak` file. For data transport only.
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
@@ -11,6 +16,7 @@ pub struct Animation {
 }
 
 impl Animation {
+    #[cfg(feature = "bake")]
     pub(super) fn new(channels: Vec<Channel>) -> Self {
         Self { channels }
     }
@@ -31,20 +37,25 @@ pub struct Channel {
 }
 
 impl Channel {
-    #[allow(unused)]
+    #[cfg(feature = "bake")]
     pub(crate) fn new<T: AsRef<str>, I: IntoIterator<Item = u32>>(
         target: T,
         interpolation: GltfInterpolation,
         inputs: I,
         outputs: Outputs,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let inputs = inputs.into_iter().collect::<Vec<_>>();
         let target = target.as_ref().to_owned();
 
-        assert!(!target.is_empty());
-        assert_ne!(inputs.len(), 0);
+        if target.is_empty() {
+            bail!("channel target is empty");
+        }
 
-        Self {
+        if inputs.is_empty() {
+            bail!("channel has no inputs");
+        }
+
+        Ok(Self {
             inputs,
             interpolation: match interpolation {
                 GltfInterpolation::CubicSpline => Interpolation::CubicSpline,
@@ -53,7 +64,7 @@ impl Channel {
             },
             outputs,
             target,
-        }
+        })
     }
 
     pub fn inputs(&self) -> &[u32] {

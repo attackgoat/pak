@@ -14,6 +14,7 @@ static TESTS_DATA_DIR: LazyLock<PathBuf> = LazyLock::new(|| CARGO_MANIFEST_DIR.j
 fn deserialize_scene_materials() -> Result<(), Error> {
     let pak_dst = TESTS_DATA_DIR.join("scene/test.pak");
 
+    #[cfg(feature = "bake")]
     {
         let pak_src = TESTS_DATA_DIR.join("scene/pak.toml");
         PakBuf::bake(&pak_src, &pak_dst).unwrap();

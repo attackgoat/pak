@@ -96,7 +96,7 @@ where
     where
         D: Deserializer<'de>,
     {
-        AssetRef::<T>::de(deserializer).transpose().unwrap()
+        AssetRef::<T>::de(deserializer)?.ok_or_else(|| D::Error::custom("expected asset reference"))
     }
 }
 
@@ -207,7 +207,7 @@ impl SceneAsset {
         // Early-out if we have already baked this scene
         let asset = self.clone().into();
         if let Some(h) = writer.lock().ctx.get(&asset) {
-            return Ok(h.as_scene().unwrap());
+            return h.as_scene().context("asset context returned non-scene id");
         }
 
         let key = file_key(&project_dir, &path);
@@ -343,11 +343,11 @@ impl SceneAsset {
             })
             .collect::<Box<_>>();
 
-        let scene = Scene::new(geometries, references);
+        let scene = Scene::new(geometries, references)?;
 
         let mut writer = writer.lock();
         if let Some(h) = writer.ctx.get(&asset) {
-            return Ok(h.as_scene().unwrap());
+            return h.as_scene().context("asset context returned non-scene id");
         }
 
         let id = writer.push_scene(scene, key);
@@ -649,7 +649,7 @@ impl<'de> Deserialize<'de> for Data {
     where
         D: Deserializer<'de>,
     {
-        Data::de(deserializer).transpose().unwrap()
+        Data::de(deserializer)?.ok_or_else(|| D::Error::custom("expected data"))
     }
 }
 

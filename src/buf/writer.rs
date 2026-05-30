@@ -116,6 +116,7 @@ impl Writer {
         id
     }
 
+    #[allow(dead_code)]
     pub fn with_compression(&mut self, compression: Compression) -> &mut Self {
         self.compression = Some(compression);
         self

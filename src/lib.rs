@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod anim;
 pub mod bitmap;
 pub mod bitmap_font;
@@ -56,17 +54,6 @@ enum DataRef<T> {
 }
 
 impl<T> DataRef<T> {
-    fn as_data(&self) -> Option<&T> {
-        match self {
-            Self::Data(t) => Some(t),
-            _ => {
-                warn!("Expected data but found position and length");
-
-                None
-            }
-        }
-    }
-
     fn pos_len(&self) -> Option<(u64, usize)> {
         match self {
             Self::Ref(range) => Some((range.start as _, (range.end - range.start) as _)),
@@ -83,14 +70,15 @@ impl<T> DataRef<T>
 where
     T: Serialize,
 {
+    #[cfg(feature = "bake")]
     fn serialize(&self) -> Result<Vec<u8>, Error> {
         let mut buf = vec![];
-        bincode::serde::encode_into_std_write(
-            self.as_data().unwrap(),
-            &mut buf,
-            bincode::config::legacy(),
-        )
-        .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+        let data = match self {
+            Self::Data(t) => t,
+            Self::Ref(_) => return Err(Error::from(ErrorKind::InvalidData)),
+        };
+        bincode::serde::encode_into_std_write(data, &mut buf, bincode::config::legacy())
+            .map_err(|_| Error::from(ErrorKind::InvalidData))?;
 
         Ok(buf)
     }
@@ -352,39 +340,28 @@ impl PakBuf {
     }
 
     pub fn from_stream(mut stream: impl Stream + 'static) -> Result<Self, Error> {
-        let magic_bytes: [u8; 20] =
-            bincode::serde::decode_from_std_read(&mut stream, bincode::config::legacy()).map_err(
-                |_| {
-                    warn!("Unable to read magic bytes");
+        fn decode<T>(stream: &mut impl Read, msg: &str) -> Result<T, Error>
+        where
+            T: DeserializeOwned,
+        {
+            bincode::serde::decode_from_std_read(stream, bincode::config::legacy()).map_err(|_| {
+                warn!("{}", msg);
+                Error::from(ErrorKind::InvalidData)
+            })
+        }
 
-                    Error::from(ErrorKind::InvalidData)
-                },
-            )?;
-
-        if String::from_utf8(magic_bytes.into()).unwrap_or_default() != "ATTACKGOAT-PAK-V1.0 " {
+        let magic_bytes: [u8; 20] = decode(&mut stream, "Unable to read magic bytes")?;
+        if &magic_bytes != b"ATTACKGOAT-PAK-V1.0 " {
             warn!("Unsupported magic bytes");
 
             return Err(Error::from(ErrorKind::InvalidData));
         }
 
         // Read the number of bytes we must 'skip' in order to read the main data
-        let skip: u32 =
-            bincode::serde::decode_from_std_read(&mut stream, bincode::config::legacy()).map_err(
-                |_| {
-                    warn!("Unable to read skip length");
-
-                    Error::from(ErrorKind::InvalidData)
-                },
-            )?;
+        let skip: u32 = decode(&mut stream, "Unable to read skip length")?;
 
         let compression: Option<Compression> =
-            bincode::serde::decode_from_std_read(&mut stream, bincode::config::legacy()).map_err(
-                |_| {
-                    warn!("Unable to read compression data");
-
-                    Error::from(ErrorKind::InvalidData)
-                },
-            )?;
+            decode(&mut stream, "Unable to read compression data")?;
 
         // Read the compressed main data
         stream.seek(SeekFrom::Start(skip as _))?;
@@ -394,12 +371,7 @@ impl PakBuf {
             } else {
                 Box::new(&mut stream)
             };
-            bincode::serde::decode_from_std_read(&mut compressed, bincode::config::legacy())
-                .map_err(|_| {
-                    warn!("Unable to read header");
-
-                    Error::from(ErrorKind::InvalidData)
-                })?
+            decode(&mut compressed, "Unable to read header")?
         };
 
         trace!(
@@ -577,8 +549,7 @@ struct PakFile {
 
 impl From<&'static [u8]> for PakBuf {
     fn from(data: &'static [u8]) -> Self {
-        // This is infalliable for the given input so unwrap is aok
-        Self::from_stream(Cursor::new(data)).unwrap()
+        Self::from_stream(Cursor::new(data)).expect("invalid pak data")
     }
 }
 

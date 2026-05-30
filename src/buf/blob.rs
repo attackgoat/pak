@@ -51,7 +51,7 @@ impl BlobAsset {
 
         // Early-out if we have already baked this blob
         if let Some(id) = writer.lock().ctx.get(&asset) {
-            return Ok(id.as_blob().unwrap());
+            return id.as_blob().context("asset context returned non-blob id");
         }
 
         let key = file_key(&project_dir, src);
@@ -67,7 +67,7 @@ impl BlobAsset {
 
         let mut writer = writer.lock();
         if let Some(id) = writer.ctx.get(&asset) {
-            return Ok(id.as_blob().unwrap());
+            return id.as_blob().context("asset context returned non-blob id");
         }
 
         let id = writer.push_blob(value, Some(key));
@@ -91,7 +91,9 @@ impl BlobAsset {
 
         // Early-out if we have already baked this blob
         if let Some(id) = writer.lock().ctx.get(&asset) {
-            return Ok(id.as_bitmap_font().unwrap());
+            return id
+                .as_bitmap_font()
+                .context("asset context returned non-bitmap-font id");
         }
 
         let key = file_key(&project_dir, &path);
@@ -150,7 +152,7 @@ impl BlobAsset {
             }
         }
 
-        let (width, _) = page_size.unwrap();
+        let (width, _) = page_size.ok_or_else(|| anyhow::Error::msg("bitmap font has no pages"))?;
 
         let page_bufs = pages
             .into_iter()
@@ -161,7 +163,9 @@ impl BlobAsset {
 
         let mut writer = writer.lock();
         if let Some(id) = writer.ctx.get(&asset) {
-            return Ok(id.as_bitmap_font().unwrap());
+            return id
+                .as_bitmap_font()
+                .context("asset context returned non-bitmap-font id");
         }
 
         let id = writer.push_bitmap_font(BitmapFont::new(def_file, page_bufs), Some(key));

@@ -49,7 +49,9 @@ impl AnimationAsset {
         let asset = self.clone().into();
 
         if let Some(h) = writer.lock().ctx.get(&asset) {
-            return Ok(h.as_animation().unwrap());
+            return h
+                .as_animation()
+                .context("asset context returned non-animation id");
         }
 
         let key = file_key(&project_dir, &path);
@@ -95,7 +97,7 @@ impl AnimationAsset {
             let data = channel.reader(|buf| bufs.get(buf.index()).map(|data| &*data.0));
             let inputs = data
                 .read_inputs()
-                .unwrap()
+                .context("reading animation inputs")?
                 .map(|input| Duration::from_secs_f32(input).as_millis() as u32)
                 .collect::<Vec<_>>();
             if inputs.is_empty() {
@@ -118,7 +120,7 @@ impl AnimationAsset {
                 }
             }
 
-            let outputs = match data.read_outputs().unwrap() {
+            let outputs = match data.read_outputs().context("reading animation outputs")? {
                 ReadOutputs::Rotations(Rotations::F32(rotations)) => {
                     Outputs::Rotations(rotations.collect())
                 }
@@ -170,12 +172,14 @@ impl AnimationAsset {
                 continue;
             }
 
-            channels.push(Channel::new(name, interpolation, inputs, outputs));
+            channels.push(Channel::new(name, interpolation, inputs, outputs)?);
         }
 
         let mut writer = writer.lock();
         if let Some(id) = writer.ctx.get(&asset) {
-            return Ok(id.as_animation().unwrap());
+            return id
+                .as_animation()
+                .context("asset context returned non-animation id");
         }
 
         let id = writer.push_animation(Animation::new(channels), Some(key));

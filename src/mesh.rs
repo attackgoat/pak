@@ -25,6 +25,7 @@ pub struct Mesh {
 }
 
 impl Mesh {
+    #[cfg(feature = "bake")]
     pub(super) fn new(primitives: Vec<Primitive>, skin: Option<Skin>) -> Self {
         Self {
             data: None,
@@ -85,8 +86,8 @@ impl Primitive {
         self.material
     }
 
-    pub fn push_lod(&mut self, indices: &[u32]) {
-        self.lods.push(IndexBuffer::new(indices));
+    pub fn push_lod(&mut self, indices: IndexBuffer) {
+        self.lods.push(indices);
     }
 
     pub fn vertex_count(&self) -> usize {
@@ -113,6 +114,7 @@ pub struct Skin {
 }
 
 impl Skin {
+    #[cfg(feature = "bake")]
     pub(super) fn new(joints: impl Into<Box<[Joint]>>) -> Self {
         let joints = joints.into();
 

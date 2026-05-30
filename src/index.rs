@@ -1,54 +1,51 @@
 use {
+    anyhow::bail,
     serde::{Deserialize, Serialize},
     std::mem::size_of,
 };
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct IndexBuffer {
-    #[serde(with = "serde_bytes")]
     buf: Vec<u8>,
-
     ty: IndexType,
 }
 
 impl IndexBuffer {
-    pub fn new(indices: &[u32]) -> Self {
-        debug_assert!(indices.len() >= 3);
-        debug_assert_eq!(indices.len() % 3, 0);
+    pub fn new(indices: &[u32]) -> anyhow::Result<Self> {
+        if indices.len() < 3 {
+            bail!("index buffer must have at least 3 indices");
+        }
+
+        if !indices.len().is_multiple_of(3) {
+            bail!("index buffer length must be a multiple of 3");
+        }
 
         let max_vertex = indices.iter().copied().max().unwrap_or_default();
 
-        if max_vertex <= u8::MAX as _ {
-            let mut buf = Vec::with_capacity(indices.len() << 1);
+        let (buf, ty) = if max_vertex <= u8::MAX as _ {
+            let mut buf = Vec::with_capacity(indices.len());
             for &idx in indices {
                 buf.push(idx as u8);
             }
 
-            Self {
-                buf,
-                ty: IndexType::U8,
-            }
+            (buf, IndexType::U8)
         } else if max_vertex <= u16::MAX as _ {
             let mut buf = Vec::with_capacity(indices.len() << 1);
             for &idx in indices {
                 buf.extend_from_slice(&(idx as u16).to_ne_bytes());
             }
 
-            Self {
-                buf,
-                ty: IndexType::U16,
-            }
+            (buf, IndexType::U16)
         } else {
             let mut buf = Vec::with_capacity(indices.len() << 2);
             for &idx in indices {
                 buf.extend_from_slice(&idx.to_ne_bytes());
             }
 
-            Self {
-                buf,
-                ty: IndexType::U32,
-            }
-        }
+            (buf, IndexType::U32)
+        };
+
+        Ok(Self { buf, ty })
     }
 
     pub fn as_u8(&self) -> Option<Vec<u8>> {
@@ -153,18 +150,21 @@ mod tests {
         let indices = [0, 1, 2, 0, 1, 3];
         let index_buf = IndexBuffer::new(&indices);
 
+        let index_buf = index_buf.expect("IndexBuffer::new should succeed for u8 indices");
         assert_eq!(index_buf.triangle_count(), 2);
         assert_eq!(index_buf.index_count(), 6);
         assert_eq!(index_buf.index_type(), IndexType::U8);
 
-        let buf = index_buf.as_u8().unwrap();
+        let buf = index_buf.as_u8().expect("IndexBuffer should be u8");
 
         assert_eq!(buf.len(), 6);
         for (expected, actual) in indices.iter().copied().zip(buf) {
             assert_eq!(expected, actual as u32);
         }
 
-        let buf = index_buf.as_u16().unwrap();
+        let buf = index_buf
+            .as_u16()
+            .expect("IndexBuffer should convert to u16");
 
         assert_eq!(buf.len(), 6);
         for (expected, actual) in indices.iter().copied().zip(buf) {
@@ -182,14 +182,16 @@ mod tests {
     #[test]
     fn index_buffer_u16() {
         let indices = [0, 1, 42_000, 0, 1, 2];
-        let index_buf = IndexBuffer::new(&indices);
+        let index_buf = IndexBuffer::new(&indices).expect("IndexBuffer::new should succeed");
 
         assert_eq!(index_buf.triangle_count(), 2);
         assert_eq!(index_buf.index_count(), 6);
         assert_eq!(index_buf.index_type(), IndexType::U16);
         assert_eq!(index_buf.as_u8(), None);
 
-        let buf = index_buf.as_u16().unwrap();
+        let buf = index_buf
+            .as_u16()
+            .expect("IndexBuffer should convert to u16");
 
         assert_eq!(buf.len(), 6);
         for (expected, actual) in indices.iter().copied().zip(buf) {
@@ -207,7 +209,7 @@ mod tests {
     #[test]
     fn index_buffer_u32() {
         let indices = [0, 1, 100_000, 0, 1, 2];
-        let index_buf = IndexBuffer::new(&indices);
+        let index_buf = IndexBuffer::new(&indices).expect("IndexBuffer::new should succeed");
 
         assert_eq!(index_buf.triangle_count(), 2);
         assert_eq!(index_buf.index_count(), 6);

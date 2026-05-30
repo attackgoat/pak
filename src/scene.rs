@@ -1,8 +1,10 @@
 use {
     super::{MaterialId, MeshId, Quat, Vec3, index::IndexBuffer},
     serde::{Deserialize, Serialize},
-    std::collections::HashMap,
 };
+
+#[cfg(feature = "bake")]
+use std::collections::HashMap;
 
 type StringIndex = u16;
 
@@ -15,6 +17,7 @@ enum Data {
     String(StringIndex),
 }
 
+#[cfg(feature = "bake")]
 impl Data {
     fn parse(value: DataData, st: &mut StringTable) -> Self {
         match value {
@@ -347,10 +350,11 @@ pub struct Scene {
 }
 
 impl Scene {
+    #[cfg(feature = "bake")]
     pub(crate) fn new(
         geometries: impl IntoIterator<Item = GeometryData>,
         references: impl IntoIterator<Item = ReferenceData>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         // Use a string table
         let mut st = StringTable::default();
 
@@ -364,9 +368,9 @@ impl Scene {
                     .collect::<Box<_>>();
                 tags.sort();
 
-                let index_buf = IndexBuffer::new(&geometry.indices);
+                let index_buf = IndexBuffer::new(&geometry.indices)?;
 
-                Geometry {
+                anyhow::Ok(Geometry {
                     data: geometry
                         .data
                         .into_iter()
@@ -378,9 +382,9 @@ impl Scene {
                     tags,
                     translation: geometry.translation,
                     vertex_buf: geometry.vertices.into_boxed_slice(),
-                }
+                })
             })
-            .collect();
+            .collect::<anyhow::Result<Box<_>>>()?;
 
         let references = references
             .into_iter()
@@ -408,11 +412,11 @@ impl Scene {
             })
             .collect();
 
-        Self {
+        Ok(Self {
             geometries,
             references,
             strs: st.strs.into_boxed_slice(),
-        }
+        })
     }
 
     /// Gets an iterator of the `Geometry` items stored in this `Scene`.
@@ -541,12 +545,14 @@ impl<'a> Iterator for ReferenceIter<'a> {
     }
 }
 
+#[cfg(feature = "bake")]
 #[derive(Default)]
 struct StringTable {
     cache: HashMap<String, StringIndex>,
     strs: Vec<String>,
 }
 
+#[cfg(feature = "bake")]
 impl StringTable {
     fn get(&mut self, s: String) -> StringIndex {
         *self.cache.entry(s.clone()).or_insert_with(|| {

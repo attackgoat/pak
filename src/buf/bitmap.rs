@@ -135,7 +135,9 @@ impl BitmapAsset {
         // Early-out if we have already baked this bitmap
         let asset = self.clone().into();
         if let Some(id) = writer.lock().ctx.get(&asset) {
-            return Ok(id.as_bitmap().unwrap());
+            return id
+                .as_bitmap()
+                .context("asset context returned non-bitmap id");
         }
 
         let key = path.as_ref().map(|path| file_key(&project_dir, path));
@@ -153,7 +155,9 @@ impl BitmapAsset {
 
         let mut writer = writer.lock();
         if let Some(id) = writer.ctx.get(&asset) {
-            return Ok(id.as_bitmap().unwrap());
+            return id
+                .as_bitmap()
+                .context("asset context returned non-bitmap id");
         }
 
         let id = writer.push_bitmap(bitmap, key);
@@ -443,21 +447,61 @@ impl BitmapSwizzle {
                 let mut chars = str.chars();
 
                 Ok(Some(match str.len() {
-                    1 => BitmapSwizzle::One(parse_channel(chars.next().unwrap())?),
+                    1 => BitmapSwizzle::One(parse_channel(
+                        chars
+                            .next()
+                            .ok_or_else(|| E::custom("unexpected end of swizzle string"))?,
+                    )?),
                     2 => BitmapSwizzle::Two([
-                        parse_channel(chars.next().unwrap())?,
-                        parse_channel(chars.next().unwrap())?,
+                        parse_channel(
+                            chars
+                                .next()
+                                .ok_or_else(|| E::custom("unexpected end of swizzle string"))?,
+                        )?,
+                        parse_channel(
+                            chars
+                                .next()
+                                .ok_or_else(|| E::custom("unexpected end of swizzle string"))?,
+                        )?,
                     ]),
                     3 => BitmapSwizzle::Three([
-                        parse_channel(chars.next().unwrap())?,
-                        parse_channel(chars.next().unwrap())?,
-                        parse_channel(chars.next().unwrap())?,
+                        parse_channel(
+                            chars
+                                .next()
+                                .ok_or_else(|| E::custom("unexpected end of swizzle string"))?,
+                        )?,
+                        parse_channel(
+                            chars
+                                .next()
+                                .ok_or_else(|| E::custom("unexpected end of swizzle string"))?,
+                        )?,
+                        parse_channel(
+                            chars
+                                .next()
+                                .ok_or_else(|| E::custom("unexpected end of swizzle string"))?,
+                        )?,
                     ]),
                     4 => BitmapSwizzle::Four([
-                        parse_channel(chars.next().unwrap())?,
-                        parse_channel(chars.next().unwrap())?,
-                        parse_channel(chars.next().unwrap())?,
-                        parse_channel(chars.next().unwrap())?,
+                        parse_channel(
+                            chars
+                                .next()
+                                .ok_or_else(|| E::custom("unexpected end of swizzle string"))?,
+                        )?,
+                        parse_channel(
+                            chars
+                                .next()
+                                .ok_or_else(|| E::custom("unexpected end of swizzle string"))?,
+                        )?,
+                        parse_channel(
+                            chars
+                                .next()
+                                .ok_or_else(|| E::custom("unexpected end of swizzle string"))?,
+                        )?,
+                        parse_channel(
+                            chars
+                                .next()
+                                .ok_or_else(|| E::custom("unexpected end of swizzle string"))?,
+                        )?,
                     ]),
                     _ => return Err(E::custom("expected a string with one to four values")),
                 }))
@@ -483,24 +527,29 @@ mod tests {
         assert!(BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = 0 }")).is_err(),);
 
         assert_eq!(
-            BitmapAsset::deserialize(parse_toml("{ src = '' }")).unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '' }"))
+                .expect("deserialize test config should succeed"),
             BitmapAsset::new(PathBuf::new()).with_mip_levels(MIP_LEVELS_MIN),
         );
 
         assert_eq!(
-            BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = 100 }")).unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = 100 }"))
+                .expect("deserialize with mip-levels=100 should succeed"),
             BitmapAsset::new(PathBuf::new()).with_mip_levels(MIP_LEVELS_MAX),
         );
         assert_eq!(
-            BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = false }")).unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = false }"))
+                .expect("deserialize with mip-levels=false should succeed"),
             BitmapAsset::new(PathBuf::new()).with_mip_levels(MIP_LEVELS_MIN),
         );
         assert_eq!(
-            BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = true }")).unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = true }"))
+                .expect("deserialize with mip-levels=true should succeed"),
             BitmapAsset::new(PathBuf::new()).with_mip_levels(MIP_LEVELS_MAX),
         );
         assert_eq!(
-            BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = 16 }")).unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', mip-levels = 16 }"))
+                .expect("deserialize with mip-levels=16 should succeed"),
             BitmapAsset::new(PathBuf::new()).with_mip_levels(16),
         );
     }
@@ -512,29 +561,35 @@ mod tests {
         assert!(BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'z' }")).is_err(),);
 
         assert_eq!(
-            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'r' }")).unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'r' }"))
+                .expect("deserialize with swizzle='r' should succeed"),
             BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::R))
         );
         assert_eq!(
-            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'g' }")).unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'g' }"))
+                .expect("deserialize with swizzle='g' should succeed"),
             BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::G))
         );
         assert_eq!(
-            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'b' }")).unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'b' }"))
+                .expect("deserialize with swizzle='b' should succeed"),
             BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::B))
         );
         assert_eq!(
-            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'a' }")).unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'a' }"))
+                .expect("deserialize with swizzle='a' should succeed"),
             BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::One(BitmapChannel::A))
         );
 
         assert_eq!(
-            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'gg' }")).unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'gg' }"))
+                .expect("deserialize with swizzle='gg' should succeed"),
             BitmapAsset::new(PathBuf::new())
                 .with_swizzle(BitmapSwizzle::Two([BitmapChannel::G, BitmapChannel::G]))
         );
         assert_eq!(
-            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'bgr' }")).unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'bgr' }"))
+                .expect("deserialize with swizzle='bgr' should succeed"),
             BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::Three([
                 BitmapChannel::B,
                 BitmapChannel::G,
@@ -542,7 +597,8 @@ mod tests {
             ]))
         );
         assert_eq!(
-            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'rrrr' }")).unwrap(),
+            BitmapAsset::deserialize(parse_toml("{ src = '', swizzle = 'rrrr' }"))
+                .expect("deserialize with swizzle='rrrr' should succeed"),
             BitmapAsset::new(PathBuf::new()).with_swizzle(BitmapSwizzle::Four([
                 BitmapChannel::R,
                 BitmapChannel::R,
@@ -553,6 +609,6 @@ mod tests {
     }
 
     fn parse_toml<'a>(raw: &'a str) -> ValueDeserializer<'a> {
-        ValueDeserializer::parse(raw).unwrap()
+        ValueDeserializer::parse(raw).expect("valid toml should parse")
     }
 }

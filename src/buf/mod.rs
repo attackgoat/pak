@@ -72,7 +72,7 @@ fn file_key(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> String {
         key = key.with_extension("");
     }
 
-    key.to_str().unwrap().to_owned()
+    key.to_str().unwrap_or_default().to_owned()
 }
 
 fn is_cargo_build() -> bool {
@@ -102,21 +102,21 @@ fn parse_hex_color(val: &str) -> Option<[u8; 4]> {
     let len = val.len();
     match len {
         4 | 5 => {
-            res[0] = u8::from_str_radix(&val[1..2].repeat(2), 16).unwrap();
-            res[1] = u8::from_str_radix(&val[2..3].repeat(2), 16).unwrap();
-            res[2] = u8::from_str_radix(&val[3..4].repeat(2), 16).unwrap();
+            res[0] = u8::from_str_radix(&val[1..2].repeat(2), 16).ok()?;
+            res[1] = u8::from_str_radix(&val[2..3].repeat(2), 16).ok()?;
+            res[2] = u8::from_str_radix(&val[3..4].repeat(2), 16).ok()?;
         }
         7 | 9 => {
-            res[0] = u8::from_str_radix(&val[1..3], 16).unwrap();
-            res[1] = u8::from_str_radix(&val[3..5], 16).unwrap();
-            res[2] = u8::from_str_radix(&val[5..7], 16).unwrap();
+            res[0] = u8::from_str_radix(&val[1..3], 16).ok()?;
+            res[1] = u8::from_str_radix(&val[3..5], 16).ok()?;
+            res[2] = u8::from_str_radix(&val[5..7], 16).ok()?;
         }
         _ => return None,
     }
 
     res[3] = match len {
-        5 => u8::from_str_radix(&val[4..5].repeat(2), 16).unwrap(),
-        9 => u8::from_str_radix(&val[7..9], 16).unwrap(),
+        5 => u8::from_str_radix(&val[4..5].repeat(2), 16).ok()?,
+        9 => u8::from_str_radix(&val[7..9], 16).ok()?,
         _ => u8::MAX,
     };
 
@@ -125,8 +125,8 @@ fn parse_hex_color(val: &str) -> Option<[u8; 4]> {
 
 fn parse_hex_scalar(val: &str) -> Option<u8> {
     match val.len() {
-        2 => Some(u8::from_str_radix(&val[1..2].repeat(2), 16).unwrap()),
-        3 => Some(u8::from_str_radix(&val[1..3], 16).unwrap()),
+        2 => Some(u8::from_str_radix(&val[1..2].repeat(2), 16).ok()?),
+        3 => Some(u8::from_str_radix(&val[1..3], 16).ok()?),
         _ => None,
     }
 }
@@ -408,7 +408,7 @@ impl PakBuf {
         re_run_if_changed(&src);
 
         let rt = Arc::new(Runtime::new()?);
-        let mut tasks = vec![];
+        let mut tasks: Vec<tokio::task::JoinHandle<anyhow::Result<()>>> = vec![];
         let writer: Arc<Mutex<Writer>> = Arc::new(Mutex::new(Default::default()));
 
         // Load the source file into an Asset::Content instance
@@ -462,8 +462,8 @@ impl PakBuf {
                         tasks.push(rt.spawn_blocking(move || {
                             MeshAsset::new(&asset_path)
                                 .bake(&writer, &src_dir, Some(&asset_path))
-                                .context(asset_path.as_os_str().to_string_lossy().into_owned())
-                                .unwrap();
+                                .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
+                            Ok(())
                         }));
                     }
                     "jpg" | "jpeg" | "png" | "bmp" | "tga" | "dds" | "webp" | "gif" | "ico"
@@ -474,8 +474,8 @@ impl PakBuf {
                         tasks.push(rt.spawn_blocking(move || {
                             BitmapAsset::new(&asset_path)
                                 .bake_from_path(&writer, src_dir, Some(&asset_path))
-                                .context(asset_path.as_os_str().to_string_lossy().into_owned())
-                                .unwrap();
+                                .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
+                            Ok(())
                         }));
                     }
                     "toml" => {
@@ -490,11 +490,10 @@ impl PakBuf {
                                 let asset_parent = asset_parent.clone();
                                 tasks.push(rt.spawn_blocking(move || {
                                     anim.canonicalize(&src_dir, &asset_parent);
-                                    anim.bake(&writer, src_dir, &asset_path)
-                                        .context(
-                                            asset_path.as_os_str().to_string_lossy().into_owned(),
-                                        )
-                                        .unwrap();
+                                    anim.bake(&writer, src_dir, &asset_path).context(
+                                        asset_path.as_os_str().to_string_lossy().into_owned(),
+                                    )?;
+                                    Ok(())
                                 }));
                             }
                             Asset::Bitmap(mut bitmap) => {
@@ -508,8 +507,8 @@ impl PakBuf {
                                         .bake_from_path(&writer, src_dir, Some(&asset_path))
                                         .context(
                                             asset_path.as_os_str().to_string_lossy().into_owned(),
-                                        )
-                                        .unwrap();
+                                        )?;
+                                    Ok(())
                                 }));
                             }
                             Asset::BitmapFont(mut blob) => {
@@ -522,8 +521,8 @@ impl PakBuf {
                                     blob.bake_bitmap_font(&writer, src_dir, &asset_path)
                                         .context(
                                             asset_path.as_os_str().to_string_lossy().into_owned(),
-                                        )
-                                        .unwrap();
+                                        )?;
+                                    Ok(())
                                 }));
                             }
                             Asset::Material(mut material) => {
@@ -544,8 +543,8 @@ impl PakBuf {
                                         )
                                         .context(
                                             asset_path.as_os_str().to_string_lossy().into_owned(),
-                                        )
-                                        .unwrap();
+                                        )?;
+                                    Ok(())
                                 }));
                             }
                             Asset::Mesh(mut mesh) => {
@@ -555,11 +554,10 @@ impl PakBuf {
                                 let asset_parent = asset_parent.clone();
                                 tasks.push(rt.spawn_blocking(move || {
                                     mesh.canonicalize(&src_dir, &asset_parent);
-                                    mesh.bake(&writer, &src_dir, Some(&asset_path))
-                                        .context(
-                                            asset_path.as_os_str().to_string_lossy().into_owned(),
-                                        )
-                                        .unwrap();
+                                    mesh.bake(&writer, &src_dir, Some(&asset_path)).context(
+                                        asset_path.as_os_str().to_string_lossy().into_owned(),
+                                    )?;
+                                    Ok(())
                                 }));
                             }
                             Asset::Scene(mut scene) => {
@@ -570,15 +568,13 @@ impl PakBuf {
                                 let rt2 = rt.clone();
                                 tasks.push(rt.spawn_blocking(move || {
                                     scene.canonicalize(&src_dir, &asset_parent);
-                                    scene
-                                        .bake(&rt2, &writer, &src_dir, &asset_path)
-                                        .context(
-                                            asset_path.as_os_str().to_string_lossy().into_owned(),
-                                        )
-                                        .unwrap();
+                                    scene.bake(&rt2, &writer, &src_dir, &asset_path).context(
+                                        asset_path.as_os_str().to_string_lossy().into_owned(),
+                                    )?;
+                                    Ok(())
                                 }));
                             }
-                            _ => unimplemented!(),
+                            _ => anyhow::bail!("unhandled asset type"),
                         }
                     }
                     _ => {
@@ -588,36 +584,36 @@ impl PakBuf {
                         tasks.push(rt.spawn_blocking(move || {
                             let blob = BlobAsset::new(&asset_path);
                             blob.bake(&writer, &src_dir)
-                                .context(asset_path.as_os_str().to_string_lossy().into_owned())
-                                .unwrap();
+                                .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
+                            Ok(())
                         }));
                     }
                 }
             }
         }
 
-        rt.block_on(async move {
+        let result: anyhow::Result<()> = rt.block_on(async {
             for task in tasks.into_iter() {
-                task.await.unwrap();
+                task.await.context("spawned task failed")??;
             }
 
             let dst = dst.as_ref().to_path_buf();
             if let Some(parent) = dst.parent() {
-                create_dir_all(parent)
-                    .unwrap_or_else(|_| panic!("Unable to create directory {}", parent.display()));
+                create_dir_all(parent).context("Unable to create directory")?;
             }
 
             writer
                 .lock()
                 .write(&dst)
-                .unwrap_or_else(|_| panic!("Unable to write pak file {}", dst.display()));
+                .context("Unable to write pak file")?;
+
+            Ok(())
         });
 
-        Ok(())
+        result
     }
 }
 
-/// A rotation stored as either a euler or quaternion.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Rotation {
     /// A three component euler rotation.
@@ -691,6 +687,6 @@ impl<'de> Deserialize<'de> for Rotation {
     where
         D: Deserializer<'de>,
     {
-        Rotation::de(deserializer).transpose().unwrap()
+        Rotation::de(deserializer)?.ok_or_else(|| D::Error::custom("expected rotation"))
     }
 }

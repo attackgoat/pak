@@ -1,9 +1,12 @@
 use {
-    brotli::{CompressorReader, CompressorWriter},
+    brotli::CompressorReader,
     serde::{Deserialize, Serialize},
-    snap::{read::FrameDecoder, write::FrameEncoder},
-    std::io::{Read, Write},
+    snap::read::FrameDecoder,
+    std::io::Read,
 };
+
+#[cfg(feature = "bake")]
+use {brotli::CompressorWriter, snap::write::FrameEncoder, std::io::Write};
 
 /// Describes Brotli-based compression.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -45,6 +48,7 @@ impl Compression {
         }
     }
 
+    #[cfg(feature = "bake")]
     pub fn new_writer<'a>(self, writer: impl Write + 'a) -> Box<dyn Write + 'a> {
         match self {
             Compression::Brotli(b) => Box::new(CompressorWriter::new(
