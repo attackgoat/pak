@@ -1115,7 +1115,11 @@ impl VertexData {
                 let weights = skin.1[idx];
                 buf.extend_from_slice(&weights.to_ne_bytes());
             }
+
+            assert_eq!(buf.len() % vertex_stride, 0);
         }
+
+        assert_eq!(buf.len(), buf_len);
 
         (vertex_type, buf)
     }

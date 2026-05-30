@@ -432,7 +432,10 @@ impl Scene {
     }
 
     fn str(&self, idx: StringIndex) -> &str {
-        self.strs[idx as usize].as_str()
+        self.strs
+            .get(idx as usize)
+            .map(String::as_str)
+            .unwrap_or_default()
     }
 }
 

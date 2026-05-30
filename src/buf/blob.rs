@@ -9,7 +9,7 @@ use {
         bitmap::{Bitmap, BitmapColor, BitmapFormat},
         bitmap_font::BitmapFont,
     },
-    anyhow::Context,
+    anyhow::{Context, bail},
     bmfont::{BMFont, OrdinateOrientation},
     log::info,
     parking_lot::Mutex,
@@ -60,9 +60,10 @@ impl BlobAsset {
 
         re_run_if_changed(src);
 
-        let mut file = File::open(src).unwrap();
+        let mut file = File::open(src).context("Unable to open blob file")?;
         let mut value = vec![];
-        file.read_to_end(&mut value).unwrap();
+        file.read_to_end(&mut value)
+            .context("Unable to read blob file")?;
 
         let mut writer = writer.lock();
         if let Some(id) = writer.ctx.get(&asset) {
@@ -100,9 +101,12 @@ impl BlobAsset {
         re_run_if_changed(src);
 
         // Get the fs objects for this asset
-        let def_parent = src.parent().unwrap();
-        let def_file = read_to_string(src).unwrap();
-        let def = BMFont::new(Cursor::new(&def_file), OrdinateOrientation::TopToBottom).unwrap();
+        let Some(def_parent) = src.parent() else {
+            bail!("bitmap font source has no parent directory")
+        };
+        let def_file = read_to_string(src).context("Unable to read bitmap font definition file")?;
+        let def = BMFont::new(Cursor::new(&def_file), OrdinateOrientation::TopToBottom)
+            .context("Unable to parse bitmap font")?;
         let mut pages = Vec::new();
         for page in def.pages() {
             let path = def_parent.join(page);
@@ -142,7 +146,7 @@ impl BlobAsset {
             } else if let Some((width, height)) = page_size
                 && (*page_width != width || page_height != height)
             {
-                panic!("Unexpected page size");
+                bail!("Unexpected bitmap font page size");
             }
         }
 

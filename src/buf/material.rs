@@ -94,7 +94,9 @@ impl ColorRef {
                     match val.classify() {
                         FpCategory::Zero | FpCategory::Normal if *val <= 1.0 => (),
                         _ => {
-                            return Err(Error::custom("expected a color value between 0.0 and 1.0"));
+                            return Err(Error::custom(
+                                "expected a color value between 0.0 and 1.0",
+                            ));
                         }
                     }
                 }
@@ -215,7 +217,9 @@ impl EmissiveRef {
                     match val.classify() {
                         FpCategory::Zero | FpCategory::Normal if *val <= 1.0 => (),
                         _ => {
-                            return Err(Error::custom("expected a color value between 0.0 and 1.0"));
+                            return Err(Error::custom(
+                                "expected a color value between 0.0 and 1.0",
+                            ));
                         }
                     }
                 }

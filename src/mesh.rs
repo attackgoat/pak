@@ -144,16 +144,8 @@ impl VertexType {
 
         debug_assert!(self.contains(Self::POSITION));
 
-        if self.contains(Self::JOINTS_WEIGHTS) {
-            res += 8;
-        }
-
         if self.contains(Self::NORMAL) {
             res += 12;
-        }
-
-        if self.contains(Self::TANGENT) {
-            res += 16;
         }
 
         if self.contains(Self::TEXTURE0) {
@@ -161,6 +153,14 @@ impl VertexType {
         }
 
         if self.contains(Self::TEXTURE1) {
+            res += 8;
+        }
+
+        if self.contains(Self::TANGENT) {
+            res += 16;
+        }
+
+        if self.contains(Self::JOINTS_WEIGHTS) {
             res += 8;
         }
 

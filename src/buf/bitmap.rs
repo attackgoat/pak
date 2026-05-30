@@ -405,8 +405,8 @@ impl BitmapSwizzle {
     pub const RGB: Self = Self::Three([BitmapChannel::R, BitmapChannel::G, BitmapChannel::B]);
     pub const RGBA: Self = Self::Four([
         BitmapChannel::R,
-        BitmapChannel::B,
         BitmapChannel::G,
+        BitmapChannel::B,
         BitmapChannel::A,
     ]);
 

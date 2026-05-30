@@ -18,8 +18,6 @@ impl IndexBuffer {
 
         let max_vertex = indices.iter().copied().max().unwrap_or_default();
 
-        debug_assert!(max_vertex <= u32::MAX as _);
-
         if max_vertex <= u8::MAX as _ {
             let mut buf = Vec::with_capacity(indices.len() << 1);
             for &idx in indices {
