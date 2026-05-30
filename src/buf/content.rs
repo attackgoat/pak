@@ -1,4 +1,7 @@
-use serde::Deserialize;
+use {
+    crate::compression::{BrotliParams, Compression},
+    serde::Deserialize,
+};
 
 /// Holds a description of top-level content files which simply group other asset files for ease of
 /// use.
@@ -29,22 +32,22 @@ impl Content {
         self.groups.iter()
     }
 
-    // pub(crate) fn compression(&self) -> Option<Compression> {
-    //     self.compression.map(|compression| match compression {
-    //         CompressionType::Brotli => Compression::Brotli(BrotliParams {
-    //             buffer_size: self
-    //                 .buf_size
-    //                 .unwrap_or_else(|| BrotliParams::default().buf_size),
-    //             quality: self
-    //                 .quality
-    //                 .unwrap_or_else(|| BrotliParams::default().quality),
-    //             window_size: self
-    //                 .window_size
-    //                 .unwrap_or_else(|| BrotliParams::default().window_size),
-    //         }),
-    //         CompressionType::Snap => Compression::Snap,
-    //     })
-    // }
+    pub(crate) fn compression(&self) -> Option<Compression> {
+        self.compression.map(|compression| match compression {
+            CompressionType::Brotli => Compression::Brotli(BrotliParams {
+                buffer_size: self
+                    .buffer_size
+                    .unwrap_or_else(|| BrotliParams::default().buffer_size),
+                quality: self
+                    .quality
+                    .unwrap_or_else(|| BrotliParams::default().quality),
+                window_size: self
+                    .window_size
+                    .unwrap_or_else(|| BrotliParams::default().window_size),
+            }),
+            CompressionType::Snap => Compression::Snap,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]

@@ -73,7 +73,7 @@ impl ColorRef {
             type Value = Option<ColorRef>;
 
             fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-                formatter.write_str("hex string, path string, bitmap asset, or seqeunce")
+                formatter.write_str("hex string, path string, bitmap asset, or sequence")
             }
 
             fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>
@@ -192,7 +192,7 @@ impl EmissiveRef {
             type Value = Option<EmissiveRef>;
 
             fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-                formatter.write_str("hex string, path string, bitmap asset, or seqeunce")
+                formatter.write_str("hex string, path string, bitmap asset, or sequence")
             }
 
             fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>

@@ -147,7 +147,7 @@ impl MeshAsset {
         if let Some(data) = &self.data {
             let data_id = BlobAsset::new(data)
                 .bake(writer, project_dir)
-                .context("Baking unstructered mesh data")?;
+                .context("Baking unstructured mesh data")?;
             mesh.set_data(data_id);
         }
 
@@ -194,7 +194,7 @@ impl MeshAsset {
             let lod = simplify(indices, &vertices, target_count, target_error, opts, None);
             let lod_count = lod.len() / 3;
             let lod_ratio = lod_count as f32 / target_count as f32;
-            if lod_ratio > 1.0 || lod_ratio < target_ratio {
+            if lod_ratio > target_ratio {
                 break;
             }
 
@@ -205,16 +205,20 @@ impl MeshAsset {
     }
 
     fn convert_triangle_fan_to_list(indices: &mut Vec<u32>) {
-        if indices.is_empty() {
+        if indices.len() < 4 {
             return;
         }
 
-        indices.reserve_exact((indices.len() - 1) >> 1);
-        let mut idx = 3;
-        while idx < indices.len() {
-            indices.insert(idx, 0);
-            idx += 3;
+        let anchor = indices[0];
+        let mut result = Vec::with_capacity((indices.len() - 2) * 3);
+        result.extend_from_slice(&indices[0..3]);
+        for i in 3..indices.len() {
+            result.push(anchor);
+            result.push(indices[i - 1]);
+            result.push(indices[i]);
         }
+
+        *indices = result;
     }
 
     fn convert_triangle_strip_to_list(indices: &mut Vec<u32>, restart_index: u32) {
@@ -365,7 +369,7 @@ impl MeshAsset {
         if self.optimize() {
             let vertices = VertexDataAdapter::new(vertex_buf, vertex_stride, 0).unwrap();
 
-            // HACK: These functions take immutable borrows, BUT USES MUTABLE!
+            // HACK: These functions take immutable borrows, BUT USE MUTABLE!
             // See: https://github.com/gwihlidal/meshopt-rs/pull/26 not yet released
             optimize_vertex_cache_in_place(indices, vertex_count);
             optimize_overdraw_in_place(indices, &vertices, self.overdraw_threshold());
@@ -1104,7 +1108,7 @@ impl VertexData {
                 let joints = skin.0[idx];
                 buf.extend_from_slice(&joints.to_ne_bytes());
 
-                let weights = skin.0[idx];
+                let weights = skin.1[idx];
                 buf.extend_from_slice(&weights.to_ne_bytes());
             }
         }

@@ -409,13 +409,17 @@ impl PakBuf {
 
         let rt = Arc::new(Runtime::new()?);
         let mut tasks = vec![];
-        let writer = Arc::new(Mutex::new(Default::default()));
+        let writer: Arc<Mutex<Writer>> = Arc::new(Mutex::new(Default::default()));
 
         // Load the source file into an Asset::Content instance
         let src_dir = parent(&src);
         let content = Asset::read(&src)?
             .into_content()
             .context("Unable to read asset file")?;
+
+        if let Some(compression) = content.compression() {
+            writer.lock().with_compression_is(Some(compression));
+        }
 
         let enabled_groups = || content.groups().filter(|group| group.enabled());
 

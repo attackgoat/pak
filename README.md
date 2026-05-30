@@ -53,7 +53,7 @@ individual groups are not distinct entities in the runtime file.
 Item | Description
 ---- | -----------
 assets | (_`string array`_) File paths or glob patterns of assets to bake. Assets may be native file types (_such as `.png` and `.glb`_) or asset (_`.toml`_) files as detailed in the following sections.
-exlcude | (_`string array`_) File paths or glob patterns to exclude from the baking process when considering `assets`.
+exclude | (_`string array`_) File paths or glob patterns to exclude from the baking process when considering `assets`.
 enabled | (_`boolean`_) Global flag which may be used to prevent baking of this group.
 
 ## 3D Animations

@@ -43,7 +43,7 @@ impl BlobAsset {
         project_dir: impl AsRef<Path>,
     ) -> anyhow::Result<BlobId> {
         let Some(src) = self.src() else {
-            return Err(anyhow::Error::msg("unspecified bitmap source"));
+            return Err(anyhow::Error::msg("unspecified blob source"));
         };
 
         let asset = self.clone().into();
@@ -82,7 +82,7 @@ impl BlobAsset {
         path: impl AsRef<Path>,
     ) -> anyhow::Result<BitmapFontId> {
         let Some(src) = self.src() else {
-            return Err(anyhow::Error::msg("unspecified bitmap source"));
+            return Err(anyhow::Error::msg("unspecified blob source"));
         };
 
         let asset = self.clone().into();

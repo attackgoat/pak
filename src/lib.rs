@@ -178,25 +178,25 @@ pub struct MaterialInfo {
 pub trait Pak {
     // --- "Get by id" functions
 
-    /// Gets the pak-unique `AnimationId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `AnimationId` corresponding to the given key, if one exists.
     fn animation_id(&self, key: impl AsRef<str>) -> Option<AnimationId>;
 
-    /// Gets the pak-unique `BitmapFontId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `BitmapFontId` corresponding to the given key, if one exists.
     fn bitmap_font_id(&self, key: impl AsRef<str>) -> Option<BitmapFontId>;
 
-    /// Gets the pak-unique `BitmapId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `BitmapId` corresponding to the given key, if one exists.
     fn bitmap_id(&self, key: impl AsRef<str>) -> Option<BitmapId>;
 
-    /// Gets the pak-unique `BlobId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `BlobId` corresponding to the given key, if one exists.
     fn blob_id(&self, key: impl AsRef<str>) -> Option<BlobId>;
 
-    /// Gets the pak-unique `MaterialId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `MaterialId` corresponding to the given key, if one exists.
     fn material_id(&self, key: impl AsRef<str>) -> Option<MaterialId>;
 
-    /// Gets the pak-unique `MeshId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `MeshId` corresponding to the given key, if one exists.
     fn mesh_id(&self, key: impl AsRef<str>) -> Option<MeshId>;
 
-    /// Gets the pak-unique `SceneId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `SceneId` corresponding to the given key, if one exists.
     fn scene_id(&self, key: impl AsRef<str>) -> Option<SceneId>;
 
     // --- "Read" functions
@@ -213,7 +213,7 @@ pub trait Pak {
     /// Gets the corresponding blob for the given ID.
     fn read_blob_id(&mut self, id: impl Into<BlobId>) -> Result<Vec<u8>, Error>;
 
-    /// Gets the material for the given handle, if one exsits.
+    /// Gets the material for the given handle, if one exists.
     fn read_material_id(&self, id: impl Into<MaterialId>) -> Option<MaterialInfo>;
 
     /// Gets the corresponding mesh for the given ID.
@@ -224,7 +224,7 @@ pub trait Pak {
 
     // --- Convenience functions
 
-    /// Gets the material corresponding to the given key, if one exsits.
+    /// Gets the material corresponding to the given key, if one exists.
     fn read_material(&self, key: impl AsRef<str>) -> Option<MaterialInfo> {
         trace!("Reading material {}", key.as_ref());
 
@@ -442,7 +442,7 @@ impl PakBuf {
 }
 
 impl Pak for PakBuf {
-    /// Gets the pak-unique `AnimationId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `AnimationId` corresponding to the given key, if one exists.
     fn animation_id(&self, key: impl AsRef<str>) -> Option<AnimationId> {
         self.data
             .ids
@@ -450,7 +450,7 @@ impl Pak for PakBuf {
             .and_then(|id| id.as_animation())
     }
 
-    /// Gets the pak-unique `BitmapFontId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `BitmapFontId` corresponding to the given key, if one exists.
     fn bitmap_font_id(&self, key: impl AsRef<str>) -> Option<BitmapFontId> {
         self.data
             .ids
@@ -458,7 +458,7 @@ impl Pak for PakBuf {
             .and_then(|id| id.as_bitmap_font())
     }
 
-    /// Gets the pak-unique `BitmapId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `BitmapId` corresponding to the given key, if one exists.
     fn bitmap_id(&self, key: impl AsRef<str>) -> Option<BitmapId> {
         self.data
             .ids
@@ -466,12 +466,12 @@ impl Pak for PakBuf {
             .and_then(|id| id.as_bitmap())
     }
 
-    /// Gets the pak-unique `BlobId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `BlobId` corresponding to the given key, if one exists.
     fn blob_id(&self, key: impl AsRef<str>) -> Option<BlobId> {
         self.data.ids.get(key.as_ref()).and_then(|id| id.as_blob())
     }
 
-    /// Gets the pak-unique `MaterialId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `MaterialId` corresponding to the given key, if one exists.
     fn material_id(&self, key: impl AsRef<str>) -> Option<MaterialId> {
         self.data
             .ids
@@ -479,12 +479,12 @@ impl Pak for PakBuf {
             .and_then(|id| id.as_material())
     }
 
-    /// Gets the pak-unique `MeshId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `MeshId` corresponding to the given key, if one exists.
     fn mesh_id(&self, key: impl AsRef<str>) -> Option<MeshId> {
         self.data.ids.get(key.as_ref()).and_then(|id| id.as_mesh())
     }
 
-    /// Gets the pak-unique `SceneId` corresponding to the given key, if one exsits.
+    /// Gets the pak-unique `SceneId` corresponding to the given key, if one exists.
     fn scene_id(&self, key: impl AsRef<str>) -> Option<SceneId> {
         self.data.ids.get(key.as_ref()).and_then(|id| id.as_scene())
     }
