@@ -9,6 +9,7 @@ use {
         bitmap::{Bitmap, BitmapColor, BitmapFormat},
         bitmap_font::BitmapFont,
     },
+    anyhow::Context,
     bmfont::{BMFont, OrdinateOrientation},
     log::info,
     parking_lot::Mutex,
@@ -102,38 +103,35 @@ impl BlobAsset {
         let def_parent = src.parent().unwrap();
         let def_file = read_to_string(src).unwrap();
         let def = BMFont::new(Cursor::new(&def_file), OrdinateOrientation::TopToBottom).unwrap();
-        let pages = def
-            .pages()
-            .flat_map(|page| {
-                let path = def_parent.join(page);
-
-                // Bake the pixels
+        let mut pages = Vec::new();
+        for page in def.pages() {
+            let path = def_parent.join(page);
+            let (_, width, pixels) =
                 BitmapAsset::read_pixels(path, Some(BitmapSwizzle::RGBA), None)
-            })
-            .map(|(_, width, pixels)| {
-                // TODO: Handle format correctly!
-                let mut better_pixels = Vec::with_capacity(pixels.len());
-                for y in 0..pixels.len() / 4 / width as usize {
-                    for x in 0..width as usize {
-                        let g = pixels[y * width as usize * 4 + x * 4 + 1];
-                        let r = pixels[y * width as usize * 4 + x * 4 + 3];
-                        if 0xff == r {
-                            better_pixels.push(0xff);
-                            better_pixels.push(0x00);
-                        } else if 0xff == g {
-                            better_pixels.push(0x00);
-                            better_pixels.push(0xff);
-                        } else {
-                            better_pixels.push(0x00);
-                            better_pixels.push(0x00);
-                        }
+                    .context("Unable to read bitmap font page")?;
+
+            // TODO: Handle format correctly!
+            let mut better_pixels = Vec::with_capacity(pixels.len());
+            for y in 0..pixels.len() / 4 / width as usize {
+                for x in 0..width as usize {
+                    let g = pixels[y * width as usize * 4 + x * 4 + 1];
+                    let r = pixels[y * width as usize * 4 + x * 4 + 3];
+                    if 0xff == r {
+                        better_pixels.push(0xff);
+                        better_pixels.push(0x00);
+                    } else if 0xff == g {
+                        better_pixels.push(0x00);
+                        better_pixels.push(0xff);
+                    } else {
+                        better_pixels.push(0x00);
                         better_pixels.push(0x00);
                     }
+                    better_pixels.push(0x00);
                 }
+            }
 
-                (width, better_pixels)
-            })
-            .collect::<Vec<_>>();
+            pages.push((width, better_pixels));
+        }
 
         // Panic if any page is a different size (the format says they should all be the same)
         let mut page_size = None;
