@@ -155,12 +155,10 @@ pub struct MaterialInfo {
     pub emissive: Option<BitmapId>,
 
     /// A standard three channel normal map.
-    pub normal: BitmapId,
+    pub normal: Option<BitmapId>,
 
-    /// A two channel bitmap of the metalness (red) and roughness (green) PBR parameters.
-    ///
-    /// Optionally has a third channel (blue) for displacement.
-    pub params: BitmapId,
+    /// Optional RGBA material parameter map: metalness, roughness, displacement, ambient occlusion.
+    pub params: Option<BitmapId>,
 }
 
 pub trait Pak {

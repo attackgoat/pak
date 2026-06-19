@@ -10,7 +10,7 @@ use {
     },
     anyhow::Context as _,
     image::{DynamicImage, GenericImageView, GrayImage, imageops::FilterType},
-    log::info,
+    log::{info, warn},
     ordered_float::OrderedFloat,
     parking_lot::Mutex,
     serde::{
@@ -466,128 +466,119 @@ impl MaterialAsset {
             }
         };
 
-        let normal = match &self.normal {
-            Some(NormalRef::Asset(bitmap)) => {
-                let writer = writer.clone();
-                let project_dir = project_dir.as_ref().to_path_buf();
-                let mut bitmap = bitmap.clone().with_swizzle(BitmapSwizzle::RGB);
+        let normal = self
+            .normal
+            .as_ref()
+            .map(|normal| {
+                anyhow::Ok(match normal {
+                    NormalRef::Asset(bitmap) => {
+                        let writer = writer.clone();
+                        let project_dir = project_dir.as_ref().to_path_buf();
+                        let mut bitmap = bitmap.clone().with_swizzle(BitmapSwizzle::RGB);
 
-                rt.spawn_blocking(move || {
-                    bitmap
-                        .bake(&writer, &project_dir)
-                        .context("Unable to bake normal asset bitmap")
-                })
-            }
-            Some(NormalRef::Path(src)) => {
-                let bitmap = if is_toml(src) {
-                    let mut bitmap = Asset::read(src)
-                        .context("Unable to read normal bitmap asset")?
-                        .into_bitmap()
-                        .context("Source file should be a bitmap asset")?;
-                    bitmap.canonicalize(&project_dir, &src_dir);
-                    bitmap
-                } else {
-                    BitmapAsset::new(src)
-                };
-                let writer = writer.clone();
-                let project_dir = project_dir.as_ref().to_path_buf();
+                        rt.spawn_blocking(move || {
+                            Self::bake_normal_bitmap(
+                                &mut bitmap,
+                                &writer,
+                                &project_dir,
+                                None::<PathBuf>,
+                            )
+                            .context("Unable to bake normal asset bitmap")
+                        })
+                    }
+                    NormalRef::Path(src) => {
+                        let mut bitmap = if is_toml(src) {
+                            let mut bitmap = Asset::read(src)
+                                .context("Unable to read normal bitmap asset")?
+                                .into_bitmap()
+                                .context("Source file should be a bitmap asset")?;
+                            bitmap.canonicalize(&project_dir, &src_dir);
+                            bitmap
+                        } else {
+                            BitmapAsset::new(src)
+                        };
+                        let writer = writer.clone();
+                        let project_dir = project_dir.as_ref().to_path_buf();
 
-                rt.spawn_blocking(move || {
-                    bitmap
-                        .with_swizzle(BitmapSwizzle::RGB)
-                        .bake_from_path(&writer, &project_dir, Option::<PathBuf>::None)
-                        .context("Unable to bake normal asset bitmap from path")
-                })
-            }
-            None => {
-                let writer = writer.clone();
-
-                rt.spawn_blocking(move || -> anyhow::Result<BitmapId> {
-                    let normal_val = [OrderedFloat(0.5), OrderedFloat(0.5), OrderedFloat(1.0)];
-                    let mut writer = writer.lock();
-                    if let Some(id) = writer.ctx.get(&Asset::ColorRgb(normal_val)) {
-                        id.as_bitmap()
-                            .context("expected bitmap id for default normal")
-                    } else {
-                        let bitmap = Bitmap::new(
-                            BitmapColor::Linear,
-                            BitmapFormat::Rgb,
-                            1,
-                            1,
-                            [
-                                (normal_val[0].0 * u8::MAX as f32) as u8,
-                                (normal_val[1].0 * u8::MAX as f32) as u8,
-                                (normal_val[2].0 * u8::MAX as f32) as u8,
-                            ],
-                        );
-                        Ok(writer.push_bitmap(bitmap, None))
+                        rt.spawn_blocking(move || {
+                            bitmap = bitmap.with_swizzle(BitmapSwizzle::RGB);
+                            Self::bake_normal_bitmap(
+                                &mut bitmap,
+                                &writer,
+                                &project_dir,
+                                None::<PathBuf>,
+                            )
+                            .context("Unable to bake normal asset bitmap from path")
+                        })
                     }
                 })
-            }
-        };
+            })
+            .transpose()?;
 
-        let emissive = match &self.emissive {
-            Some(EmissiveRef::Asset(bitmap)) => {
-                let writer = writer.clone();
-                let project_dir = project_dir.as_ref().to_path_buf();
-                let mut bitmap = bitmap.clone().with_swizzle(BitmapSwizzle::RGB);
+        let emissive = self
+            .emissive
+            .as_ref()
+            .map(|emissive| {
+                anyhow::Ok(match emissive {
+                    EmissiveRef::Asset(bitmap) => {
+                        let writer = writer.clone();
+                        let project_dir = project_dir.as_ref().to_path_buf();
+                        let mut bitmap = bitmap.clone().with_swizzle(BitmapSwizzle::RGB);
 
-                rt.spawn_blocking(move || -> anyhow::Result<Option<BitmapId>> {
-                    bitmap
-                        .bake(&writer, &project_dir)
-                        .context("Unable to bake emissive asset bitmap")
-                        .map(Some)
-                })
-            }
-            Some(EmissiveRef::Path(src)) => {
-                let bitmap = if is_toml(src) {
-                    let mut bitmap = Asset::read(src)
-                        .context("Unable to read emissive bitmap asset")?
-                        .into_bitmap()
-                        .context("Source file should be a bitmap asset")?;
-                    bitmap.canonicalize(&project_dir, &src_dir);
-                    bitmap
-                } else {
-                    BitmapAsset::new(src)
-                };
-                let writer = writer.clone();
-                let project_dir = project_dir.as_ref().to_path_buf();
-
-                rt.spawn_blocking(move || -> anyhow::Result<Option<BitmapId>> {
-                    bitmap
-                        .with_swizzle(BitmapSwizzle::RGB)
-                        .bake_from_path(&writer, &project_dir, Option::<PathBuf>::None)
-                        .context("Unable to bake emissive asset bitmap from path")
-                        .map(Some)
-                })
-            }
-            &Some(EmissiveRef::Value(val)) => {
-                let writer = writer.clone();
-
-                rt.spawn_blocking(move || -> anyhow::Result<Option<BitmapId>> {
-                    let mut writer = writer.lock();
-                    Ok(Some(
-                        if let Some(id) = writer.ctx.get(&Asset::ColorRgb(val)) {
-                            id.as_bitmap().context("expected bitmap id for emissive")?
+                        rt.spawn_blocking(move || -> anyhow::Result<BitmapId> {
+                            bitmap
+                                .bake(&writer, &project_dir)
+                                .context("Unable to bake emissive asset bitmap")
+                        })
+                    }
+                    EmissiveRef::Path(src) => {
+                        let bitmap = if is_toml(src) {
+                            let mut bitmap = Asset::read(src)
+                                .context("Unable to read emissive bitmap asset")?
+                                .into_bitmap()
+                                .context("Source file should be a bitmap asset")?;
+                            bitmap.canonicalize(&project_dir, &src_dir);
+                            bitmap
                         } else {
-                            let bitmap = Bitmap::new(
-                                BitmapColor::Linear,
-                                BitmapFormat::Rgb,
-                                1,
-                                1,
-                                [
-                                    (val[0].0 * u8::MAX as f32) as u8,
-                                    (val[1].0 * u8::MAX as f32) as u8,
-                                    (val[2].0 * u8::MAX as f32) as u8,
-                                ],
-                            );
-                            writer.push_bitmap(bitmap, None)
-                        },
-                    ))
+                            BitmapAsset::new(src)
+                        };
+                        let writer = writer.clone();
+                        let project_dir = project_dir.as_ref().to_path_buf();
+
+                        rt.spawn_blocking(move || -> anyhow::Result<BitmapId> {
+                            bitmap
+                                .with_swizzle(BitmapSwizzle::RGB)
+                                .bake_from_path(&writer, &project_dir, Option::<PathBuf>::None)
+                                .context("Unable to bake emissive asset bitmap from path")
+                        })
+                    }
+                    EmissiveRef::Value(val) => {
+                        let writer = writer.clone();
+                        let val = *val;
+
+                        rt.spawn_blocking(move || -> anyhow::Result<BitmapId> {
+                            let mut writer = writer.lock();
+                            if let Some(id) = writer.ctx.get(&Asset::ColorRgb(val)) {
+                                id.as_bitmap().context("expected bitmap id for emissive")
+                            } else {
+                                let bitmap = Bitmap::new(
+                                    BitmapColor::Linear,
+                                    BitmapFormat::Rgb,
+                                    1,
+                                    1,
+                                    [
+                                        (val[0].0 * u8::MAX as f32) as u8,
+                                        (val[1].0 * u8::MAX as f32) as u8,
+                                        (val[2].0 * u8::MAX as f32) as u8,
+                                    ],
+                                );
+                                Ok(writer.push_bitmap(bitmap, None))
+                            }
+                        })
+                    }
                 })
-            }
-            None => rt.spawn_blocking(|| -> anyhow::Result<Option<BitmapId>> { Ok(None) }),
-        };
+            })
+            .transpose()?;
 
         let displacement = self.displacement.clone();
         let metal = self.metal.clone();
@@ -597,7 +588,9 @@ impl MaterialAsset {
             metal,
             rough,
         });
-        let params = {
+        let use_params =
+            self.displacement.is_some() || self.metal.is_some() || self.rough.is_some();
+        let params = use_params.then(|| {
             let project_dir = project_dir.as_ref().to_path_buf();
             let src_dir = src_dir.as_ref().to_path_buf();
             let writer = writer.clone();
@@ -605,21 +598,21 @@ impl MaterialAsset {
             let metal = self.metal.clone();
             let rough = self.rough.clone();
 
-            rt.spawn_blocking(move || -> anyhow::Result<BitmapId> {
+            rt.spawn_blocking(move || {
                 if let Some(id) = writer.lock().ctx.get(&params_asset) {
                     return id.as_bitmap().context("expected bitmap id for params");
                 }
 
                 let mut metal_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&metal, &project_dir, &src_dir)
+                    Self::scalar_ref_into_gray_image(&metal, &project_dir, &src_dir, 0)
                         .context("Unable to create metal bitmap buf")?,
                 );
                 let mut rough_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&rough, &project_dir, &src_dir)
+                    Self::scalar_ref_into_gray_image(&rough, &project_dir, &src_dir, u8::MAX)
                         .context("Unable to create rough bitmap buf")?,
                 );
                 let mut displacement_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&displacement, &project_dir, &src_dir)
+                    Self::scalar_ref_into_gray_image(&displacement, &project_dir, &src_dir, 0)
                         .context("Unable to create displacement bitmap buf")?,
                 );
 
@@ -664,22 +657,14 @@ impl MaterialAsset {
                         displacement_image.resize_to_fill(width, height, filter_ty);
                 }
 
-                let mut params = Vec::with_capacity(
-                    (2 * width * height) as usize
-                        + displacement
-                            .as_ref()
-                            .map(|_| width * height)
-                            .unwrap_or_default() as usize,
-                );
+                let mut params = Vec::with_capacity((4 * width * height) as usize);
 
                 for y in 0..height {
                     for x in 0..width {
                         params.push(metal_image.get_pixel(x, y).0[0]);
                         params.push(rough_image.get_pixel(x, y).0[0]);
-
-                        if displacement.is_some() {
-                            params.push(displacement_image.get_pixel(x, y).0[0]);
-                        }
+                        params.push(displacement_image.get_pixel(x, y).0[0]);
+                        params.push(u8::MAX);
                     }
                 }
 
@@ -690,26 +675,34 @@ impl MaterialAsset {
                 } else {
                     let params = Bitmap::new(
                         BitmapColor::Linear,
-                        if displacement.is_none() {
-                            BitmapFormat::Rg
-                        } else {
-                            BitmapFormat::Rgb
-                        },
+                        BitmapFormat::Rgba,
                         width,
-                        1,
+                        height,
                         params,
                     );
                     Ok(writer.push_bitmap(params, None))
                 }
             })
-        };
+        });
 
         let (color, emissive, normal, params) = rt
             .block_on(async move {
                 let color = color.await.context("color task failed")??;
-                let emissive = emissive.await.context("emissive task failed")??;
-                let normal = normal.await.context("normal task failed")??;
-                let params = params.await.context("params task failed")??;
+                let emissive = if let Some(emissive) = emissive {
+                    Some(emissive.await.context("emissive task failed")??)
+                } else {
+                    None
+                };
+                let normal = if let Some(normal) = normal {
+                    normal.await.context("normal task failed")??
+                } else {
+                    None
+                };
+                let params = if let Some(params) = params {
+                    Some(params.await.context("params task failed")??)
+                } else {
+                    None
+                };
 
                 anyhow::Ok((color, emissive, normal, params))
             })
@@ -723,10 +716,71 @@ impl MaterialAsset {
         })
     }
 
+    fn bake_normal_bitmap(
+        bitmap: &mut BitmapAsset,
+        writer: &Arc<Mutex<Writer>>,
+        project_dir: impl AsRef<Path>,
+        path: Option<impl AsRef<Path>>,
+    ) -> anyhow::Result<Option<BitmapId>> {
+        let bitmap_buf = bitmap
+            .as_bitmap_buf()
+            .context("Unable to create normal bitmap buf")?;
+
+        if Self::normal_bitmap_is_valid(&bitmap_buf) {
+            bitmap.bake_from_path(writer, project_dir, path).map(Some)
+        } else {
+            if let Some(src) = bitmap.src() {
+                warn!(
+                    "Invalid normal map {}; treating material as having no normal map",
+                    src.display()
+                );
+            } else {
+                warn!("Invalid inline normal map; treating material as having no normal map");
+            }
+
+            Ok(None)
+        }
+    }
+
+    fn normal_bitmap_is_valid(bitmap: &Bitmap) -> bool {
+        if bitmap.format().byte_len() < BitmapFormat::Rgb.byte_len() {
+            return false;
+        }
+
+        let mut avg = [0.0; 3];
+        let mut count = 0.0;
+        for pixel in bitmap.pixels().chunks(bitmap.format().byte_len()) {
+            avg[0] += pixel[0] as f32;
+            avg[1] += pixel[1] as f32;
+            avg[2] += pixel[2] as f32;
+            count += 1.0;
+        }
+
+        if count == 0.0 {
+            return false;
+        }
+
+        avg[0] /= count;
+        avg[1] /= count;
+        avg[2] /= count;
+
+        let decoded_avg = [
+            avg[0] / 255.0 * 2.0 - 1.0,
+            avg[1] / 255.0 * 2.0 - 1.0,
+            avg[2] / 255.0 * 2.0 - 1.0,
+        ];
+        let decoded_avg_len_sq = decoded_avg[0] * decoded_avg[0]
+            + decoded_avg[1] * decoded_avg[1]
+            + decoded_avg[2] * decoded_avg[2];
+
+        avg[2] > 16.0 && decoded_avg_len_sq > 0.01
+    }
+
     fn scalar_ref_into_gray_image(
         scalar: &Option<ScalarRef>,
         project_dir: impl AsRef<Path>,
         src_dir: impl AsRef<Path>,
+        default: u8,
     ) -> anyhow::Result<GrayImage> {
         let bitmap = match scalar {
             Some(ScalarRef::Asset(bitmap)) => bitmap
@@ -752,7 +806,7 @@ impl MaterialAsset {
                 1,
                 [(val.0 * u8::MAX as f32) as _],
             ),
-            None => Bitmap::new(BitmapColor::Linear, BitmapFormat::R, 1, 1, [128]),
+            None => Bitmap::new(BitmapColor::Linear, BitmapFormat::R, 1, 1, [default]),
         };
         let image = GrayImage::from_raw(bitmap.width(), bitmap.height(), bitmap.pixels().to_vec())
             .context("unable to create gray image from bitmap")?;

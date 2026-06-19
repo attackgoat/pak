@@ -6,7 +6,7 @@ use {
         mesh::{Joint, Mesh, Primitive, Skin, VertexType},
     },
     anyhow::Context,
-    glam::{EulerRot, Mat4, Quat, Vec3, vec3},
+    glam::{EulerRot, Mat4, Quat, Vec3, Vec4, vec3},
     gltf::{
         Buffer, Node,
         buffer::Data,
@@ -818,21 +818,14 @@ impl MeshAsset {
                     src.display()
                 );
 
-                if data.normals.is_empty() {
-                    data.generate_normals();
-                }
+                data.generate_tangents();
+            } else if !data.tangents_are_valid() {
+                warn!(
+                    "Invalid tangent data found: {} (will regenerate)",
+                    src.display()
+                );
 
-                if data.textures.0.is_empty() {
-                    // We must generate totally fake texture coordinates too
-                    data.textures
-                        .0
-                        .resize(data.positions.len(), Default::default());
-                }
-
-                data.tangents
-                    .extend(repeat_n([0.0; 4], data.positions.len()));
-
-                assert!(mikktspace::generate_tangents(&mut data));
+                data.generate_tangents();
             }
 
             // Main mesh part
@@ -1021,6 +1014,63 @@ impl VertexData {
 
     fn index(&self, face: usize, vert: usize) -> usize {
         self.indices[face * 3 + vert] as _
+    }
+
+    fn generate_tangents(&mut self) {
+        if self.normals.is_empty() {
+            self.generate_normals();
+        }
+
+        if self.textures.0.is_empty() {
+            self.textures
+                .0
+                .resize(self.positions.len(), Default::default());
+        }
+
+        self.tangents.clear();
+        self.tangents
+            .extend(repeat_n([0.0; 4], self.positions.len()));
+
+        assert!(mikktspace::generate_tangents(self));
+
+        self.repair_invalid_tangents();
+
+        debug_assert!(self.tangents_are_valid());
+    }
+
+    fn repair_invalid_tangents(&mut self) {
+        for (tangent, normal) in self.tangents.iter_mut().zip(&self.normals) {
+            if !Self::tangent_is_valid(*tangent, *normal) {
+                let normal = Vec3::from_array(*normal).normalize_or(Vec3::Y);
+                let axis = if normal.x.abs() < 0.9 {
+                    Vec3::X
+                } else {
+                    Vec3::Y
+                };
+                let fallback = normal.cross(axis).normalize_or(Vec3::Z);
+                *tangent = [fallback.x, fallback.y, fallback.z, 1.0];
+            }
+        }
+    }
+
+    fn tangent_is_valid(tangent: [f32; 4], normal: [f32; 3]) -> bool {
+        let normal = Vec3::from_array(normal);
+        let tangent_vec = Vec4::from_array(tangent).truncate();
+        let projected = tangent_vec - normal * tangent_vec.dot(normal);
+
+        tangent[3] != 0.0 && projected.length_squared() > 0.000001
+    }
+
+    fn tangents_are_valid(&self) -> bool {
+        if self.tangents.len() != self.positions.len() || self.normals.len() != self.positions.len()
+        {
+            return false;
+        }
+
+        self.tangents
+            .iter()
+            .zip(&self.normals)
+            .all(|(tangent, normal)| Self::tangent_is_valid(*tangent, *normal))
     }
 
     fn to_vertex_buf(&self) -> (VertexType, Vec<u8>) {
