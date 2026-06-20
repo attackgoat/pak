@@ -222,6 +222,18 @@ impl PakBuf {
     ///
     /// Includes the provided `src` parameter.
     pub fn source_files(src: impl AsRef<Path>) -> anyhow::Result<Box<[PathBuf]>> {
+        Self::source_files_with_dir(&src, parent(&src))
+    }
+
+    /// Returns the list of source files used to bake this pak, including all assets
+    /// specified inline or within scenes.
+    ///
+    /// Includes the provided `src` parameter. Asset globs and project-rooted paths are resolved
+    /// from `dir` instead of the content file's parent directory.
+    pub fn source_files_with_dir(
+        src: impl AsRef<Path>,
+        dir: impl AsRef<Path>,
+    ) -> anyhow::Result<Box<[PathBuf]>> {
         fn handle_bitmap(res: &mut BTreeSet<PathBuf>, bitmap: &BitmapAsset) {
             if let Some(src) = bitmap.src() {
                 res.insert(src.to_path_buf());
@@ -287,7 +299,7 @@ impl PakBuf {
         }
 
         // Load the source file into an Asset::Content instance
-        let src_dir = parent(&src);
+        let src_dir = dir.as_ref().to_path_buf();
         let content = Asset::read(&src)?
             .into_content()
             .context("Unable to read asset file")?;
@@ -364,10 +376,12 @@ impl PakBuf {
                                             handle_mesh(&mut res, mesh);
                                         }
                                         AssetRef::Path(path) => {
-                                            if res.insert(path.to_path_buf())
-                                                && let Some(mut mesh) =
-                                                    Asset::read(path)?.into_mesh()
-                                            {
+                                            if res.insert(path.to_path_buf()) && is_toml(path) {
+                                                let Some(mut mesh) = Asset::read(path)?.into_mesh()
+                                                else {
+                                                    continue;
+                                                };
+
                                                 mesh.canonicalize(&src_dir, parent(path));
                                                 handle_mesh(&mut res, &mesh);
                                             }
@@ -381,10 +395,13 @@ impl PakBuf {
                                             handle_material(&mut res, material);
                                         }
                                         AssetRef::Path(path) => {
-                                            if res.insert(path.to_path_buf())
-                                                && let Some(mut material) =
+                                            if res.insert(path.to_path_buf()) && is_toml(path) {
+                                                let Some(mut material) =
                                                     Asset::read(path)?.into_material()
-                                            {
+                                                else {
+                                                    continue;
+                                                };
+
                                                 material.canonicalize(&src_dir, parent(path));
                                                 handle_material(&mut res, &material);
                                             }
@@ -405,6 +422,18 @@ impl PakBuf {
     }
 
     pub fn bake(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> anyhow::Result<()> {
+        Self::bake_with_dir(&src, dst, parent(&src))
+    }
+
+    /// Bakes content into a `.pak` file using `dir` as the asset root.
+    ///
+    /// The content file `src` may live outside the asset root. Asset globs, project-rooted paths,
+    /// and generated pak keys are resolved from `dir`.
+    pub fn bake_with_dir(
+        src: impl AsRef<Path>,
+        dst: impl AsRef<Path>,
+        dir: impl AsRef<Path>,
+    ) -> anyhow::Result<()> {
         re_run_if_changed(&src);
 
         let rt = Arc::new(Runtime::new()?);
@@ -412,7 +441,7 @@ impl PakBuf {
         let writer: Arc<Mutex<Writer>> = Arc::new(Mutex::new(Default::default()));
 
         // Load the source file into an Asset::Content instance
-        let src_dir = parent(&src);
+        let src_dir = dir.as_ref().to_path_buf();
         let content = Asset::read(&src)?
             .into_content()
             .context("Unable to read asset file")?;

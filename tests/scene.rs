@@ -4,6 +4,9 @@ use {
     std::{io::Error, path::PathBuf, sync::LazyLock},
 };
 
+#[cfg(feature = "bake")]
+use std::fs;
+
 const EPSILON: f32 = 0.0001;
 
 static CARGO_MANIFEST_DIR: LazyLock<PathBuf> =
@@ -89,6 +92,34 @@ fn deserialize_scene_materials() -> Result<(), Error> {
         assert!(next.is_str());
         assert_eq!(next.as_str(), Some("banana"));
     }
+
+    Ok(())
+}
+
+#[cfg(feature = "bake")]
+#[test]
+fn bake_with_generated_content_file() -> Result<(), Error> {
+    let generated_dir =
+        std::env::temp_dir().join(format!("pak-generated-content-{}", std::process::id()));
+    fs::create_dir_all(&generated_dir)?;
+
+    let pak_src = generated_dir.join("pak.toml");
+    let pak_dst = generated_dir.join("scene.pak");
+    fs::write(
+        &pak_src,
+        "[content]\ncompression = 'snap'\n\n[[content.group]]\nassets = ['scene/scene.toml']\n",
+    )?;
+
+    PakBuf::bake_with_dir(&pak_src, &pak_dst, &*TESTS_DATA_DIR).unwrap();
+
+    let source_files = PakBuf::source_files_with_dir(&pak_src, &*TESTS_DATA_DIR).unwrap();
+    assert!(source_files.contains(&pak_src));
+    assert!(source_files.contains(&TESTS_DATA_DIR.join("scene/scene.toml")));
+    assert!(source_files.contains(&TESTS_DATA_DIR.join("scene/mesh_01.toml")));
+    assert!(source_files.contains(&TESTS_DATA_DIR.join("scene/material_01.toml")));
+
+    let mut pak = PakBuf::open(&pak_dst)?;
+    pak.read_scene("scene/scene")?;
 
     Ok(())
 }

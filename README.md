@@ -14,6 +14,21 @@ _Rust code_
 PakBuf::bake("game_art.toml", "game_art.pak")?;
 ```
 
+When generating bake inputs into a build/artifact directory, keep those generated files outside
+the source tree and pass the source asset root explicitly:
+
+```rust
+PakBuf::bake_with_dir(
+    out_dir.join("generated/game_art.toml"),
+    out_dir.join("game_art.pak"),
+    manifest_dir.join("assets"),
+)?;
+```
+
+The explicit directory is used for asset globs, project-rooted asset paths, and pak keys. The
+existing `PakBuf::bake(src, dst)` API remains available and uses the content file's parent
+directory as before.
+
 ## Main `.pak` Configuration File
 
 _`game_art.toml`:_
