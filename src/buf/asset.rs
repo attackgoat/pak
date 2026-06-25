@@ -51,7 +51,12 @@ pub enum Asset {
 impl Asset {
     /// Reads an asset file from disk.
     pub fn read(filename: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let str = read_to_string(&filename).context("Reading asset file as a string")?;
+        let str = read_to_string(&filename).with_context(|| {
+            format!(
+                "Reading asset file {} as a string",
+                filename.as_ref().display()
+            )
+        })?;
         let val: Schema = toml::from_str(&str).context("Parsing asset toml")?;
         let res = if let Some(mut anim) = val.anim {
             // If the source was not set, infer it from the toml filename
