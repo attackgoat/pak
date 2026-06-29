@@ -39,7 +39,10 @@ use {
         fs::create_dir_all,
         num::FpCategory,
         path::{Path, PathBuf},
-        sync::Arc,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
     },
     tokio::runtime::Runtime,
 };
@@ -131,9 +134,29 @@ fn parse_hex_scalar(val: &str) -> Option<u8> {
     }
 }
 
+static CARGO_WATCHES_ENABLED: AtomicBool = AtomicBool::new(true);
+
 fn re_run_if_changed(p: impl AsRef<Path>) {
-    if is_cargo_build() {
+    if is_cargo_build() && CARGO_WATCHES_ENABLED.load(Ordering::Relaxed) {
         println!("cargo:rerun-if-changed={}", p.as_ref().display());
+    }
+}
+
+struct CargoWatchesGuard {
+    enabled: bool,
+}
+
+impl CargoWatchesGuard {
+    fn set(enabled: bool) -> Self {
+        Self {
+            enabled: CARGO_WATCHES_ENABLED.swap(enabled, Ordering::Relaxed),
+        }
+    }
+}
+
+impl Drop for CargoWatchesGuard {
+    fn drop(&mut self) {
+        CARGO_WATCHES_ENABLED.store(self.enabled, Ordering::Relaxed);
     }
 }
 
@@ -434,6 +457,29 @@ impl PakBuf {
         dst: impl AsRef<Path>,
         dir: impl AsRef<Path>,
     ) -> anyhow::Result<()> {
+        Self::bake_with_dir_impl(src, dst, dir, true)
+    }
+
+    /// Bakes content into a `.pak` file using `dir` as the asset root without emitting Cargo
+    /// change watches.
+    ///
+    /// This is intended for build scripts that collect and emit their own precise watch list.
+    pub fn bake_with_dir_without_cargo_watches(
+        src: impl AsRef<Path>,
+        dst: impl AsRef<Path>,
+        dir: impl AsRef<Path>,
+    ) -> anyhow::Result<()> {
+        Self::bake_with_dir_impl(src, dst, dir, false)
+    }
+
+    fn bake_with_dir_impl(
+        src: impl AsRef<Path>,
+        dst: impl AsRef<Path>,
+        dir: impl AsRef<Path>,
+        cargo_watches: bool,
+    ) -> anyhow::Result<()> {
+        let _cargo_watches = CargoWatchesGuard::set(cargo_watches);
+
         re_run_if_changed(&src);
 
         let rt = Arc::new(Runtime::new()?);
