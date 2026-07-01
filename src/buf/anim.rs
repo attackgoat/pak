@@ -60,9 +60,14 @@ impl AnimationAsset {
         let name = self.name();
         let (doc, bufs, _) = import(src).context("Importing animation source")?;
 
+        let available_anim_names = doc
+            .animations()
+            .map(|anim| anim.name().unwrap_or("<unnamed>").to_owned())
+            .collect::<Vec<_>>();
+
         if log_enabled!(Debug) {
-            for anim in doc.animations() {
-                debug!("Found animation '{}'", anim.name().unwrap_or_default());
+            for name in &available_anim_names {
+                debug!("Found animation '{}'", name);
             }
         }
 
@@ -71,7 +76,25 @@ impl AnimationAsset {
             anim = doc.animations().next();
         }
 
-        let anim = anim.ok_or(anyhow::Error::msg("no animation found"))?;
+        let anim = anim.ok_or_else(|| {
+            let available = if available_anim_names.is_empty() {
+                "none".to_owned()
+            } else {
+                available_anim_names.join(", ")
+            };
+
+            if let Some(name) = name {
+                anyhow::anyhow!(
+                    "animation '{name}' not found in {}; available animations: {available}",
+                    src.display()
+                )
+            } else {
+                anyhow::anyhow!(
+                    "no animation found in {}; available animations: {available}",
+                    src.display()
+                )
+            }
+        })?;
         let exclude = self
             .exclude()
             .unwrap_or_default()

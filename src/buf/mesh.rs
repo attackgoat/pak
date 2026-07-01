@@ -5,7 +5,7 @@ use {
         index::IndexBuffer,
         mesh::{Joint, Mesh, Primitive, Skin, VertexType},
     },
-    anyhow::Context,
+    anyhow::{Context, bail},
     glam::{EulerRot, Mat4, Quat, Vec3, Vec4, vec3},
     gltf::{
         Buffer, Node,
@@ -16,7 +16,8 @@ use {
     log::{info, trace, warn},
     meshopt::{
         SimplifyOptions, VertexDataAdapter, optimize_overdraw_in_place,
-        optimize_vertex_cache_in_place, quantize_unorm, remap_index_buffer, simplify, unstripify,
+        optimize_vertex_cache_in_place, quantize_unorm, remap_index_buffer, simplify,
+        simplify_sloppy, unstripify,
     },
     ordered_float::OrderedFloat,
     parking_lot::Mutex,
@@ -57,6 +58,7 @@ pub struct MeshAsset {
     lod: Option<bool>,
     lod_lock_border: Option<bool>,
     lod_target_error: Option<OrderedFloat<f32>>,
+    max_index: Option<MaxIndex>,
     min_lod_triangles: Option<usize>,
 
     /// The artist-provided name of a mesh within the source file.
@@ -93,6 +95,7 @@ impl MeshAsset {
             lod: None,
             lod_lock_border: None,
             lod_target_error: None,
+            max_index: None,
             min_lod_triangles: None,
             name: None,
             normals: None,
@@ -259,6 +262,11 @@ impl MeshAsset {
             .0
     }
 
+    /// The highest index value allowed in baked mesh LODs.
+    pub fn max_index(&self) -> Option<u32> {
+        self.max_index.map(MaxIndex::value)
+    }
+
     /// The number of triangles below which further level of details are not calculated.
     ///
     /// Note: The last level of detail may have no less than half this number of triangles.
@@ -386,6 +394,137 @@ impl MeshAsset {
         }
 
         Ok(())
+    }
+
+    fn compact_mesh_indices(
+        indices: &mut [u32],
+        vertex_buf: &[u8],
+        vertex_stride: usize,
+    ) -> anyhow::Result<(Vec<u8>, usize)> {
+        let vertex_count = vertex_buf.len() / vertex_stride;
+        let mut remap = vec![None; vertex_count];
+        let mut compact = Vec::new();
+
+        for idx in indices {
+            let src = *idx as usize;
+            if src >= vertex_count {
+                bail!("mesh index {} exceeds vertex count {}", src, vertex_count);
+            }
+
+            let dst = match remap[src] {
+                Some(dst) => dst,
+                None => {
+                    let dst = compact.len() / vertex_stride;
+                    let offset = src * vertex_stride;
+                    compact.extend_from_slice(&vertex_buf[offset..offset + vertex_stride]);
+                    remap[src] = Some(dst as u32);
+                    dst as u32
+                }
+            };
+
+            *idx = dst;
+        }
+
+        let compact_count = compact.len() / vertex_stride;
+        Ok((compact, compact_count))
+    }
+
+    fn reduce_mesh_to_max_index(
+        &self,
+        indices: &mut Vec<u32>,
+        vertex_buf: &mut Vec<u8>,
+        vertex_stride: usize,
+    ) -> anyhow::Result<()> {
+        let Some(max_index) = self.max_index() else {
+            return Ok(());
+        };
+
+        if indices.iter().copied().max().unwrap_or_default() <= max_index {
+            return Ok(());
+        }
+
+        if max_index < 2 {
+            bail!("max-index must allow at least 3 vertices");
+        }
+
+        let max_vertices = max_index as usize + 1;
+
+        let mut compacted_indices = indices.clone();
+        let (compacted_vertices, compacted_vertex_count) =
+            Self::compact_mesh_indices(&mut compacted_indices, vertex_buf, vertex_stride)?;
+        if compacted_vertex_count <= max_vertices {
+            *indices = compacted_indices;
+            *vertex_buf = compacted_vertices;
+            return Ok(());
+        }
+
+        let target_error = self.lod_target_error();
+        let opts = if self.lod_lock_border() {
+            SimplifyOptions::LockBorder
+        } else {
+            SimplifyOptions::None
+        };
+
+        let fits = |candidate: Vec<u32>| -> anyhow::Result<Option<(Vec<u32>, Vec<u8>)>> {
+            if candidate.len() < 3 {
+                return Ok(None);
+            }
+
+            let mut candidate = candidate;
+            let (candidate_vertices, candidate_vertex_count) =
+                Self::compact_mesh_indices(&mut candidate, vertex_buf, vertex_stride)?;
+
+            if candidate_vertex_count <= max_vertices {
+                Ok(Some((candidate, candidate_vertices)))
+            } else {
+                Ok(None)
+            }
+        };
+
+        let initial_target = (indices.len() / 2).min(max_vertices * 3).max(3);
+        let mut target_count = initial_target - (initial_target % 3);
+        if target_count < 3 {
+            target_count = 3;
+        }
+
+        while target_count >= 3 {
+            let vertices = VertexDataAdapter::new(vertex_buf, vertex_stride, 0)
+                .context("creating vertex data adapter for index-limited simplification")?;
+            let candidate = simplify(indices, &vertices, target_count, target_error, opts, None);
+
+            if let Some((candidate, candidate_vertices)) = fits(candidate)? {
+                *indices = candidate;
+                *vertex_buf = candidate_vertices;
+                return Ok(());
+            }
+
+            if target_count == 3 {
+                break;
+            }
+
+            target_count = ((target_count / 2) / 3).max(1) * 3;
+        }
+
+        let mut target_count = initial_target;
+        while target_count >= 3 {
+            let vertices = VertexDataAdapter::new(vertex_buf, vertex_stride, 0)
+                .context("creating vertex data adapter for index-limited sloppy simplification")?;
+            let candidate = simplify_sloppy(indices, &vertices, target_count, target_error, None);
+
+            if let Some((candidate, candidate_vertices)) = fits(candidate)? {
+                *indices = candidate;
+                *vertex_buf = candidate_vertices;
+                return Ok(());
+            }
+
+            if target_count == 3 {
+                break;
+            }
+
+            target_count = ((target_count / 2) / 3).max(1) * 3;
+        }
+
+        bail!("unable to reduce mesh to max-index {max_index}")
     }
 
     /// Determines how much the optimization algorithm can compromise the vertex cache hit ratio.
@@ -834,6 +973,7 @@ impl MeshAsset {
                 let vertex_stride = vertex.stride();
 
                 self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride)?;
+                self.reduce_mesh_to_max_index(&mut data.indices, &mut vertex_buf, vertex_stride)?;
 
                 let mut primitive = Primitive::new(material, &vertex_buf, vertex);
 
@@ -850,6 +990,7 @@ impl MeshAsset {
                 let vertex_stride = vertex.stride();
 
                 self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride)?;
+                self.reduce_mesh_to_max_index(&mut data.indices, &mut vertex_buf, vertex_stride)?;
 
                 let mut primitive = Primitive::new(material, &vertex_buf, vertex);
 
@@ -895,6 +1036,78 @@ impl Canonicalize for MeshAsset {
         if let Some(src) = &mut self.src {
             self.src = Some(Self::canonicalize_project_path(project_dir, src_dir, src))
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum MaxIndex {
+    U8,
+    U16,
+    Exact(u32),
+}
+
+impl MaxIndex {
+    fn value(self) -> u32 {
+        match self {
+            Self::U8 => u8::MAX as u32,
+            Self::U16 => u16::MAX as u32,
+            Self::Exact(value) => value,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MaxIndex {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct MaxIndexVisitor;
+
+        impl Visitor<'_> for MaxIndexVisitor {
+            type Value = MaxIndex;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                formatter.write_str("u8, u16, or an exact maximum index value")
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                let value = u32::try_from(value)
+                    .map_err(|_| E::custom("max-index must be between 0 and u32::MAX"))?;
+                Ok(MaxIndex::Exact(value))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                let value = u32::try_from(value)
+                    .map_err(|_| E::custom("max-index must be between 0 and u32::MAX"))?;
+                Ok(MaxIndex::Exact(value))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value.to_ascii_lowercase().as_str() {
+                    "u8" => Ok(MaxIndex::U8),
+                    "u16" => Ok(MaxIndex::U16),
+                    _ => Err(E::unknown_variant(value, &["u8", "u16"])),
+                }
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                self.visit_str(&value)
+            }
+        }
+
+        deserializer.deserialize_any(MaxIndexVisitor)
     }
 }
 
@@ -1220,5 +1433,46 @@ impl mikktspace::Geometry for VertexData {
     fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
         let idx = self.index(face, vert);
         self.tangents[idx] = tangent;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MaxIndex, MeshAsset};
+
+    #[test]
+    fn max_index_deserializes_enum_variants() {
+        let mesh: MeshAsset =
+            toml::from_str("max-index = 'u8'").expect("max-index should accept u8 variant");
+        assert_eq!(mesh.max_index, Some(MaxIndex::U8));
+        assert_eq!(mesh.max_index(), Some(u8::MAX as u32));
+
+        let mesh: MeshAsset = toml::from_str("max-index = 'U16'")
+            .expect("max-index should accept u16 variant case-insensitively");
+        assert_eq!(mesh.max_index, Some(MaxIndex::U16));
+        assert_eq!(mesh.max_index(), Some(u16::MAX as u32));
+    }
+
+    #[test]
+    fn max_index_deserializes_exact_value() {
+        let mesh: MeshAsset =
+            toml::from_str("max-index = 4095").expect("max-index should accept exact values");
+        assert_eq!(mesh.max_index, Some(MaxIndex::Exact(4095)));
+        assert_eq!(mesh.max_index(), Some(4095));
+    }
+
+    #[test]
+    fn compact_mesh_indices_rewrites_sparse_indices() {
+        let vertex_stride = 4;
+        let vertex_buf = [10, 0, 0, 0, 20, 0, 0, 0, 30, 0, 0, 0, 40, 0, 0, 0];
+        let mut indices = vec![3, 1, 3, 2, 1, 3];
+
+        let (compact, vertex_count) =
+            MeshAsset::compact_mesh_indices(&mut indices, &vertex_buf, vertex_stride)
+                .expect("mesh should compact");
+
+        assert_eq!(indices, [0, 1, 0, 2, 1, 0]);
+        assert_eq!(vertex_count, 3);
+        assert_eq!(compact, [40, 0, 0, 0, 20, 0, 0, 0, 30, 0, 0, 0]);
     }
 }

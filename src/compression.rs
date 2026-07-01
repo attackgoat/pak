@@ -66,7 +66,7 @@ impl Default for Compression {
 #[cfg(all(test, feature = "bake"))]
 mod tests {
     use {
-        super::Compression,
+        super::{BrotliParams, Compression},
         std::io::{Read, Write},
     };
 

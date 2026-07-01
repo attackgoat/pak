@@ -54,7 +54,10 @@ All fields are optional.
 
 Item | Description
 ---- | -----------
-compression | `'snap'` or `'brotli'` or unspecified (_no compression_)
+compression | `'snap'`, `'brotli'`, or unspecified (_no compression_).
+buffer-size | (_`unsigned integer`_) Brotli buffer size. Used only when `compression = 'brotli'`. Defaults to `4096`.
+quality | (_`unsigned integer`_) Brotli compression quality. Used only when `compression = 'brotli'`. Defaults to `8`.
+window-size | (_`unsigned integer`_) Brotli window size. Used only when `compression = 'brotli'`. Defaults to `22`.
 
 ### _`[content.group]` Schema_
 
@@ -107,6 +110,8 @@ _Example, `large-goblet.toml`:_
 ```toml
 [mesh]
 src = 'some_file.gltf'
+lod = true
+max-index = 'u16'
 ```
 
 ### _`[mesh]` Schema_
@@ -115,15 +120,17 @@ All fields are optional.
 
 Item | Description
 ---- | -----------
+`data` | File path to an optional unstructured byte blob associated with this mesh.
 `src` | File path to a `.gltf` or `.glb` mesh. May be relative to the `[mesh]` TOML file or absolute where the root is the same folder as the `[content]` TOML file. When unspecified, attempts to load a mesh with the same name as the `[mesh]` TOML file.
 `euler` | (_`string`_) Order of operations applied to 3-channel `rotation` values (example: `xyz`, `zyx`, _etc_).
 `flip-x` | (_`boolean`_) When set, flips the X component of all position vertices.
 `flip-y` | (_`boolean`_) When set, flips the Y component of all position vertices.
 `flip-z` | (_`boolean`_) When set, flips the Z component of all position vertices.
-`ignore-skin` | (_`boolean`_) When set, any embedded boke structure data is ignored.
+`ignore-skin` | (_`boolean`_) When set, any embedded skin data is ignored.
 `lod` | (_`boolean`_) When set, generates level of detail meshes using MeshOpt.
 `lod-lock-border` | (_`boolean`_) When set, tells MeshOpt to generate level of detail meshes using only interior vertices.
 `lod-target-error` | (_`float`_) When set, tells MeshOpt to attempt to hit a certain error threshold between level of detail meshes.
+`max-index` | (_`string` or `unsigned integer`_) When set, reduces and compacts the baked mesh so no LOD references an index greater than this value. Accepts `'u8'`, `'u16'`, or an exact value such as `4095` or `65535`. Uses MeshOpt simplification and may reduce the base mesh before generating LODs.
 `min-lod-triangles` | (_`unsigned integer`_) When set, tells MeshOpt to stop generating level of detail meshes below this threshold.
 `name` | (_`string`_) When set, imports this named mesh. Otherwise, imports the first mesh.
 `normals` | (_`boolean`_) When set (default `true`), imports geometry normals.
@@ -131,10 +138,31 @@ Item | Description
 `optimize` | (_`boolean`_) When set (default `true`), reorders geometry indices and vertices using MeshOpt.
 `overdraw-threshold` | (_`float`_) When set (default `1.05`), controls MeshOpt optimization.
 `rotation` | (_array of `float` with a length of 3 or 4_) When set, the vector (XYZ) or quaternion (XYZW) rotation applied to geometry.
-`scale` | (_array of `float` with a length of 3_) When set, the vector (XYZ) scale applied to geometry.
+`scale` | (_`float` or array of `float` with a length of 3_) When set, the uniform or vector (XYZ) scale applied to geometry.
 `scene-name` | (_`string`_) When set, controls which GLTF scene is imported from the source file.
-`shadow` | (_`boolean`_) When set, imports position-only geometry optimized for use in shadow or other similiar rendering techniques.
+`shadow` | (_`boolean`_) When set, imports position-only geometry optimized for use in shadow or other similar rendering techniques.
 `tangents` | (_`boolean`_) When set (default `true`), imports geometry tangents. If missing, tangents are generated using the MikkTSpace algorithm
+
+`max-index` is a hard cap on the maximum index value, not just a triangle-count target. If a mesh initially needs indices above the cap, baking simplifies the mesh and compacts the vertex buffer so `IndexBuffer` can store the result as `u8` or `u16` where possible. Lower generated LODs are derived from the capped mesh.
+
+## Raw Blobs
+
+Arbitrary files may be baked as raw byte blobs.
+
+_Example, `nav-data.toml`:_
+
+```toml
+[blob]
+src = 'nav-data.bin'
+```
+
+### _`[blob]` Schema_
+
+All fields are optional.
+
+Item | Description
+---- | -----------
+`src` | File path to the blob. May be relative to the `[blob]` TOML file or absolute where the root is the same folder as the `[content]` TOML file. When unspecified, attempts to load a blob with the same name as the `[blob]` TOML file.
 
 ## PBR Materials
 
@@ -153,7 +181,7 @@ color = 'my-texture.png'
 
 Item | Description
 ---- | -----------
-`color` | Hex string, path string, inline bitmap asset, or seqeunce.
+`color` | Hex string, path string, inline bitmap asset, or sequence.
 `displacement` | Hex string, path string, inline bitmap asset, or floating point value.
 `double-sided` | (`boolean`_) When set, indicates the material is double-sided.
 `emissive` | Hex string, path string, inline bitmap asset, or array of three floating point values.
@@ -163,7 +191,7 @@ Item | Description
 
 ## Bitmaps
 
-Variable-channel bitap data (stored raw and compressed using the setting of the `[content]` compression).
+Variable-channel bitmap data (stored raw and compressed using the setting of the `[content]` compression).
 
 _Example, `ui-skin-001.toml`:_
 
@@ -180,7 +208,7 @@ Item | Description
 ---- | -----------
 `src` | File path to an image. May be relative to the `[bitmap]` TOML file or absolute where the root is the same folder as the `[content]` TOML file. When unspecified, attempts to load a bitmap with the same name as the `[bitmap]` TOML file.
 `mip-levels` | (_`boolean` or `non-zero unsigned integer`_) When set (default `1`), allows configuration of the desired count of mip levels to be stored with a bitmap for later use by a program.
-`resize` | (_`unsigned integer`_) When set, the image is uniformally resized to have this maximum dimension.
+`resize` | (_`unsigned integer`_) When set, the image is uniformly resized to have this maximum dimension.
 `color` | (_`string`_) When set (default `srgb`), the image is imported as either `linear` or `srgb` color data.
 `swizzle` | (_`string`_) When set (default `rgba` for four channel images), the specified image color channels are imported in the given order (example: `r`, `rg` or `bgr`).
 
@@ -300,6 +328,41 @@ data.z-near = 1.0
 data.z-far = 200.0
 data.fov-y = 0.349344402551651
 ```
+
+### _`[scene]` Schema_
+
+All fields are optional.
+
+Item | Description
+---- | -----------
+`[[scene.geometry]]` | Inline indexed triangle geometry tables.
+`[[scene.ref]]` | Scene reference tables for meshes, materials, transforms, tags, and custom data.
+
+### _`[[scene.geometry]]` Schema_
+
+Item | Description
+---- | -----------
+`id` | (_`string`_) Optional identifier. It is not required to be unique.
+`euler` | (_`string`_) Order of operations applied to 3-channel `rotation` values (example: `xyz`, `zyx`, _etc_).
+`indices` | (_array of `unsigned integer`_) Triangle index list. Length must be a multiple of 3.
+`rotation` | (_array of `float` with a length of 3 or 4_) Euler XYZ degrees or quaternion XYZW rotation.
+`translation` | (_array of `float` with a length of 3_) Translation applied to the geometry.
+`vertices` | (_array of `float`_) Packed XYZ position values.
+`tags` | (_array of `string`_) Program-specific tags. Tags are trimmed, lowercased, and sorted during baking.
+`data` | TOML table of program-specific values. Values may be booleans, strings, i32 integers, floats, or arrays of those values.
+
+### _`[[scene.ref]]` Schema_
+
+Item | Description
+---- | -----------
+`id` | (_`string`_) Optional identifier. It is not required to be unique.
+`euler` | (_`string`_) Order of operations applied to 3-channel `rotation` values (example: `xyz`, `zyx`, _etc_).
+`materials` | (_array_) Material asset references. Each entry may be a material TOML path, image path, or inline material asset.
+`mesh` | Mesh asset reference. May be a mesh TOML path, `.gltf`/`.glb` path, or inline mesh asset.
+`rotation` | (_array of `float` with a length of 3 or 4_) Euler XYZ degrees or quaternion XYZW rotation.
+`translation` | (_array of `float` with a length of 3_) Translation applied to the reference.
+`tags` | (_array of `string`_) Program-specific tags. Tags are trimmed, lowercased, and sorted during baking.
+`data` | TOML table of program-specific values. Values may be booleans, strings, i32 integers, floats, or arrays of those values.
 
 ## Tests
 
