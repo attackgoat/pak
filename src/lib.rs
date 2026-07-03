@@ -465,8 +465,11 @@ impl Pak for PakBuf {
 
         trace!("Deserializing animation {}", id.0);
 
-        let (pos, len) = self.data.anims[id.0]
-            .pos_len()
+        let (pos, len) = self
+            .data
+            .anims
+            .get(id.0)
+            .and_then(DataRef::pos_len)
             .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
         self.deserialize(pos, len)
     }
@@ -477,8 +480,11 @@ impl Pak for PakBuf {
 
         trace!("Deserializing bitmap font {}", id.0);
 
-        let (pos, len) = self.data.bitmap_fonts[id.0]
-            .pos_len()
+        let (pos, len) = self
+            .data
+            .bitmap_fonts
+            .get(id.0)
+            .and_then(DataRef::pos_len)
             .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
         self.deserialize(pos, len)
     }
@@ -489,8 +495,11 @@ impl Pak for PakBuf {
 
         trace!("Deserializing bitmap {}", id.0);
 
-        let (pos, len) = self.data.bitmaps[id.0]
-            .pos_len()
+        let (pos, len) = self
+            .data
+            .bitmaps
+            .get(id.0)
+            .and_then(DataRef::pos_len)
             .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
         self.deserialize(pos, len)
     }
@@ -501,8 +510,11 @@ impl Pak for PakBuf {
 
         trace!("Deserializing blob {}", id.0);
 
-        let (pos, len) = self.data.blobs[id.0]
-            .pos_len()
+        let (pos, len) = self
+            .data
+            .blobs
+            .get(id.0)
+            .and_then(DataRef::pos_len)
             .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
         self.deserialize(pos, len)
     }
@@ -520,8 +532,11 @@ impl Pak for PakBuf {
 
         trace!("Deserializing mesh {}", id.0);
 
-        let (pos, len) = self.data.meshes[id.0]
-            .pos_len()
+        let (pos, len) = self
+            .data
+            .meshes
+            .get(id.0)
+            .and_then(DataRef::pos_len)
             .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
         self.deserialize(pos, len)
     }
@@ -532,8 +547,11 @@ impl Pak for PakBuf {
 
         trace!("Deserializing scene {}", id.0);
 
-        let (pos, len) = self.data.scenes[id.0]
-            .pos_len()
+        let (pos, len) = self
+            .data
+            .scenes
+            .get(id.0)
+            .and_then(DataRef::pos_len)
             .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
         self.deserialize(pos, len)
     }
@@ -582,5 +600,64 @@ impl Seek for PakFile {
 impl Stream for Cursor<&'static [u8]> {
     fn open(&self) -> Result<Box<dyn Stream>, Error> {
         Ok(Box::new(Cursor::new(*self.get_ref())))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_pak() -> PakBuf {
+        PakBuf {
+            compression: None,
+            data: Data::default(),
+            reader: Box::new(Cursor::new(&[] as &'static [u8])),
+        }
+    }
+
+    #[test]
+    fn invalid_read_ids_return_invalid_input() {
+        assert_eq!(
+            empty_pak()
+                .read_animation_id(AnimationId(0))
+                .expect_err("invalid animation id should error")
+                .kind(),
+            ErrorKind::InvalidInput,
+        );
+        assert_eq!(
+            empty_pak()
+                .read_bitmap_font_id(BitmapFontId(0))
+                .expect_err("invalid bitmap font id should error")
+                .kind(),
+            ErrorKind::InvalidInput,
+        );
+        assert_eq!(
+            empty_pak()
+                .read_bitmap_id(BitmapId(0))
+                .expect_err("invalid bitmap id should error")
+                .kind(),
+            ErrorKind::InvalidInput,
+        );
+        assert_eq!(
+            empty_pak()
+                .read_blob_id(BlobId(0))
+                .expect_err("invalid blob id should error")
+                .kind(),
+            ErrorKind::InvalidInput,
+        );
+        assert_eq!(
+            empty_pak()
+                .read_mesh_id(MeshId(0))
+                .expect_err("invalid mesh id should error")
+                .kind(),
+            ErrorKind::InvalidInput,
+        );
+        assert_eq!(
+            empty_pak()
+                .read_scene_id(SceneId(0))
+                .expect_err("invalid scene id should error")
+                .kind(),
+            ErrorKind::InvalidInput,
+        );
     }
 }

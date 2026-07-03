@@ -92,7 +92,7 @@ impl ColorRef {
                 let mut val: Vec<f32> = Deserialize::deserialize(SeqAccessDeserializer::new(seq))?;
                 for val in &val {
                     match val.classify() {
-                        FpCategory::Zero | FpCategory::Normal if *val <= 1.0 => (),
+                        FpCategory::Zero | FpCategory::Normal if (0.0..=1.0).contains(val) => (),
                         _ => {
                             return Err(Error::custom(
                                 "expected a color value between 0.0 and 1.0",
@@ -215,7 +215,7 @@ impl EmissiveRef {
                 let val: Vec<f32> = Deserialize::deserialize(SeqAccessDeserializer::new(seq))?;
                 for val in &val {
                     match val.classify() {
-                        FpCategory::Zero | FpCategory::Normal if *val <= 1.0 => (),
+                        FpCategory::Zero | FpCategory::Normal if (0.0..=1.0).contains(val) => (),
                         _ => {
                             return Err(Error::custom(
                                 "expected a color value between 0.0 and 1.0",
@@ -974,7 +974,7 @@ impl ScalarRef {
             {
                 let val = val as f32;
                 match val.classify() {
-                    FpCategory::Zero | FpCategory::Normal if val <= 1.0 => (),
+                    FpCategory::Zero | FpCategory::Normal if (0.0..=1.0).contains(&val) => (),
                     _ => return Err(E::custom("expected a scalar value between 0.0 and 1.0")),
                 }
 
@@ -1017,5 +1017,34 @@ impl Canonicalize for ScalarRef {
             Self::Path(src) => *src = Self::canonicalize_project_path(project_dir, src_dir, &src),
             _ => (),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MaterialAsset;
+
+    #[test]
+    fn rejects_negative_color_values() {
+        let err = toml::from_str::<MaterialAsset>("color = [-0.1, 0.0, 1.0]")
+            .expect_err("negative color channel should be rejected");
+
+        assert!(err.to_string().contains("between 0.0 and 1.0"));
+    }
+
+    #[test]
+    fn rejects_negative_emissive_values() {
+        let err = toml::from_str::<MaterialAsset>("emissive = [0.0, -0.1, 1.0]")
+            .expect_err("negative emissive channel should be rejected");
+
+        assert!(err.to_string().contains("between 0.0 and 1.0"));
+    }
+
+    #[test]
+    fn rejects_negative_scalar_values() {
+        let err = toml::from_str::<MaterialAsset>("metal = -0.1")
+            .expect_err("negative scalar value should be rejected");
+
+        assert!(err.to_string().contains("between 0.0 and 1.0"));
     }
 }

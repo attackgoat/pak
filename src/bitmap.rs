@@ -80,7 +80,7 @@ impl Bitmap {
             .flat_map(move |src| {
                 let mut dst = [0; 4];
                 dst[0..stride].copy_from_slice(&src[0..stride]);
-                dst.into_iter()
+                dst.into_iter().take(dst_fmt.byte_len())
             })
     }
 
@@ -91,6 +91,39 @@ impl Bitmap {
 
     pub fn width(&self) -> u32 {
         self.width
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::bitmap::{Bitmap, BitmapColor, BitmapFormat};
+
+    #[test]
+    fn pixels_as_format_drops_extra_channels() {
+        let bitmap = Bitmap::new(
+            BitmapColor::Srgb,
+            BitmapFormat::Rgba,
+            2,
+            1,
+            [1, 2, 3, 4, 5, 6, 7, 8],
+        );
+
+        let pixels = bitmap
+            .pixels_as_format(BitmapFormat::Rgb)
+            .collect::<Vec<_>>();
+
+        assert_eq!(pixels, [1, 2, 3, 5, 6, 7]);
+    }
+
+    #[test]
+    fn pixels_as_format_pads_missing_channels() {
+        let bitmap = Bitmap::new(BitmapColor::Srgb, BitmapFormat::R, 2, 1, [1, 2]);
+
+        let pixels = bitmap
+            .pixels_as_format(BitmapFormat::Rgb)
+            .collect::<Vec<_>>();
+
+        assert_eq!(pixels, [1, 0, 0, 2, 0, 0]);
     }
 }
 
