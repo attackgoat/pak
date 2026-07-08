@@ -366,16 +366,19 @@ impl Scene {
                     .into_iter()
                     .map(|tag| st.get(tag))
                     .collect::<Box<_>>();
-                tags.sort();
+                tags.sort_by(|a, b| st.str(*a).cmp(st.str(*b)));
+
+                let mut data = geometry
+                    .data
+                    .into_iter()
+                    .map(|(key, value)| (st.get(key), Data::parse(value, &mut st)))
+                    .collect::<Box<_>>();
+                data.sort_by(|(a, _), (b, _)| st.str(*a).cmp(st.str(*b)));
 
                 let index_buf = IndexBuffer::new(&geometry.indices)?;
 
                 anyhow::Ok(Geometry {
-                    data: geometry
-                        .data
-                        .into_iter()
-                        .map(|(key, value)| (st.get(key), Data::parse(value, &mut st)))
-                        .collect(),
+                    data,
                     id: geometry.id.map(|id| st.get(id)),
                     index_buf,
                     rotation: geometry.rotation,
@@ -394,14 +397,17 @@ impl Scene {
                     .into_iter()
                     .map(|tag| st.get(tag))
                     .collect::<Box<_>>();
-                tags.sort();
+                tags.sort_by(|a, b| st.str(*a).cmp(st.str(*b)));
+
+                let mut data = reference
+                    .data
+                    .into_iter()
+                    .map(|(key, value)| (st.get(key), Data::parse(value, &mut st)))
+                    .collect::<Box<_>>();
+                data.sort_by(|(a, _), (b, _)| st.str(*a).cmp(st.str(*b)));
 
                 Reference {
-                    data: reference
-                        .data
-                        .into_iter()
-                        .map(|(key, value)| (st.get(key), Data::parse(value, &mut st)))
-                        .collect(),
+                    data,
                     id: reference.id.map(|id| st.get(id)),
                     mesh: reference.mesh,
                     materials: reference.materials.into_boxed_slice(),
@@ -563,5 +569,65 @@ impl StringTable {
 
             res
         })
+    }
+
+    fn str(&self, idx: StringIndex) -> &str {
+        self.strs
+            .get(idx as usize)
+            .map(String::as_str)
+            .unwrap_or_default()
+    }
+}
+
+#[cfg(all(test, feature = "bake"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reference_lookup_does_not_depend_on_string_index_order() {
+        let scene = Scene::new(
+            [],
+            [ReferenceData {
+                data: vec![
+                    ("z".to_owned(), DataData::Number(1)),
+                    ("a".to_owned(), DataData::Number(2)),
+                ],
+                tags: vec!["z".to_owned(), "a".to_owned()],
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+        let reference = scene.refs().next().unwrap();
+
+        assert_eq!(reference.data("z").unwrap().as_i32(), Some(1));
+        assert_eq!(reference.data("a").unwrap().as_i32(), Some(2));
+        assert!(reference.has_tag("z"));
+        assert!(reference.has_tag("a"));
+    }
+
+    #[test]
+    fn geometry_lookup_does_not_depend_on_string_index_order() {
+        let scene = Scene::new(
+            [GeometryData {
+                data: vec![
+                    ("z".to_owned(), DataData::Number(1)),
+                    ("a".to_owned(), DataData::Number(2)),
+                ],
+                id: None,
+                indices: vec![0, 1, 2],
+                vertices: vec![],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                tags: vec!["z".to_owned(), "a".to_owned()],
+                translation: [0.0, 0.0, 0.0],
+            }],
+            [],
+        )
+        .unwrap();
+        let geometry = scene.geometries().next().unwrap();
+
+        assert_eq!(geometry.data("z").unwrap().as_i32(), Some(1));
+        assert_eq!(geometry.data("a").unwrap().as_i32(), Some(2));
+        assert!(geometry.has_tag("z"));
+        assert!(geometry.has_tag("a"));
     }
 }
