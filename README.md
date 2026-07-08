@@ -182,12 +182,15 @@ color = 'my-texture.png'
 Item | Description
 ---- | -----------
 `color` | Hex string, path string, inline bitmap asset, or sequence.
-`displacement` | Hex string, path string, inline bitmap asset, or floating point value.
+`height` | Hex string, path string, inline bitmap asset, or floating point value.
 `double-sided` | (`boolean`_) When set, indicates the material is double-sided.
 `emissive` | Hex string, path string, inline bitmap asset, or array of three floating point values.
 `metal` | Hex string, path string, inline bitmap asset, or floating point value.
 `normal` | Path string or inline bitmap asset.
 `rough` | Hex string, path string, inline bitmap asset, or floating point value.
+`transmission` | Hex string, path string, inline bitmap asset, or floating point value.
+
+When any material parameter is set, `MaterialInfo::params` stores the packed RGBA parameter map as `R = metal`, `G = rough`, `B = height`, and `A = transmission`. `MaterialInfo::params_used` indicates which channels were authored; missing channels are default-filled.
 
 ## Bitmaps
 

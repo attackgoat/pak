@@ -1,2 +1,5 @@
 [material]
 color = 'material_01.png'
+metal = 0.25
+height = 0.5
+transmission = 0.75

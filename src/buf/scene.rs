@@ -282,12 +282,14 @@ impl SceneAsset {
                         }
                         AssetRef::Path(src) => {
                             if is_toml(src) {
-                                // Asset file reference
-                                let mut material = Asset::read(src)
+                                let asset = Asset::read(src)
                                     .context("Reading material asset")
-                                    .expect("Unable to read material asset")
-                                    .into_material()
-                                    .expect("Not a material");
+                                    .expect("Unable to read material asset");
+
+                                // Asset file reference
+                                let mut material = asset.into_material().unwrap_or_else(|| {
+                                    panic!("Not a material: {}", src.display());
+                                });
                                 let src_dir = parent(src);
                                 material.canonicalize(&project_dir, &src_dir);
                                 (Some(src), material)

@@ -15,6 +15,7 @@ use {
         anim::Animation, bitmap::Bitmap, bitmap_font::BitmapFont, compression::Compression,
         mesh::Mesh, scene::Scene,
     },
+    bitflags::bitflags,
     log::{trace, warn},
     paste::paste,
     serde::{Deserialize, Serialize, de::DeserializeOwned},
@@ -157,8 +158,21 @@ pub struct MaterialInfo {
     /// A standard three channel normal map.
     pub normal: Option<BitmapId>,
 
-    /// Optional RGBA material parameter map: metalness, roughness, displacement, ambient occlusion.
+    /// Optional RGBA material parameter map: metal, rough, height, transmission.
     pub params: Option<BitmapId>,
+
+    /// Indicates which `params` channels were authored in the material source.
+    pub params_used: MaterialParameterFlags,
+}
+
+bitflags! {
+    #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    pub struct MaterialParameterFlags: u8 {
+        const METAL = 1 << 0;
+        const ROUGH = 1 << 1;
+        const HEIGHT = 1 << 2;
+        const TRANSMISSION = 1 << 3;
+    }
 }
 
 pub trait Pak {

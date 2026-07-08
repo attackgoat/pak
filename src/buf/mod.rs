@@ -272,8 +272,8 @@ impl PakBuf {
                 _ => (),
             }
 
-            if let Some(displacement) = &material.displacement {
-                handle_scalar_ref(res, displacement);
+            if let Some(height) = &material.height {
+                handle_scalar_ref(res, height);
             }
 
             match &material.emissive {
@@ -298,6 +298,10 @@ impl PakBuf {
 
             if let Some(rough) = &material.rough {
                 handle_scalar_ref(res, rough);
+            }
+
+            if let Some(transmission) = &material.transmission {
+                handle_scalar_ref(res, transmission);
             }
         }
 

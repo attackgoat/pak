@@ -5,7 +5,7 @@ use {
         file_key, is_toml, parse_hex_color, parse_hex_scalar,
     },
     crate::{
-        BitmapId, MaterialId, MaterialInfo,
+        BitmapId, MaterialId, MaterialInfo, MaterialParameterFlags,
         bitmap::{Bitmap, BitmapColor, BitmapFormat},
     },
     anyhow::Context as _,
@@ -285,7 +285,7 @@ pub struct MaterialAsset {
     pub color: Option<ColorRef>,
 
     #[serde(deserialize_with = "ScalarRef::de")]
-    pub displacement: Option<ScalarRef>,
+    pub height: Option<ScalarRef>,
 
     /// Whether or not the mesh will be rendered with back faces also enabled.
     pub double_sided: Option<bool>,
@@ -308,12 +308,14 @@ pub struct MaterialAsset {
     /// normalized value.
     #[serde(deserialize_with = "ScalarRef::de")]
     pub rough: Option<ScalarRef>,
+
+    /// A `Bitmap` asset, `Bitmap` asset file, single channel image source file, or a single
+    /// normalized value.
+    #[serde(deserialize_with = "ScalarRef::de")]
+    pub transmission: Option<ScalarRef>,
 }
 
 impl MaterialAsset {
-    // const DEFAULT_METALNESS: f32 = 0.5;
-    // const DEFAULT_ROUGHNESS: f32 = 0.5;
-
     #[allow(unused)]
     pub(crate) fn new<P>(src: P) -> Self
     where
@@ -580,23 +582,39 @@ impl MaterialAsset {
             })
             .transpose()?;
 
-        let displacement = self.displacement.clone();
+        let mut params_used = MaterialParameterFlags::empty();
+        if self.metal.is_some() {
+            params_used |= MaterialParameterFlags::METAL;
+        }
+        if self.rough.is_some() {
+            params_used |= MaterialParameterFlags::ROUGH;
+        }
+        if self.height.is_some() {
+            params_used |= MaterialParameterFlags::HEIGHT;
+        }
+        if self.transmission.is_some() {
+            params_used |= MaterialParameterFlags::TRANSMISSION;
+        }
+
+        let height_ref = self.height.clone();
         let metal = self.metal.clone();
         let rough = self.rough.clone();
+        let transmission = self.transmission.clone();
         let params_asset = Asset::MaterialParams(MaterialParams {
-            displacement,
+            height: height_ref,
             metal,
             rough,
+            transmission,
         });
-        let use_params =
-            self.displacement.is_some() || self.metal.is_some() || self.rough.is_some();
+        let use_params = !params_used.is_empty();
         let params = use_params.then(|| {
             let project_dir = project_dir.as_ref().to_path_buf();
             let src_dir = src_dir.as_ref().to_path_buf();
             let writer = writer.clone();
-            let displacement = self.displacement.clone();
+            let height_ref = self.height.clone();
             let metal = self.metal.clone();
             let rough = self.rough.clone();
+            let transmission = self.transmission.clone();
 
             rt.spawn_blocking(move || {
                 if let Some(id) = writer.lock().ctx.get(&params_asset) {
@@ -611,19 +629,25 @@ impl MaterialAsset {
                     Self::scalar_ref_into_gray_image(&rough, &project_dir, &src_dir, u8::MAX)
                         .context("Unable to create rough bitmap buf")?,
                 );
-                let mut displacement_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&displacement, &project_dir, &src_dir, 0)
-                        .context("Unable to create displacement bitmap buf")?,
+                let mut height_image = DynamicImage::ImageLuma8(
+                    Self::scalar_ref_into_gray_image(&height_ref, &project_dir, &src_dir, 0)
+                        .context("Unable to create height bitmap buf")?,
+                );
+                let mut transmission_image = DynamicImage::ImageLuma8(
+                    Self::scalar_ref_into_gray_image(&transmission, &project_dir, &src_dir, 0)
+                        .context("Unable to create transmission bitmap buf")?,
                 );
 
                 let width = metal_image
                     .width()
                     .max(rough_image.width())
-                    .max(displacement_image.width());
+                    .max(height_image.width())
+                    .max(transmission_image.width());
                 let height = metal_image
                     .height()
                     .max(rough_image.height())
-                    .max(displacement_image.height());
+                    .max(height_image.height())
+                    .max(transmission_image.height());
 
                 if metal_image.width() != width || metal_image.height() != height {
                     let filter_ty = if metal_image.width() == 1 && metal_image.height() == 1 {
@@ -645,16 +669,26 @@ impl MaterialAsset {
                     rough_image = rough_image.resize_to_fill(width, height, filter_ty);
                 }
 
-                if displacement_image.width() != width || displacement_image.height() != height {
+                if height_image.width() != width || height_image.height() != height {
+                    let filter_ty = if height_image.width() == 1 && height_image.height() == 1 {
+                        FilterType::Nearest
+                    } else {
+                        FilterType::CatmullRom
+                    };
+
+                    height_image = height_image.resize_to_fill(width, height, filter_ty);
+                }
+
+                if transmission_image.width() != width || transmission_image.height() != height {
                     let filter_ty =
-                        if displacement_image.width() == 1 && displacement_image.height() == 1 {
+                        if transmission_image.width() == 1 && transmission_image.height() == 1 {
                             FilterType::Nearest
                         } else {
                             FilterType::CatmullRom
                         };
 
-                    displacement_image =
-                        displacement_image.resize_to_fill(width, height, filter_ty);
+                    transmission_image =
+                        transmission_image.resize_to_fill(width, height, filter_ty);
                 }
 
                 let mut params = Vec::with_capacity((4 * width * height) as usize);
@@ -663,8 +697,8 @@ impl MaterialAsset {
                     for x in 0..width {
                         params.push(metal_image.get_pixel(x, y).0[0]);
                         params.push(rough_image.get_pixel(x, y).0[0]);
-                        params.push(displacement_image.get_pixel(x, y).0[0]);
-                        params.push(u8::MAX);
+                        params.push(height_image.get_pixel(x, y).0[0]);
+                        params.push(transmission_image.get_pixel(x, y).0[0]);
                     }
                 }
 
@@ -673,13 +707,8 @@ impl MaterialAsset {
                 if let Some(id) = writer.ctx.get(&params_asset) {
                     id.as_bitmap().context("expected bitmap id for params")
                 } else {
-                    let params = Bitmap::new(
-                        BitmapColor::Linear,
-                        BitmapFormat::Rgba,
-                        width,
-                        height,
-                        params,
-                    );
+                    let params =
+                        Bitmap::new(BitmapColor::Linear, BitmapFormat::Rgba, width, 1, params);
                     Ok(writer.push_bitmap(params, None))
                 }
             })
@@ -713,6 +742,7 @@ impl MaterialAsset {
             emissive,
             normal,
             params,
+            params_used,
         })
     }
 
@@ -821,8 +851,8 @@ impl Canonicalize for MaterialAsset {
             color.canonicalize(&project_dir, &src_dir);
         }
 
-        if let Some(displacement) = self.displacement.as_mut() {
-            displacement.canonicalize(&project_dir, &src_dir);
+        if let Some(height) = self.height.as_mut() {
+            height.canonicalize(&project_dir, &src_dir);
         }
 
         if let Some(emissive) = self.emissive.as_mut() {
@@ -840,6 +870,10 @@ impl Canonicalize for MaterialAsset {
         if let Some(rough) = self.rough.as_mut() {
             rough.canonicalize(&project_dir, &src_dir);
         }
+
+        if let Some(transmission) = self.transmission.as_mut() {
+            transmission.canonicalize(&project_dir, &src_dir);
+        }
     }
 }
 
@@ -847,7 +881,7 @@ impl Canonicalize for MaterialAsset {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct MaterialParams {
     #[serde(default, deserialize_with = "ScalarRef::de")]
-    pub displacement: Option<ScalarRef>,
+    pub height: Option<ScalarRef>,
 
     /// A `Bitmap` asset, `Bitmap` asset file, single channel image source file, or a single
     /// normalized value.
@@ -858,6 +892,11 @@ pub struct MaterialParams {
     /// normalized value.
     #[serde(default, deserialize_with = "ScalarRef::de")]
     pub rough: Option<ScalarRef>,
+
+    /// A `Bitmap` asset, `Bitmap` asset file, single channel image source file, or a single
+    /// normalized value.
+    #[serde(default, deserialize_with = "ScalarRef::de")]
+    pub transmission: Option<ScalarRef>,
 }
 
 /// A reference to a bitmap asset, bitmap asset file, or three channel image source file.
@@ -1022,7 +1061,32 @@ impl Canonicalize for ScalarRef {
 
 #[cfg(test)]
 mod tests {
-    use super::MaterialAsset;
+    use {
+        super::{MaterialAsset, ScalarRef},
+        ordered_float::OrderedFloat,
+    };
+
+    #[test]
+    fn deserializes_height_scalar_value() {
+        let material = toml::from_str::<MaterialAsset>("height = 0.5")
+            .expect("height scalar should deserialize");
+
+        assert_eq!(
+            material.height,
+            Some(ScalarRef::Value(OrderedFloat(0.5f32)))
+        );
+    }
+
+    #[test]
+    fn deserializes_transmission_scalar_value() {
+        let material = toml::from_str::<MaterialAsset>("transmission = 0.5")
+            .expect("transmission scalar should deserialize");
+
+        assert_eq!(
+            material.transmission,
+            Some(ScalarRef::Value(OrderedFloat(0.5f32)))
+        );
+    }
 
     #[test]
     fn rejects_negative_color_values() {

@@ -1,6 +1,6 @@
 use {
     glam::{EulerRot, Quat},
-    pak::{Pak, PakBuf},
+    pak::{MaterialParameterFlags, Pak, PakBuf},
     std::{io::Error, path::PathBuf, sync::LazyLock},
 };
 
@@ -38,6 +38,16 @@ fn deserialize_scene_materials() -> Result<(), Error> {
         assert!((z - 6f32.to_radians()).abs() < EPSILON);
 
         assert_eq!(mesh_ref.materials().len(), 1);
+
+        let material = pak.read_material_id(mesh_ref.materials()[0]).unwrap();
+        assert!(material.params.is_some());
+        assert_eq!(
+            material.params_used,
+            MaterialParameterFlags::METAL
+                | MaterialParameterFlags::HEIGHT
+                | MaterialParameterFlags::TRANSMISSION
+        );
+        assert!(!material.params_used.contains(MaterialParameterFlags::ROUGH));
     }
 
     {
