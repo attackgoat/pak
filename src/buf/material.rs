@@ -452,7 +452,7 @@ impl MaterialAsset {
                     } else {
                         let bitmap = Bitmap::new(
                             BitmapColor::Linear,
-                            BitmapFormat::Rgb,
+                            BitmapFormat::Rgba,
                             1,
                             1,
                             [
