@@ -102,6 +102,22 @@ fn parent(path: impl AsRef<Path>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+fn project_path(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> PathBuf {
+    let path = path.as_ref();
+    if !path.is_absolute() {
+        return dir.as_ref().join(path);
+    }
+
+    path.components()
+        .fold(dir.as_ref().to_path_buf(), |res, component| {
+            if let std::path::Component::Normal(part) = component {
+                res.join(part)
+            } else {
+                res
+            }
+        })
+}
+
 fn parse_hex_color(val: &str) -> Option<[u8; 4]> {
     let mut res = [u8::MAX; 4];
     let len = val.len();
@@ -341,7 +357,7 @@ impl PakBuf {
 
         let mut excluded_assets = HashSet::new();
         for pattern in enabled_groups().flat_map(|group| group.exclude_globs()) {
-            for path in glob(src_dir.join(pattern).to_string_lossy().as_ref())? {
+            for path in glob(project_path(&src_dir, pattern).to_string_lossy().as_ref())? {
                 let path = path?;
 
                 excluded_assets.insert(path);
@@ -349,8 +365,12 @@ impl PakBuf {
         }
 
         for asset_glob in enabled_groups().flat_map(|group| group.asset_globs()) {
-            let asset_paths = glob(src_dir.join(asset_glob).to_string_lossy().as_ref())
-                .context("Unable to glob source directory")?;
+            let asset_paths = glob(
+                project_path(&src_dir, asset_glob)
+                    .to_string_lossy()
+                    .as_ref(),
+            )
+            .context("Unable to glob source directory")?;
             for asset_path in asset_paths {
                 let asset_path = asset_path?;
                 if excluded_assets.contains(&asset_path) {
@@ -506,7 +526,7 @@ impl PakBuf {
 
         let mut excluded_assets = HashSet::new();
         for pattern in enabled_groups().flat_map(|group| group.exclude_globs()) {
-            for path in glob(src_dir.join(pattern).to_string_lossy().as_ref())? {
+            for path in glob(project_path(&src_dir, pattern).to_string_lossy().as_ref())? {
                 let path = path?;
 
                 excluded_assets.insert(path);
@@ -515,8 +535,12 @@ impl PakBuf {
 
         // Process each file we find as a separate runtime task
         for asset_glob in enabled_groups().flat_map(|group| group.asset_globs()) {
-            let asset_paths = glob(src_dir.join(asset_glob).to_string_lossy().as_ref())
-                .context("Unable to glob source directory")?;
+            let asset_paths = glob(
+                project_path(&src_dir, asset_glob)
+                    .to_string_lossy()
+                    .as_ref(),
+            )
+            .context("Unable to glob source directory")?;
             for asset_path in asset_paths {
                 let asset_path = asset_path.context("Unable to get asset path")?;
                 if excluded_assets.contains(&asset_path) {
