@@ -652,13 +652,7 @@ impl PakBuf {
                                 tasks.push(rt.spawn_blocking(move || {
                                     material.canonicalize(&src_dir, &asset_parent);
                                     material
-                                        .bake(
-                                            &rt2,
-                                            &writer,
-                                            src_dir,
-                                            asset_parent,
-                                            Some(&asset_path),
-                                        )
+                                        .bake(&rt2, &writer, src_dir, Some(&asset_path))
                                         .context(
                                             asset_path.as_os_str().to_string_lossy().into_owned(),
                                         )?;

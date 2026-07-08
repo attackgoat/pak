@@ -2,7 +2,7 @@ use {
     super::{
         Asset, Canonicalize, Writer,
         bitmap::{BitmapAsset, BitmapSwizzle},
-        file_key, is_toml, parse_hex_color, parse_hex_scalar,
+        file_key, is_toml, parent, parse_hex_color, parse_hex_scalar,
     },
     crate::{
         BitmapId, MaterialId, MaterialInfo, MaterialParameterFlags,
@@ -333,7 +333,6 @@ impl MaterialAsset {
         rt: &Runtime,
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
-        src_dir: impl AsRef<Path>,
         path: Option<impl AsRef<Path>>,
     ) -> anyhow::Result<MaterialId> {
         // Early-out if we have already baked this material
@@ -355,7 +354,7 @@ impl MaterialAsset {
             info!("Baking material: (inline)");
         }
 
-        let material_info = self.as_material_info(rt, writer, project_dir, src_dir)?;
+        let material_info = self.as_material_info(rt, writer, project_dir)?;
 
         let mut writer = writer.lock();
         if let Some(id) = writer.ctx.get(&asset) {
@@ -375,7 +374,6 @@ impl MaterialAsset {
         rt: &Runtime,
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
-        src_dir: impl AsRef<Path>,
     ) -> anyhow::Result<MaterialInfo> {
         let color = match &self.color {
             Some(ColorRef::Asset(bitmap)) => {
@@ -395,7 +393,7 @@ impl MaterialAsset {
                         .context("Unable to read color bitmap asset")?
                         .into_bitmap()
                         .context("Source file should be a bitmap asset")?;
-                    bitmap.canonicalize(&project_dir, &src_dir);
+                    bitmap.canonicalize(&project_dir, parent(src));
                     bitmap
                 } else {
                     BitmapAsset::new(src)
@@ -494,7 +492,7 @@ impl MaterialAsset {
                                 .context("Unable to read normal bitmap asset")?
                                 .into_bitmap()
                                 .context("Source file should be a bitmap asset")?;
-                            bitmap.canonicalize(&project_dir, &src_dir);
+                            bitmap.canonicalize(&project_dir, parent(src));
                             bitmap
                         } else {
                             BitmapAsset::new(src)
@@ -539,7 +537,7 @@ impl MaterialAsset {
                                 .context("Unable to read emissive bitmap asset")?
                                 .into_bitmap()
                                 .context("Source file should be a bitmap asset")?;
-                            bitmap.canonicalize(&project_dir, &src_dir);
+                            bitmap.canonicalize(&project_dir, parent(src));
                             bitmap
                         } else {
                             BitmapAsset::new(src)
@@ -609,7 +607,6 @@ impl MaterialAsset {
         let use_params = !params_used.is_empty();
         let params = use_params.then(|| {
             let project_dir = project_dir.as_ref().to_path_buf();
-            let src_dir = src_dir.as_ref().to_path_buf();
             let writer = writer.clone();
             let height_ref = self.height.clone();
             let metal = self.metal.clone();
@@ -622,19 +619,19 @@ impl MaterialAsset {
                 }
 
                 let mut metal_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&metal, &project_dir, &src_dir, 0)
+                    Self::scalar_ref_into_gray_image(&metal, &project_dir, 0)
                         .context("Unable to create metal bitmap buf")?,
                 );
                 let mut rough_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&rough, &project_dir, &src_dir, u8::MAX)
+                    Self::scalar_ref_into_gray_image(&rough, &project_dir, u8::MAX)
                         .context("Unable to create rough bitmap buf")?,
                 );
                 let mut height_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&height_ref, &project_dir, &src_dir, 0)
+                    Self::scalar_ref_into_gray_image(&height_ref, &project_dir, 0)
                         .context("Unable to create height bitmap buf")?,
                 );
                 let mut transmission_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&transmission, &project_dir, &src_dir, 0)
+                    Self::scalar_ref_into_gray_image(&transmission, &project_dir, 0)
                         .context("Unable to create transmission bitmap buf")?,
                 );
 
@@ -809,7 +806,6 @@ impl MaterialAsset {
     fn scalar_ref_into_gray_image(
         scalar: &Option<ScalarRef>,
         project_dir: impl AsRef<Path>,
-        src_dir: impl AsRef<Path>,
         default: u8,
     ) -> anyhow::Result<GrayImage> {
         let bitmap = match scalar {
@@ -821,7 +817,7 @@ impl MaterialAsset {
                     let mut bitmap = Asset::read(src)?
                         .into_bitmap()
                         .context("Source file should be a bitmap asset")?;
-                    bitmap.canonicalize(&project_dir, src_dir);
+                    bitmap.canonicalize(&project_dir, parent(src));
                     bitmap
                 } else {
                     BitmapAsset::new(src)

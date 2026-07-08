@@ -214,8 +214,6 @@ impl SceneAsset {
 
         info!("Baking scene: {}", key);
 
-        let src_dir = parent(&path);
-
         let geometries = self
             .geometries()
             .iter()
@@ -301,7 +299,7 @@ impl SceneAsset {
                     })
                     .map(|(src, mut material)| {
                         material
-                            .bake(rt, writer, &project_dir, &src_dir, src)
+                            .bake(rt, writer, &project_dir, src)
                             .expect("material")
                     })
                     .collect();
