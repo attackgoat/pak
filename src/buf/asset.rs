@@ -102,6 +102,18 @@ impl Asset {
             }
 
             Self::BitmapFont(blob)
+        } else if let Some(mut blob) = val.blob {
+            // If the source was not set, infer it by stripping only the .toml suffix.
+            if blob.src().is_none() {
+                if let Some(stem) = filename.as_ref().file_stem() {
+                    let src = filename.as_ref().with_file_name(stem);
+                    if let Ok(true) = exists(&src) {
+                        blob.set_src(src.file_name().unwrap_or_default());
+                    }
+                }
+            }
+
+            Self::Blob(blob)
         } else if let Some(content) = val.content {
             Self::Content(content)
         } else if let Some(material) = val.material {
@@ -216,6 +228,9 @@ struct Schema {
     #[serde(rename = "bitmap-font")]
     #[allow(unused)]
     bitmap_font: Option<BlobAsset>,
+
+    #[allow(unused)]
+    blob: Option<BlobAsset>,
 
     #[allow(unused)]
     content: Option<Content>,

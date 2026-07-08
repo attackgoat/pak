@@ -71,8 +71,10 @@ fn file_key(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> String {
 
     // Strip off the toml extension as needed
     let mut key = PathBuf::from(key);
-    if is_toml(&key) {
-        key = key.with_extension("");
+    if is_toml(&key)
+        && let Some(stem) = key.file_stem().map(ToOwned::to_owned)
+    {
+        key.set_file_name(stem);
     }
 
     key.to_str().unwrap_or_default().to_owned()
@@ -378,7 +380,7 @@ impl PakBuf {
                             bitmap.canonicalize(&src_dir, &asset_parent);
                             handle_bitmap(&mut res, &bitmap);
                         }
-                        Asset::BitmapFont(mut blob) => {
+                        Asset::BitmapFont(mut blob) | Asset::Blob(mut blob) => {
                             blob.canonicalize(&src_dir, &asset_parent);
 
                             if let Some(src) = blob.src() {
@@ -601,6 +603,19 @@ impl PakBuf {
                                         .context(
                                             asset_path.as_os_str().to_string_lossy().into_owned(),
                                         )?;
+                                    Ok(())
+                                }));
+                            }
+                            Asset::Blob(mut blob) => {
+                                let writer = Arc::clone(&writer);
+                                let src_dir = src_dir.clone();
+                                let asset_path = asset_path.clone();
+                                let asset_parent = asset_parent.clone();
+                                tasks.push(rt.spawn_blocking(move || {
+                                    blob.canonicalize(&src_dir, &asset_parent);
+                                    blob.bake_from_path(&writer, src_dir, &asset_path).context(
+                                        asset_path.as_os_str().to_string_lossy().into_owned(),
+                                    )?;
                                     Ok(())
                                 }));
                             }

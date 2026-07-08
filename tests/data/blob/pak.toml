@@ -1,0 +1,8 @@
+[content]
+compression = 'snap'
+
+[[content.group]]
+assets = [
+    'payload.toml',
+    'payload.name.bin.toml',
+]

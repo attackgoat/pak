@@ -43,6 +43,20 @@ impl BlobAsset {
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
     ) -> anyhow::Result<BlobId> {
+        let key_path = self
+            .src()
+            .ok_or_else(|| anyhow::Error::msg("unspecified blob source"))?
+            .to_path_buf();
+
+        self.bake_from_path(writer, project_dir, key_path)
+    }
+
+    pub(super) fn bake_from_path(
+        &self,
+        writer: &Arc<Mutex<Writer>>,
+        project_dir: impl AsRef<Path>,
+        path: impl AsRef<Path>,
+    ) -> anyhow::Result<BlobId> {
         let Some(src) = self.src() else {
             return Err(anyhow::Error::msg("unspecified blob source"));
         };
@@ -54,7 +68,7 @@ impl BlobAsset {
             return id.as_blob().context("asset context returned non-blob id");
         }
 
-        let key = file_key(&project_dir, src);
+        let key = file_key(&project_dir, path);
 
         info!("Baking blob: {}", key);
 
