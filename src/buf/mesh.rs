@@ -784,12 +784,15 @@ impl MeshAsset {
     }
 
     /// Scaling of the mesh.
-    #[allow(dead_code)]
     pub fn scale(&self) -> Vec3 {
         self.scale
             .map(|scale| match scale {
-                Scale::Array(scale) => vec3(scale[0].0, scale[1].0, scale[2].0),
-                Scale::Value(scale) => vec3(scale.0, scale.0, scale.0),
+                Scale::Array([OrderedFloat(x), OrderedFloat(y), OrderedFloat(z)]) => vec3(x, y, z),
+                Scale::Value(OrderedFloat(scale)) => Vec3::splat(scale),
+            })
+            .inspect(|scale| {
+                assert!(scale.is_finite(), "scale must be finite");
+                assert!(scale.min_element() > 0.0, "scale must be greater than zero");
             })
             .unwrap_or(Vec3::ONE)
     }
@@ -844,7 +847,7 @@ impl MeshAsset {
             .ok_or(anyhow::Error::msg("No mesh found"))?;
         let allow_skin = !self.ignore_skin.unwrap_or_default();
         let mesh_transform =
-            Mat4::from_scale_rotation_translation(Vec3::ONE, self.rotation(), self.offset());
+            Mat4::from_scale_rotation_translation(self.scale(), self.rotation(), self.offset());
 
         info!("Loading mesh {}", node.name().unwrap_or_default());
 
@@ -1438,7 +1441,29 @@ impl mikktspace::Geometry for VertexData {
 
 #[cfg(test)]
 mod tests {
-    use super::{MaxIndex, MeshAsset};
+    use {
+        super::{MaxIndex, MeshAsset},
+        crate::mesh::Mesh,
+        std::path::Path,
+    };
+
+    fn max_abs_position(mesh: &Mesh) -> f32 {
+        let mut max = 0.0f32;
+
+        for primitive in mesh.primitives() {
+            let stride = primitive.vertex_type().stride();
+
+            for vertex in primitive.vertex_data().chunks_exact(stride) {
+                let x = f32::from_ne_bytes(vertex[0..4].try_into().unwrap());
+                let y = f32::from_ne_bytes(vertex[4..8].try_into().unwrap());
+                let z = f32::from_ne_bytes(vertex[8..12].try_into().unwrap());
+
+                max = max.max(x.abs()).max(y.abs()).max(z.abs());
+            }
+        }
+
+        max
+    }
 
     #[test]
     fn max_index_deserializes_enum_variants() {
@@ -1474,5 +1499,35 @@ mod tests {
         assert_eq!(indices, [0, 1, 0, 2, 1, 0]);
         assert_eq!(vertex_count, 3);
         assert_eq!(compact, [40, 0, 0, 0, 20, 0, 0, 0, 30, 0, 0, 0]);
+    }
+
+    #[test]
+    fn mesh_scale_applies_to_imported_positions() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/scene/cube.glb");
+        let unscaled: MeshAsset = toml::from_str(
+            "
+            optimize = false
+            normals = false
+            tangents = false
+            ",
+        )
+        .expect("unscaled mesh config should deserialize");
+        let scaled: MeshAsset = toml::from_str(
+            "
+            scale = 2.0
+            optimize = false
+            normals = false
+            tangents = false
+            ",
+        )
+        .expect("scaled mesh config should deserialize");
+
+        let unscaled = unscaled.to_mesh(&src).expect("unscaled mesh should import");
+        let scaled = scaled.to_mesh(&src).expect("scaled mesh should import");
+        let unscaled_max = max_abs_position(&unscaled);
+        let scaled_max = max_abs_position(&scaled);
+
+        assert!(unscaled_max > 0.0);
+        assert!((scaled_max - unscaled_max * 2.0).abs() < 0.0001);
     }
 }
