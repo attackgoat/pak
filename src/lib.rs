@@ -24,6 +24,7 @@ use {
         fmt::{Debug, Formatter},
         fs::File,
         io::{BufReader, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},
+        mem::size_of,
         ops::Range,
         path::{Path, PathBuf},
     },
@@ -32,6 +33,54 @@ use {
 pub type Vec3 = [f32; 3];
 pub type Quat = [f32; 4];
 pub type Mat4 = [f32; 16];
+
+pub(crate) const PAK_HASH_LEN: usize = size_of::<u64>();
+
+const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+
+fn update_hash(hash: u64, data: &[u8]) -> u64 {
+    data.iter().fold(hash, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
+    })
+}
+
+pub(crate) fn pak_hash_stream(reader: &mut impl Read, len: u64) -> Result<u64, Error> {
+    let mut hash = FNV_OFFSET;
+    let mut remaining = len;
+    let mut buf = [0; 8192];
+
+    while remaining > 0 {
+        let limit = if remaining < buf.len() as u64 {
+            remaining as usize
+        } else {
+            buf.len()
+        };
+        let read = reader.read(&mut buf[..limit])?;
+        if read == 0 {
+            return Err(Error::from(ErrorKind::UnexpectedEof));
+        }
+
+        hash = update_hash(hash, &buf[..read]);
+        remaining -= read as u64;
+    }
+
+    Ok(hash)
+}
+
+fn read_hash_trailer(reader: &mut impl Read) -> Result<u64, Error> {
+    let mut hash = [0; PAK_HASH_LEN];
+    reader.read_exact(&mut hash)?;
+    let (hash, consumed) =
+        bincode::serde::decode_from_slice::<u64, _>(&hash, bincode::config::legacy())
+            .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+
+    if consumed == PAK_HASH_LEN {
+        Ok(hash)
+    } else {
+        Err(Error::from(ErrorKind::InvalidData))
+    }
+}
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct Data {
@@ -411,20 +460,28 @@ impl PakBuf {
         let compression: Option<Compression> =
             decode(&mut stream, "Unable to read compression data")?;
 
-        // Read the compressed main data
+        // Read the main data, excluding the hash trailer. The trailer is not validated here.
+        let stream_end = stream.seek(SeekFrom::End(0))?;
+        let header_end = stream_end
+            .checked_sub(PAK_HASH_LEN as u64)
+            .ok_or_else(|| Error::from(ErrorKind::InvalidData))?;
+        let header_len = header_end
+            .checked_sub(skip as u64)
+            .ok_or_else(|| Error::from(ErrorKind::InvalidData))?;
         stream.seek(SeekFrom::Start(skip as _))?;
-        let data: Data = {
-            let mut compressed = if let Some(compressed) = compression {
-                compressed.new_reader(&mut stream)
-            } else {
-                Box::new(&mut stream)
-            };
+
+        let data: Data = if let Some(compressed) = compression {
+            let mut header = (&mut stream).take(header_len);
+            let mut compressed = compressed.new_reader(&mut header);
             decode(&mut compressed, "Unable to read header")?
+        } else {
+            let mut header = (&mut stream).take(header_len);
+            decode(&mut header, "Unable to read header")?
         };
 
         trace!(
             "Read header: {} bytes ({} keys)",
-            stream.stream_position()? - skip as u64,
+            header_len,
             data.ids.len()
         );
 
@@ -437,6 +494,19 @@ impl PakBuf {
 
     pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.data.ids.keys().map(|key| key.as_str())
+    }
+
+    pub fn validate_hash(&self) -> Result<bool, Error> {
+        let mut reader = self.reader.open()?;
+        let stream_end = reader.seek(SeekFrom::End(0))?;
+        let payload_len = stream_end
+            .checked_sub(PAK_HASH_LEN as u64)
+            .ok_or_else(|| Error::from(ErrorKind::InvalidData))?;
+
+        reader.seek(SeekFrom::Start(0))?;
+        let actual = pak_hash_stream(&mut reader, payload_len)?;
+        let expected = read_hash_trailer(&mut reader)?;
+        Ok(actual == expected)
     }
 
     pub fn mesh_count(&self) -> usize {

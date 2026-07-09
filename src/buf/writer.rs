@@ -3,13 +3,13 @@ use {
     crate::{
         AnimationId, BitmapFontId, BitmapId, BlobId, Data, DataRef, Id, MaterialId, MaterialInfo,
         MeshId, SceneId, anim::Animation, bitmap::Bitmap, bitmap_font::BitmapFont, mesh::Mesh,
-        scene::Scene,
+        pak_hash_stream, scene::Scene,
     },
     log::trace,
     serde::Serialize,
     std::{
         collections::HashMap,
-        fs::File,
+        fs::{File, OpenOptions},
         io::{BufWriter, Error, ErrorKind, Seek, SeekFrom, Write},
         path::Path,
     },
@@ -128,7 +128,20 @@ impl Writer {
     }
 
     pub fn write(&mut self, path: impl AsRef<Path>) -> Result<(), Error> {
-        self.write_data(&mut BufWriter::new(File::create(path)?))
+        let path = path.as_ref();
+        {
+            let mut writer = BufWriter::new(File::create(path)?);
+            self.write_data(&mut writer)?;
+            writer.flush()?;
+        }
+
+        let mut reader = File::open(path)?;
+        let len = reader.metadata()?.len();
+        let hash = pak_hash_stream(&mut reader, len)?;
+        let mut writer = OpenOptions::new().append(true).open(path)?;
+        bincode::serde::encode_into_std_write(hash, &mut writer, bincode::config::legacy())
+            .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+        writer.flush()
     }
 
     fn write_data(&mut self, mut writer: impl Write + Seek) -> Result<(), Error> {
