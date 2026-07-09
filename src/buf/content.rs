@@ -21,7 +21,7 @@ pub struct Content {
     window_size: Option<u32>,
 
     // Tables must follow values
-    #[serde(rename = "group")]
+    #[serde(default, rename = "group")]
     groups: Box<[Group]>,
 }
 
@@ -103,5 +103,18 @@ impl Group {
     #[allow(unused)]
     pub fn exclude_globs(&self) -> impl Iterator<Item = &String> {
         self.exclude.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Content;
+
+    #[test]
+    fn content_deserializes_without_groups() {
+        let content = toml::from_str::<Content>("compression = 'snap'")
+            .expect("content groups should be optional");
+
+        assert_eq!(content.groups().count(), 0);
     }
 }
