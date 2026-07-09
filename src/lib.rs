@@ -344,18 +344,47 @@ impl PakBuf {
 
         // Optionally create a compression reader (or just use the one we have)
         if let Some(compressed) = self.compression {
-            bincode::serde::decode_from_std_read(
-                &mut compressed.new_reader(data),
-                bincode::config::legacy(),
-            )
-        } else {
-            bincode::serde::decode_from_slice(data, bincode::config::legacy()).map(|(data, _)| data)
-        }
-        .map_err(|err| {
-            warn!("Unable to deserialize: {}", err);
+            let mut reader = compressed.new_reader(data);
+            let decoded =
+                bincode::serde::decode_from_std_read(&mut reader, bincode::config::legacy())
+                    .map_err(|err| {
+                        warn!("Unable to deserialize: {}", err);
 
-            Error::from(ErrorKind::InvalidData)
-        })
+                        Error::from(ErrorKind::InvalidData)
+                    })?;
+
+            let mut trailing = [0; 1];
+            match reader.read(&mut trailing) {
+                Ok(0) => Ok(decoded),
+                Ok(_) => {
+                    warn!("Trailing bytes after deserialized data");
+
+                    Err(Error::from(ErrorKind::InvalidData))
+                }
+                Err(err) => {
+                    warn!("Unable to verify deserialized data end: {}", err);
+
+                    Err(Error::from(ErrorKind::InvalidData))
+                }
+            }
+        } else {
+            let (decoded, consumed) =
+                bincode::serde::decode_from_slice(data, bincode::config::legacy()).map_err(
+                    |err| {
+                        warn!("Unable to deserialize: {}", err);
+
+                        Error::from(ErrorKind::InvalidData)
+                    },
+                )?;
+
+            if consumed == data.len() {
+                Ok(decoded)
+            } else {
+                warn!("Trailing bytes after deserialized data");
+
+                Err(Error::from(ErrorKind::InvalidData))
+            }
+        }
     }
 
     pub fn from_stream(mut stream: impl Stream + 'static) -> Result<Self, Error> {
@@ -690,6 +719,30 @@ mod tests {
         assert_eq!(
             pak.read_blob_id(BlobId(0))
                 .expect_err("invalid blob range should error")
+                .kind(),
+            ErrorKind::InvalidData,
+        );
+    }
+
+    #[test]
+    fn trailing_asset_bytes_return_invalid_data() {
+        let mut encoded = Vec::new();
+        bincode::serde::encode_into_std_write(
+            b"blob".to_vec(),
+            &mut encoded,
+            bincode::config::legacy(),
+        )
+        .unwrap();
+        encoded.extend_from_slice(b"junk");
+        let encoded: &'static [u8] = Box::leak(encoded.into_boxed_slice());
+
+        let mut pak = empty_pak();
+        pak.data.blobs.push(DataRef::Ref(0..encoded.len() as u32));
+        pak.reader = Box::new(Cursor::new(encoded));
+
+        assert_eq!(
+            pak.read_blob_id(BlobId(0))
+                .expect_err("trailing asset bytes should error")
                 .kind(),
             ErrorKind::InvalidData,
         );
