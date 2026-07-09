@@ -55,13 +55,20 @@ enum DataRef<T> {
 }
 
 impl<T> DataRef<T> {
-    fn pos_len(&self) -> Option<(u64, usize)> {
+    fn pos_len(&self) -> Result<(u64, usize), Error> {
         match self {
-            Self::Ref(range) => Some((range.start as _, (range.end - range.start) as _)),
+            Self::Ref(range) => {
+                let len = range
+                    .end
+                    .checked_sub(range.start)
+                    .ok_or_else(|| Error::from(ErrorKind::InvalidData))?;
+
+                Ok((range.start as _, len as _))
+            }
             _ => {
                 warn!("Expected position and length but found data");
 
-                None
+                Err(Error::from(ErrorKind::InvalidInput))
             }
         }
     }
@@ -483,8 +490,8 @@ impl Pak for PakBuf {
             .data
             .anims
             .get(id.0)
-            .and_then(DataRef::pos_len)
-            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?
+            .pos_len()?;
         self.deserialize(pos, len)
     }
 
@@ -498,8 +505,8 @@ impl Pak for PakBuf {
             .data
             .bitmap_fonts
             .get(id.0)
-            .and_then(DataRef::pos_len)
-            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?
+            .pos_len()?;
         self.deserialize(pos, len)
     }
 
@@ -513,8 +520,8 @@ impl Pak for PakBuf {
             .data
             .bitmaps
             .get(id.0)
-            .and_then(DataRef::pos_len)
-            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?
+            .pos_len()?;
         self.deserialize(pos, len)
     }
 
@@ -528,8 +535,8 @@ impl Pak for PakBuf {
             .data
             .blobs
             .get(id.0)
-            .and_then(DataRef::pos_len)
-            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?
+            .pos_len()?;
         self.deserialize(pos, len)
     }
 
@@ -550,8 +557,8 @@ impl Pak for PakBuf {
             .data
             .meshes
             .get(id.0)
-            .and_then(DataRef::pos_len)
-            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?
+            .pos_len()?;
         self.deserialize(pos, len)
     }
 
@@ -565,8 +572,8 @@ impl Pak for PakBuf {
             .data
             .scenes
             .get(id.0)
-            .and_then(DataRef::pos_len)
-            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?
+            .pos_len()?;
         self.deserialize(pos, len)
     }
 }
@@ -672,6 +679,19 @@ mod tests {
                 .expect_err("invalid scene id should error")
                 .kind(),
             ErrorKind::InvalidInput,
+        );
+    }
+
+    #[test]
+    fn invalid_data_ref_range_returns_invalid_data() {
+        let mut pak = empty_pak();
+        pak.data.blobs.push(DataRef::Ref(10..5));
+
+        assert_eq!(
+            pak.read_blob_id(BlobId(0))
+                .expect_err("invalid blob range should error")
+                .kind(),
+            ErrorKind::InvalidData,
         );
     }
 }
