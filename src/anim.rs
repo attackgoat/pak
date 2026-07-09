@@ -1,6 +1,6 @@
 use {
     super::{Quat, Vec3},
-    serde::{Deserialize, Serialize},
+    serde::{Deserialize, Deserializer, Serialize, de::Error},
 };
 
 #[cfg(feature = "bake")]
@@ -28,12 +28,43 @@ impl Animation {
 }
 
 /// Describes the animation of one joint.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Channel {
     inputs: Vec<u32>,
     interpolation: Interpolation,
     outputs: Outputs,
     target: String,
+}
+
+impl<'de> Deserialize<'de> for Channel {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ChannelData {
+            inputs: Vec<u32>,
+            interpolation: Interpolation,
+            outputs: Outputs,
+            target: String,
+        }
+
+        let data = ChannelData::deserialize(deserializer)?;
+        if data.target.is_empty() {
+            return Err(D::Error::custom("channel target is empty"));
+        }
+
+        if data.inputs.is_empty() {
+            return Err(D::Error::custom("channel has no inputs"));
+        }
+
+        Ok(Self {
+            inputs: data.inputs,
+            interpolation: data.interpolation,
+            outputs: data.outputs,
+            target: data.target,
+        })
+    }
 }
 
 impl Channel {
@@ -138,5 +169,28 @@ impl Outputs {
             Self::Scales(scales) => scales.len(),
             Self::Translations(translations) => translations.len(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Channel, Interpolation, Outputs};
+
+    #[test]
+    fn deserialize_rejects_empty_channel_target() {
+        let invalid = Channel {
+            inputs: vec![0],
+            interpolation: Interpolation::Linear,
+            outputs: Outputs::Translations(vec![[0.0, 0.0, 0.0]]),
+            target: String::new(),
+        };
+        let mut encoded = Vec::new();
+        bincode::serde::encode_into_std_write(invalid, &mut encoded, bincode::config::legacy())
+            .unwrap();
+
+        let result =
+            bincode::serde::decode_from_slice::<Channel, _>(&encoded, bincode::config::legacy());
+
+        assert!(result.is_err());
     }
 }
