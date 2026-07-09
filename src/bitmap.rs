@@ -23,6 +23,8 @@ impl Bitmap {
         pixels: impl Into<Vec<u8>>,
     ) -> Self {
         let pixels = pixels.into();
+        assert!(width > 0);
+        assert_eq!(pixels.len() % (width as usize * fmt.byte_len()), 0);
 
         Self {
             color,
@@ -65,6 +67,9 @@ impl Bitmap {
     }
 
     pub fn pixel(&self, x: u32, y: u32) -> &[u8] {
+        assert!(x < self.width);
+        assert!(y < self.height());
+
         let offset = y as usize * self.stride() + x as usize * self.fmt.byte_len();
         &self.pixels[offset..offset + self.fmt.byte_len()]
     }
@@ -124,6 +129,26 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(pixels, [1, 0, 0, 2, 0, 0]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn pixel_rejects_x_past_width() {
+        let bitmap = Bitmap::new(BitmapColor::Srgb, BitmapFormat::R, 2, 1, [1, 2, 3, 4]);
+
+        let _ = bitmap.pixel(2, 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn new_rejects_zero_width() {
+        let _ = Bitmap::new(BitmapColor::Srgb, BitmapFormat::R, 0, 1, [1, 2]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn new_rejects_partial_rows() {
+        let _ = Bitmap::new(BitmapColor::Srgb, BitmapFormat::Rgb, 1, 1, [1, 2, 3, 4]);
     }
 }
 
