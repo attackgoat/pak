@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error};
 
 /// Holds a `Bitmap` in a `.pak` file. For data transport only.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Bitmap {
     color: BitmapColor,
     fmt: BitmapFormat,
@@ -11,6 +11,45 @@ pub struct Bitmap {
     pixels: Vec<u8>,
 
     width: u32,
+}
+
+impl<'de> Deserialize<'de> for Bitmap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct BitmapData {
+            color: BitmapColor,
+            fmt: BitmapFormat,
+            mip_levels: u32,
+
+            #[serde(with = "serde_bytes")]
+            pixels: Vec<u8>,
+
+            width: u32,
+        }
+
+        let data = BitmapData::deserialize(deserializer)?;
+        if data.width == 0 {
+            return Err(D::Error::custom("bitmap width must be greater than zero"));
+        }
+
+        let row_len = data.width as usize * data.fmt.byte_len();
+        if !data.pixels.len().is_multiple_of(row_len) {
+            return Err(D::Error::custom(
+                "bitmap pixel byte length is not a whole number of rows",
+            ));
+        }
+
+        Ok(Self {
+            color: data.color,
+            fmt: data.fmt,
+            mip_levels: data.mip_levels,
+            pixels: data.pixels,
+            width: data.width,
+        })
+    }
 }
 
 impl Bitmap {
@@ -149,6 +188,25 @@ mod tests {
     #[should_panic]
     fn new_rejects_partial_rows() {
         let _ = Bitmap::new(BitmapColor::Srgb, BitmapFormat::Rgb, 1, 1, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn deserialize_rejects_zero_width() {
+        let invalid = Bitmap {
+            color: BitmapColor::Srgb,
+            fmt: BitmapFormat::R,
+            mip_levels: 1,
+            pixels: vec![1],
+            width: 0,
+        };
+        let mut encoded = Vec::new();
+        bincode::serde::encode_into_std_write(invalid, &mut encoded, bincode::config::legacy())
+            .unwrap();
+
+        let result =
+            bincode::serde::decode_from_slice::<Bitmap, _>(&encoded, bincode::config::legacy());
+
+        assert!(result.is_err());
     }
 }
 
