@@ -2,7 +2,7 @@ use {
     super::{Mat4, index::IndexBuffer},
     crate::BlobId,
     bitflags::bitflags,
-    serde::{Deserialize, Serialize},
+    serde::{Deserialize, Deserializer, Serialize, de::Error},
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -51,7 +51,7 @@ impl Mesh {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Primitive {
     lods: Vec<IndexBuffer>,
     material: u8,
@@ -60,6 +60,54 @@ pub struct Primitive {
     vertex_buf: Vec<u8>,
 
     vertex_type: VertexType,
+}
+
+impl<'de> Deserialize<'de> for Primitive {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct PrimitiveData {
+            lods: Vec<IndexBuffer>,
+            material: u8,
+
+            #[serde(with = "serde_bytes")]
+            vertex_buf: Vec<u8>,
+
+            vertex_type: VertexType,
+        }
+
+        let data = PrimitiveData::deserialize(deserializer)?;
+        if !data.vertex_type.contains(VertexType::POSITION) {
+            return Err(D::Error::custom(
+                "primitive vertex type must include positions",
+            ));
+        }
+
+        if data.vertex_buf.is_empty() {
+            return Err(D::Error::custom(
+                "primitive vertex buffer must not be empty",
+            ));
+        }
+
+        if !data
+            .vertex_buf
+            .len()
+            .is_multiple_of(data.vertex_type.stride())
+        {
+            return Err(D::Error::custom(
+                "primitive vertex buffer byte length is malformed",
+            ));
+        }
+
+        Ok(Self {
+            lods: data.lods,
+            material: data.material,
+            vertex_buf: data.vertex_buf,
+            vertex_type: data.vertex_type,
+        })
+    }
 }
 
 impl Primitive {
@@ -167,5 +215,28 @@ impl VertexType {
         }
 
         res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Primitive, VertexType};
+
+    #[test]
+    fn deserialize_rejects_malformed_primitive_vertex_buffer() {
+        let invalid = Primitive {
+            lods: Vec::new(),
+            material: 0,
+            vertex_buf: vec![0],
+            vertex_type: VertexType::POSITION,
+        };
+        let mut encoded = Vec::new();
+        bincode::serde::encode_into_std_write(invalid, &mut encoded, bincode::config::legacy())
+            .unwrap();
+
+        let result =
+            bincode::serde::decode_from_slice::<Primitive, _>(&encoded, bincode::config::legacy());
+
+        assert!(result.is_err());
     }
 }

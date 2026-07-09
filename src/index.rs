@@ -1,10 +1,10 @@
 use {
     anyhow::bail,
-    serde::{Deserialize, Serialize},
+    serde::{Deserialize, Deserializer, Serialize, de::Error},
     std::mem::size_of,
 };
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexBuffer {
     buf: Vec<u8>,
     ty: IndexType,
@@ -124,6 +124,43 @@ impl IndexBuffer {
     }
 }
 
+impl<'de> Deserialize<'de> for IndexBuffer {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct IndexBufferData {
+            buf: Vec<u8>,
+            ty: IndexType,
+        }
+
+        let data = IndexBufferData::deserialize(deserializer)?;
+        let stride = data.ty.stride();
+        if data.buf.len() % stride != 0 {
+            return Err(D::Error::custom("index buffer byte length is malformed"));
+        }
+
+        let index_count = data.buf.len() / stride;
+        if index_count < 3 {
+            return Err(D::Error::custom(
+                "index buffer must have at least 3 indices",
+            ));
+        }
+
+        if !index_count.is_multiple_of(3) {
+            return Err(D::Error::custom(
+                "index buffer length must be a multiple of 3",
+            ));
+        }
+
+        Ok(Self {
+            buf: data.buf,
+            ty: data.ty,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum IndexType {
     U8,
@@ -223,5 +260,23 @@ mod tests {
         for (expected, actual) in indices.iter().copied().zip(buf) {
             assert_eq!(expected, actual);
         }
+    }
+
+    #[test]
+    fn deserialize_rejects_malformed_index_buffer() {
+        let invalid = IndexBuffer {
+            buf: vec![0],
+            ty: IndexType::U16,
+        };
+        let mut encoded = Vec::new();
+        bincode::serde::encode_into_std_write(invalid, &mut encoded, bincode::config::legacy())
+            .unwrap();
+
+        let result = bincode::serde::decode_from_slice::<IndexBuffer, _>(
+            &encoded,
+            bincode::config::legacy(),
+        );
+
+        assert!(result.is_err());
     }
 }
