@@ -71,6 +71,10 @@ fn material_bitmap_toml_src_resolves_relative_to_bitmap_toml() -> Result<(), Err
         "[content]\ncompression = 'snap'\n\n[[content.group]]\nassets = ['materials/mat.toml']\n",
     )?;
 
+    let source_files = PakBuf::source_files(&pak_src).unwrap();
+    assert!(source_files.contains(&textures_dir.join("albedo.toml")));
+    assert!(source_files.contains(&textures_dir.join("albedo.png")));
+
     PakBuf::bake(&pak_src, &pak_dst).unwrap();
 
     let mut pak = PakBuf::open(&pak_dst)?;

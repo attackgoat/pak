@@ -281,46 +281,70 @@ impl PakBuf {
             }
         }
 
-        fn handle_material(res: &mut BTreeSet<PathBuf>, material: &MaterialAsset) {
+        fn handle_bitmap_path(
+            res: &mut BTreeSet<PathBuf>,
+            project_dir: &Path,
+            path: &Path,
+        ) -> anyhow::Result<()> {
+            res.insert(path.to_path_buf());
+
+            if is_toml(path) {
+                let mut bitmap = Asset::read(path)?
+                    .into_bitmap()
+                    .context("Source file should be a bitmap asset")?;
+                bitmap.canonicalize(project_dir, parent(path));
+                handle_bitmap(res, &bitmap);
+            }
+
+            Ok(())
+        }
+
+        fn handle_material(
+            res: &mut BTreeSet<PathBuf>,
+            project_dir: &Path,
+            material: &MaterialAsset,
+        ) -> anyhow::Result<()> {
             match &material.color {
                 Some(ColorRef::Asset(bitmap)) => handle_bitmap(res, bitmap),
                 Some(ColorRef::Path(path)) => {
-                    res.insert(path.to_path_buf());
+                    handle_bitmap_path(res, project_dir, path)?;
                 }
                 _ => (),
             }
 
             if let Some(height) = &material.height {
-                handle_scalar_ref(res, height);
+                handle_scalar_ref(res, project_dir, height)?;
             }
 
             match &material.emissive {
                 Some(EmissiveRef::Asset(bitmap)) => handle_bitmap(res, bitmap),
                 Some(EmissiveRef::Path(path)) => {
-                    res.insert(path.to_path_buf());
+                    handle_bitmap_path(res, project_dir, path)?;
                 }
                 _ => (),
             }
 
             if let Some(metal) = &material.metal {
-                handle_scalar_ref(res, metal);
+                handle_scalar_ref(res, project_dir, metal)?;
             }
 
             match &material.normal {
                 Some(NormalRef::Asset(bitmap)) => handle_bitmap(res, bitmap),
                 Some(NormalRef::Path(path)) => {
-                    res.insert(path.to_path_buf());
+                    handle_bitmap_path(res, project_dir, path)?;
                 }
                 None => (),
             }
 
             if let Some(rough) = &material.rough {
-                handle_scalar_ref(res, rough);
+                handle_scalar_ref(res, project_dir, rough)?;
             }
 
             if let Some(transmission) = &material.transmission {
-                handle_scalar_ref(res, transmission);
+                handle_scalar_ref(res, project_dir, transmission)?;
             }
+
+            Ok(())
         }
 
         fn handle_mesh(res: &mut BTreeSet<PathBuf>, mesh: &MeshAsset) {
@@ -333,14 +357,20 @@ impl PakBuf {
             }
         }
 
-        fn handle_scalar_ref(res: &mut BTreeSet<PathBuf>, scalar_ref: &ScalarRef) {
+        fn handle_scalar_ref(
+            res: &mut BTreeSet<PathBuf>,
+            project_dir: &Path,
+            scalar_ref: &ScalarRef,
+        ) -> anyhow::Result<()> {
             match scalar_ref {
                 ScalarRef::Asset(bitmap) => handle_bitmap(res, bitmap),
                 ScalarRef::Path(path) => {
-                    res.insert(path.to_path_buf());
+                    handle_bitmap_path(res, project_dir, path)?;
                 }
                 _ => (),
             }
+
+            Ok(())
         }
 
         // Load the source file into an Asset::Content instance
@@ -409,7 +439,7 @@ impl PakBuf {
                         }
                         Asset::Material(mut material) => {
                             material.canonicalize(&src_dir, &asset_parent);
-                            handle_material(&mut res, &material);
+                            handle_material(&mut res, &src_dir, &material)?;
                         }
                         Asset::Mesh(mut mesh) => {
                             mesh.canonicalize(&src_dir, &asset_parent);
@@ -441,7 +471,7 @@ impl PakBuf {
                                 for material in scene_ref.materials() {
                                     match material {
                                         AssetRef::Asset(material) => {
-                                            handle_material(&mut res, material);
+                                            handle_material(&mut res, &src_dir, material)?;
                                         }
                                         AssetRef::Path(path) => {
                                             if res.insert(path.to_path_buf()) && is_toml(path) {
@@ -452,7 +482,7 @@ impl PakBuf {
                                                 };
 
                                                 material.canonicalize(&src_dir, parent(path));
-                                                handle_material(&mut res, &material);
+                                                handle_material(&mut res, &src_dir, &material)?;
                                             }
                                         }
                                     }
