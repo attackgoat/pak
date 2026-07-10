@@ -242,7 +242,9 @@ impl EmissiveRef {
                 if str.starts_with('#')
                     && let Some(val) = parse_hex_color(str)
                 {
-                    assert_eq!(val[3], u8::MAX);
+                    if val[3] != u8::MAX {
+                        return Err(E::custom("expected an emissive color without alpha"));
+                    }
 
                     return Ok(Some(EmissiveRef::Value([
                         OrderedFloat(val[0] as f32 / u8::MAX as f32),
@@ -1098,6 +1100,14 @@ mod tests {
             .expect_err("negative emissive channel should be rejected");
 
         assert!(err.to_string().contains("between 0.0 and 1.0"));
+    }
+
+    #[test]
+    fn rejects_emissive_hex_alpha() {
+        let err = toml::from_str::<MaterialAsset>("emissive = '#abc0'")
+            .expect_err("emissive alpha should be rejected");
+
+        assert!(err.to_string().contains("without alpha"));
     }
 
     #[test]
