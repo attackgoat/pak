@@ -107,7 +107,7 @@ impl Group {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::Content;
 
     #[test]

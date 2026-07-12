@@ -513,7 +513,7 @@ impl BitmapSwizzle {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use {super::*, toml::de::ValueDeserializer};
 
     #[test]

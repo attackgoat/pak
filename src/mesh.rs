@@ -219,7 +219,7 @@ impl VertexType {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::{Primitive, VertexType};
 
     #[test]

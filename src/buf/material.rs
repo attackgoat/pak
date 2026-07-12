@@ -1058,7 +1058,7 @@ impl Canonicalize for ScalarRef {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use {
         super::{MaterialAsset, ScalarRef},
         ordered_float::OrderedFloat,

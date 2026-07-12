@@ -173,7 +173,7 @@ impl Outputs {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::{Channel, Interpolation, Outputs};
 
     #[test]

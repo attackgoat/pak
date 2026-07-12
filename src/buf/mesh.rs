@@ -1440,7 +1440,7 @@ impl mikktspace::Geometry for VertexData {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use {
         super::{MaxIndex, MeshAsset},
         crate::mesh::Mesh,

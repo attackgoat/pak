@@ -179,7 +179,7 @@ impl IndexType {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use crate::index::{IndexBuffer, IndexType};
 
     #[test]

@@ -139,7 +139,7 @@ impl Bitmap {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use crate::bitmap::{Bitmap, BitmapColor, BitmapFormat};
 
     #[test]

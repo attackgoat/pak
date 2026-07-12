@@ -580,7 +580,7 @@ impl StringTable {
 }
 
 #[cfg(all(test, feature = "bake"))]
-mod tests {
+mod test {
     use super::*;
 
     #[test]

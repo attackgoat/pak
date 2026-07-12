@@ -724,7 +724,7 @@ impl Stream for Cursor<&'static [u8]> {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
 
     fn empty_pak() -> PakBuf {
