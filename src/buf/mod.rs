@@ -24,7 +24,6 @@ use {
     },
     crate::PakBuf,
     anyhow::Context,
-    glob::glob,
     log::info,
     ordered_float::OrderedFloat,
     parking_lot::Mutex,
@@ -33,7 +32,7 @@ use {
         de::{Error, SeqAccess, Visitor, value::SeqAccessDeserializer},
     },
     std::{
-        collections::{BTreeSet, HashSet},
+        collections::BTreeSet,
         env::var,
         fmt::{Debug, Formatter},
         fs::create_dir_all,
@@ -383,118 +382,94 @@ impl PakBuf {
 
         res.insert(src.as_ref().to_path_buf());
 
-        let enabled_groups = || content.groups().filter(|group| group.enabled());
+        for asset_path in content.selected_asset_paths(&src_dir)? {
+            if asset_path
+                .extension()
+                .map(|ext| ext.to_string_lossy().into_owned())
+                .unwrap_or_default()
+                .to_lowercase()
+                .as_str()
+                == "toml"
+            {
+                let asset = Asset::read(&asset_path)?;
+                let asset_parent = parent(&asset_path);
 
-        let mut excluded_assets = HashSet::new();
-        for pattern in enabled_groups().flat_map(|group| group.exclude_globs()) {
-            for path in glob(project_path(&src_dir, pattern).to_string_lossy().as_ref())? {
-                let path = path?;
+                match asset {
+                    Asset::Animation(mut anim) => {
+                        anim.canonicalize(&src_dir, &asset_parent);
 
-                excluded_assets.insert(path);
-            }
-        }
-
-        for asset_glob in enabled_groups().flat_map(|group| group.asset_globs()) {
-            let asset_paths = glob(
-                project_path(&src_dir, asset_glob)
-                    .to_string_lossy()
-                    .as_ref(),
-            )
-            .context("Unable to glob source directory")?;
-            for asset_path in asset_paths {
-                let asset_path = asset_path?;
-                if excluded_assets.contains(&asset_path) {
-                    continue;
-                }
-
-                if asset_path
-                    .extension()
-                    .map(|ext| ext.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-                    .to_lowercase()
-                    .as_str()
-                    == "toml"
-                {
-                    let asset = Asset::read(&asset_path)?;
-                    let asset_parent = parent(&asset_path);
-
-                    match asset {
-                        Asset::Animation(mut anim) => {
-                            anim.canonicalize(&src_dir, &asset_parent);
-
-                            if let Some(src) = anim.src() {
-                                res.insert(src.to_path_buf());
-                            }
+                        if let Some(src) = anim.src() {
+                            res.insert(src.to_path_buf());
                         }
-                        Asset::Bitmap(mut bitmap) => {
-                            bitmap.canonicalize(&src_dir, &asset_parent);
-                            handle_bitmap(&mut res, &bitmap);
-                        }
-                        Asset::BitmapFont(mut blob) | Asset::Blob(mut blob) => {
-                            blob.canonicalize(&src_dir, &asset_parent);
-
-                            if let Some(src) = blob.src() {
-                                res.insert(src.to_path_buf());
-                            }
-                        }
-                        Asset::Material(mut material) => {
-                            material.canonicalize(&src_dir, &asset_parent);
-                            handle_material(&mut res, &src_dir, &material)?;
-                        }
-                        Asset::Mesh(mut mesh) => {
-                            mesh.canonicalize(&src_dir, &asset_parent);
-                            handle_mesh(&mut res, &mesh);
-                        }
-                        Asset::Scene(mut scene) => {
-                            scene.canonicalize(&src_dir, &asset_parent);
-
-                            for scene_ref in scene.refs() {
-                                if let Some(mesh) = scene_ref.mesh() {
-                                    match mesh {
-                                        AssetRef::Asset(mesh) => {
-                                            handle_mesh(&mut res, mesh);
-                                        }
-                                        AssetRef::Path(path) => {
-                                            if res.insert(path.to_path_buf()) && is_toml(path) {
-                                                let Some(mut mesh) = Asset::read(path)?.into_mesh()
-                                                else {
-                                                    continue;
-                                                };
-
-                                                mesh.canonicalize(&src_dir, parent(path));
-                                                handle_mesh(&mut res, &mesh);
-                                            }
-                                        }
-                                    }
-                                }
-
-                                for material in scene_ref.materials() {
-                                    match material {
-                                        AssetRef::Asset(material) => {
-                                            handle_material(&mut res, &src_dir, material)?;
-                                        }
-                                        AssetRef::Path(path) => {
-                                            if res.insert(path.to_path_buf()) && is_toml(path) {
-                                                let Some(mut material) =
-                                                    Asset::read(path)?.into_material()
-                                                else {
-                                                    continue;
-                                                };
-
-                                                material.canonicalize(&src_dir, parent(path));
-                                                handle_material(&mut res, &src_dir, &material)?;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        _ => (),
                     }
-                }
+                    Asset::Bitmap(mut bitmap) => {
+                        bitmap.canonicalize(&src_dir, &asset_parent);
+                        handle_bitmap(&mut res, &bitmap);
+                    }
+                    Asset::BitmapFont(mut blob) | Asset::Blob(mut blob) => {
+                        blob.canonicalize(&src_dir, &asset_parent);
 
-                res.insert(asset_path);
+                        if let Some(src) = blob.src() {
+                            res.insert(src.to_path_buf());
+                        }
+                    }
+                    Asset::Material(mut material) => {
+                        material.canonicalize(&src_dir, &asset_parent);
+                        handle_material(&mut res, &src_dir, &material)?;
+                    }
+                    Asset::Mesh(mut mesh) => {
+                        mesh.canonicalize(&src_dir, &asset_parent);
+                        handle_mesh(&mut res, &mesh);
+                    }
+                    Asset::Scene(mut scene) => {
+                        scene.canonicalize(&src_dir, &asset_parent);
+
+                        for scene_ref in scene.refs() {
+                            if let Some(mesh) = scene_ref.mesh() {
+                                match mesh {
+                                    AssetRef::Asset(mesh) => {
+                                        handle_mesh(&mut res, mesh);
+                                    }
+                                    AssetRef::Path(path) => {
+                                        if res.insert(path.to_path_buf()) && is_toml(path) {
+                                            let Some(mut mesh) = Asset::read(path)?.into_mesh()
+                                            else {
+                                                continue;
+                                            };
+
+                                            mesh.canonicalize(&src_dir, parent(path));
+                                            handle_mesh(&mut res, &mesh);
+                                        }
+                                    }
+                                }
+                            }
+
+                            for material in scene_ref.materials() {
+                                match material {
+                                    AssetRef::Asset(material) => {
+                                        handle_material(&mut res, &src_dir, material)?;
+                                    }
+                                    AssetRef::Path(path) => {
+                                        if res.insert(path.to_path_buf()) && is_toml(path) {
+                                            let Some(mut material) =
+                                                Asset::read(path)?.into_material()
+                                            else {
+                                                continue;
+                                            };
+
+                                            material.canonicalize(&src_dir, parent(path));
+                                            handle_material(&mut res, &src_dir, &material)?;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => (),
+                }
             }
+
+            res.insert(asset_path);
         }
 
         Ok(res.into_iter().collect())
@@ -552,184 +527,160 @@ impl PakBuf {
             writer.lock().with_compression_is(Some(compression));
         }
 
-        let enabled_groups = || content.groups().filter(|group| group.enabled());
-
-        let mut excluded_assets = HashSet::new();
-        for pattern in enabled_groups().flat_map(|group| group.exclude_globs()) {
-            for path in glob(project_path(&src_dir, pattern).to_string_lossy().as_ref())? {
-                let path = path?;
-
-                excluded_assets.insert(path);
-            }
-        }
-
         // Process each file we find as a separate runtime task
-        for asset_glob in enabled_groups().flat_map(|group| group.asset_globs()) {
-            let asset_paths = glob(
-                project_path(&src_dir, asset_glob)
-                    .to_string_lossy()
-                    .as_ref(),
-            )
-            .context("Unable to glob source directory")?;
-            for asset_path in asset_paths {
-                let asset_path = asset_path.context("Unable to get asset path")?;
-                if excluded_assets.contains(&asset_path) {
-                    continue;
+        for asset_path in content.selected_asset_paths(&src_dir)? {
+            info!("processing {}", asset_path.display());
+
+            re_run_if_changed(&asset_path);
+
+            match asset_path
+                .extension()
+                .map(|ext| ext.to_string_lossy().into_owned())
+                .unwrap_or_default()
+                .to_lowercase()
+                .as_str()
+            {
+                "glb" | "gltf" => {
+                    // Note that direct references like this build a mesh, not an animation
+                    // To build an animation you must specify a .toml file
+                    let writer = Arc::clone(&writer);
+                    let src_dir = src_dir.clone();
+                    let asset_path = asset_path.clone();
+                    tasks.push(rt.spawn_blocking(move || {
+                        MeshAsset::new(&asset_path)
+                            .bake(&writer, &src_dir, Some(&asset_path))
+                            .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
+                        Ok(())
+                    }));
                 }
+                "jpg" | "jpeg" | "png" | "bmp" | "tga" | "dds" | "webp" | "gif" | "ico"
+                | "tiff" => {
+                    let writer = Arc::clone(&writer);
+                    let src_dir = src_dir.clone();
+                    let asset_path = asset_path.clone();
+                    tasks.push(rt.spawn_blocking(move || {
+                        BitmapAsset::new(&asset_path)
+                            .bake_from_path(&writer, src_dir, Some(&asset_path))
+                            .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
+                        Ok(())
+                    }));
+                }
+                "toml" => {
+                    let asset = Asset::read(&asset_path)?;
+                    let asset_parent = parent(&asset_path);
 
-                info!("processing {}", asset_path.display());
-
-                re_run_if_changed(&asset_path);
-
-                match asset_path
-                    .extension()
-                    .map(|ext| ext.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-                    .to_lowercase()
-                    .as_str()
-                {
-                    "glb" | "gltf" => {
-                        // Note that direct references like this build a mesh, not an animation
-                        // To build an animation you must specify a .toml file
-                        let writer = Arc::clone(&writer);
-                        let src_dir = src_dir.clone();
-                        let asset_path = asset_path.clone();
-                        tasks.push(rt.spawn_blocking(move || {
-                            MeshAsset::new(&asset_path)
-                                .bake(&writer, &src_dir, Some(&asset_path))
-                                .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
-                            Ok(())
-                        }));
-                    }
-                    "jpg" | "jpeg" | "png" | "bmp" | "tga" | "dds" | "webp" | "gif" | "ico"
-                    | "tiff" => {
-                        let writer = Arc::clone(&writer);
-                        let src_dir = src_dir.clone();
-                        let asset_path = asset_path.clone();
-                        tasks.push(rt.spawn_blocking(move || {
-                            BitmapAsset::new(&asset_path)
-                                .bake_from_path(&writer, src_dir, Some(&asset_path))
-                                .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
-                            Ok(())
-                        }));
-                    }
-                    "toml" => {
-                        let asset = Asset::read(&asset_path)?;
-                        let asset_parent = parent(&asset_path);
-
-                        match asset {
-                            Asset::Animation(mut anim) => {
-                                let writer = Arc::clone(&writer);
-                                let src_dir = src_dir.clone();
-                                let asset_path = asset_path.clone();
-                                let asset_parent = asset_parent.clone();
-                                tasks.push(rt.spawn_blocking(move || {
-                                    anim.canonicalize(&src_dir, &asset_parent);
-                                    anim.bake(&writer, src_dir, &asset_path).context(
-                                        asset_path.as_os_str().to_string_lossy().into_owned(),
-                                    )?;
-                                    Ok(())
-                                }));
-                            }
-                            Asset::Bitmap(mut bitmap) => {
-                                let writer = Arc::clone(&writer);
-                                let src_dir = src_dir.clone();
-                                let asset_path = asset_path.clone();
-                                let asset_parent = asset_parent.clone();
-                                tasks.push(rt.spawn_blocking(move || {
-                                    bitmap.canonicalize(&src_dir, &asset_parent);
-                                    bitmap
-                                        .bake_from_path(&writer, src_dir, Some(&asset_path))
-                                        .context(
-                                            asset_path.as_os_str().to_string_lossy().into_owned(),
-                                        )?;
-                                    Ok(())
-                                }));
-                            }
-                            Asset::BitmapFont(mut blob) => {
-                                let writer = Arc::clone(&writer);
-                                let src_dir = src_dir.clone();
-                                let asset_path = asset_path.clone();
-                                let asset_parent = asset_parent.clone();
-                                tasks.push(rt.spawn_blocking(move || {
-                                    blob.canonicalize(&src_dir, &asset_parent);
-                                    blob.bake_bitmap_font(&writer, src_dir, &asset_path)
-                                        .context(
-                                            asset_path.as_os_str().to_string_lossy().into_owned(),
-                                        )?;
-                                    Ok(())
-                                }));
-                            }
-                            Asset::Blob(mut blob) => {
-                                let writer = Arc::clone(&writer);
-                                let src_dir = src_dir.clone();
-                                let asset_path = asset_path.clone();
-                                let asset_parent = asset_parent.clone();
-                                tasks.push(rt.spawn_blocking(move || {
-                                    blob.canonicalize(&src_dir, &asset_parent);
-                                    blob.bake_from_path(&writer, src_dir, &asset_path).context(
-                                        asset_path.as_os_str().to_string_lossy().into_owned(),
-                                    )?;
-                                    Ok(())
-                                }));
-                            }
-                            Asset::Material(mut material) => {
-                                let writer = Arc::clone(&writer);
-                                let src_dir = src_dir.clone();
-                                let asset_path = asset_path.clone();
-                                let asset_parent = asset_parent.clone();
-                                let rt2 = rt.clone();
-                                tasks.push(rt.spawn_blocking(move || {
-                                    material.canonicalize(&src_dir, &asset_parent);
-                                    material
-                                        .bake(&rt2, &writer, src_dir, Some(&asset_path))
-                                        .context(
-                                            asset_path.as_os_str().to_string_lossy().into_owned(),
-                                        )?;
-                                    Ok(())
-                                }));
-                            }
-                            Asset::Mesh(mut mesh) => {
-                                let writer = Arc::clone(&writer);
-                                let src_dir = src_dir.clone();
-                                let asset_path = asset_path.clone();
-                                let asset_parent = asset_parent.clone();
-                                tasks.push(rt.spawn_blocking(move || {
-                                    mesh.canonicalize(&src_dir, &asset_parent);
-                                    mesh.bake(&writer, &src_dir, Some(&asset_path)).context(
-                                        asset_path.as_os_str().to_string_lossy().into_owned(),
-                                    )?;
-                                    Ok(())
-                                }));
-                            }
-                            Asset::Scene(mut scene) => {
-                                let writer = Arc::clone(&writer);
-                                let src_dir = src_dir.clone();
-                                let asset_path = asset_path.clone();
-                                let asset_parent = asset_parent.clone();
-                                let rt2 = rt.clone();
-                                tasks.push(rt.spawn_blocking(move || {
-                                    scene.canonicalize(&src_dir, &asset_parent);
-                                    scene.bake(&rt2, &writer, &src_dir, &asset_path).context(
-                                        asset_path.as_os_str().to_string_lossy().into_owned(),
-                                    )?;
-                                    Ok(())
-                                }));
-                            }
-                            _ => anyhow::bail!("unhandled asset type"),
+                    match asset {
+                        Asset::Animation(mut anim) => {
+                            let writer = Arc::clone(&writer);
+                            let src_dir = src_dir.clone();
+                            let asset_path = asset_path.clone();
+                            let asset_parent = asset_parent.clone();
+                            tasks.push(rt.spawn_blocking(move || {
+                                anim.canonicalize(&src_dir, &asset_parent);
+                                anim.bake(&writer, src_dir, &asset_path).context(
+                                    asset_path.as_os_str().to_string_lossy().into_owned(),
+                                )?;
+                                Ok(())
+                            }));
                         }
+                        Asset::Bitmap(mut bitmap) => {
+                            let writer = Arc::clone(&writer);
+                            let src_dir = src_dir.clone();
+                            let asset_path = asset_path.clone();
+                            let asset_parent = asset_parent.clone();
+                            tasks.push(rt.spawn_blocking(move || {
+                                bitmap.canonicalize(&src_dir, &asset_parent);
+                                bitmap
+                                    .bake_from_path(&writer, src_dir, Some(&asset_path))
+                                    .context(
+                                        asset_path.as_os_str().to_string_lossy().into_owned(),
+                                    )?;
+                                Ok(())
+                            }));
+                        }
+                        Asset::BitmapFont(mut blob) => {
+                            let writer = Arc::clone(&writer);
+                            let src_dir = src_dir.clone();
+                            let asset_path = asset_path.clone();
+                            let asset_parent = asset_parent.clone();
+                            tasks.push(rt.spawn_blocking(move || {
+                                blob.canonicalize(&src_dir, &asset_parent);
+                                blob.bake_bitmap_font(&writer, src_dir, &asset_path)
+                                    .context(
+                                        asset_path.as_os_str().to_string_lossy().into_owned(),
+                                    )?;
+                                Ok(())
+                            }));
+                        }
+                        Asset::Blob(mut blob) => {
+                            let writer = Arc::clone(&writer);
+                            let src_dir = src_dir.clone();
+                            let asset_path = asset_path.clone();
+                            let asset_parent = asset_parent.clone();
+                            tasks.push(rt.spawn_blocking(move || {
+                                blob.canonicalize(&src_dir, &asset_parent);
+                                blob.bake_from_path(&writer, src_dir, &asset_path).context(
+                                    asset_path.as_os_str().to_string_lossy().into_owned(),
+                                )?;
+                                Ok(())
+                            }));
+                        }
+                        Asset::Material(mut material) => {
+                            let writer = Arc::clone(&writer);
+                            let src_dir = src_dir.clone();
+                            let asset_path = asset_path.clone();
+                            let asset_parent = asset_parent.clone();
+                            let rt2 = rt.clone();
+                            tasks.push(rt.spawn_blocking(move || {
+                                material.canonicalize(&src_dir, &asset_parent);
+                                material
+                                    .bake(&rt2, &writer, src_dir, Some(&asset_path))
+                                    .context(
+                                        asset_path.as_os_str().to_string_lossy().into_owned(),
+                                    )?;
+                                Ok(())
+                            }));
+                        }
+                        Asset::Mesh(mut mesh) => {
+                            let writer = Arc::clone(&writer);
+                            let src_dir = src_dir.clone();
+                            let asset_path = asset_path.clone();
+                            let asset_parent = asset_parent.clone();
+                            tasks.push(rt.spawn_blocking(move || {
+                                mesh.canonicalize(&src_dir, &asset_parent);
+                                mesh.bake(&writer, &src_dir, Some(&asset_path)).context(
+                                    asset_path.as_os_str().to_string_lossy().into_owned(),
+                                )?;
+                                Ok(())
+                            }));
+                        }
+                        Asset::Scene(mut scene) => {
+                            let writer = Arc::clone(&writer);
+                            let src_dir = src_dir.clone();
+                            let asset_path = asset_path.clone();
+                            let asset_parent = asset_parent.clone();
+                            let rt2 = rt.clone();
+                            tasks.push(rt.spawn_blocking(move || {
+                                scene.canonicalize(&src_dir, &asset_parent);
+                                scene.bake(&rt2, &writer, &src_dir, &asset_path).context(
+                                    asset_path.as_os_str().to_string_lossy().into_owned(),
+                                )?;
+                                Ok(())
+                            }));
+                        }
+                        _ => anyhow::bail!("unhandled asset type"),
                     }
-                    _ => {
-                        let writer = Arc::clone(&writer);
-                        let src_dir = src_dir.clone();
-                        let asset_path = asset_path.clone();
-                        tasks.push(rt.spawn_blocking(move || {
-                            let blob = BlobAsset::new(&asset_path);
-                            blob.bake(&writer, &src_dir)
-                                .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
-                            Ok(())
-                        }));
-                    }
+                }
+                _ => {
+                    let writer = Arc::clone(&writer);
+                    let src_dir = src_dir.clone();
+                    let asset_path = asset_path.clone();
+                    tasks.push(rt.spawn_blocking(move || {
+                        let blob = BlobAsset::new(&asset_path);
+                        blob.bake(&writer, &src_dir)
+                            .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
+                        Ok(())
+                    }));
                 }
             }
         }

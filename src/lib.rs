@@ -784,7 +784,8 @@ mod test {
     #[test]
     fn invalid_data_ref_range_returns_invalid_data() {
         let mut pak = empty_pak();
-        pak.data.blobs.push(DataRef::Ref(10..5));
+        let (start, end) = (10, 5);
+        pak.data.blobs.push(DataRef::Ref(start..end));
 
         assert_eq!(
             pak.read_blob_id(BlobId(0))

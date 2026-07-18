@@ -55,7 +55,7 @@ impl AnimationAsset {
         }
 
         let key = file_key(&project_dir, &path);
-        info!("Baking animation: {}", &key);
+        info!("Baking animation: {}", key);
 
         let name = self.name();
         let (doc, bufs, _) = import(src).context("Importing animation source")?;

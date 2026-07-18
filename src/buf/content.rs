@@ -1,6 +1,13 @@
 use {
+    super::project_path,
     crate::compression::{BrotliParams, Compression},
+    anyhow::Context,
+    glob::glob,
     serde::Deserialize,
+    std::{
+        collections::HashSet,
+        path::{Path, PathBuf},
+    },
 };
 
 /// Holds a description of top-level content files which simply group other asset files for ease of
@@ -30,6 +37,35 @@ impl Content {
     #[allow(unused)]
     pub fn groups(&self) -> impl Iterator<Item = &Group> {
         self.groups.iter()
+    }
+
+    pub(crate) fn selected_asset_paths(
+        &self,
+        asset_root: impl AsRef<Path>,
+    ) -> anyhow::Result<Vec<PathBuf>> {
+        let asset_root = asset_root.as_ref();
+        let enabled_groups = || self.groups().filter(|group| group.enabled());
+
+        let mut excluded_assets = HashSet::new();
+        for pattern in enabled_groups().flat_map(|group| group.exclude_globs()) {
+            for path in glob(project_path(asset_root, pattern).to_string_lossy().as_ref())? {
+                excluded_assets.insert(path?);
+            }
+        }
+
+        let mut asset_paths = Vec::new();
+        for pattern in enabled_groups().flat_map(|group| group.asset_globs()) {
+            for path in glob(project_path(asset_root, pattern).to_string_lossy().as_ref())
+                .context("Unable to glob source directory")?
+            {
+                let path = path?;
+                if !excluded_assets.contains(&path) {
+                    asset_paths.push(path);
+                }
+            }
+        }
+
+        Ok(asset_paths)
     }
 
     pub(crate) fn compression(&self) -> Option<Compression> {
