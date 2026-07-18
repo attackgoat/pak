@@ -1,4 +1,5 @@
 [material]
+alpha-test = true
 color = 'material_01.png'
 metal = 0.25
 height = 0.5

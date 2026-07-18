@@ -40,6 +40,7 @@ fn deserialize_scene_materials() -> Result<(), Error> {
         assert_eq!(mesh_ref.materials().len(), 1);
 
         let material = pak.read_material_id(mesh_ref.materials()[0]).unwrap();
+        assert!(material.alpha_test);
         assert!(material.params.is_some());
         assert_eq!(
             material.params_used,

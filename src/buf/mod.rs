@@ -177,6 +177,21 @@ impl Drop for CargoWatchesGuard {
     }
 }
 
+/// Describes an animation source selected by a content manifest.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct SourceAnimation {
+    /// The key used for the baked animation.
+    pub key: String,
+    /// The animation asset TOML selected by the content manifest.
+    pub manifest_path: PathBuf,
+    /// The referenced GLTF or GLB source. This path is not required to exist.
+    pub source_path: PathBuf,
+    /// The optional animation name within the source file.
+    pub name: Option<String>,
+    /// Animation channel names excluded during baking.
+    pub exclude: Vec<String>,
+}
+
 /// Euler rotation sequences.
 ///
 /// The angles are applied starting from the right. E.g. XYZ will first apply the z-axis rotation.
@@ -257,6 +272,51 @@ trait Canonicalize {
 }
 
 impl PakBuf {
+    /// Returns the animation sources selected by a content manifest.
+    pub fn source_animations(manifest: impl AsRef<Path>) -> anyhow::Result<Box<[SourceAnimation]>> {
+        Self::source_animations_with_dir(&manifest, parent(&manifest))
+    }
+
+    /// Returns the animation sources selected by a content manifest using `asset_root` to resolve
+    /// asset globs, project-rooted paths, and generated pak keys.
+    ///
+    /// Referenced GLTF and GLB files are not opened and are not required to exist.
+    pub fn source_animations_with_dir(
+        manifest: impl AsRef<Path>,
+        asset_root: impl AsRef<Path>,
+    ) -> anyhow::Result<Box<[SourceAnimation]>> {
+        let asset_root = asset_root.as_ref();
+        let content = Asset::read(&manifest)?
+            .into_content()
+            .context("Unable to read asset file")?;
+        let mut animations = BTreeSet::new();
+
+        for manifest_path in content.selected_asset_paths(asset_root)? {
+            if !is_toml(&manifest_path) {
+                continue;
+            }
+
+            let Asset::Animation(mut animation) = Asset::read(&manifest_path)? else {
+                continue;
+            };
+            animation.canonicalize(asset_root, parent(&manifest_path));
+            let source_path = animation
+                .src()
+                .context("unspecified animation source")?
+                .to_path_buf();
+
+            animations.insert(SourceAnimation {
+                key: file_key(asset_root, &manifest_path),
+                manifest_path,
+                source_path,
+                name: animation.name().map(str::to_owned),
+                exclude: animation.exclude().unwrap_or_default().to_vec(),
+            });
+        }
+
+        Ok(animations.into_iter().collect())
+    }
+
     /// Returns the list of source files used to bake this pak, including all assets
     /// specified inline or within scenes.
     ///

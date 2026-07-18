@@ -281,6 +281,9 @@ impl Default for EmissiveRef {
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct MaterialAsset {
+    /// Whether base-color alpha should reject fragments below the engine cutoff.
+    pub alpha_test: bool,
+
     /// A `Bitmap` asset, `Bitmap` asset file, three or four channel image source file, or single
     /// four channel color.
     #[serde(deserialize_with = "ColorRef::de")]
@@ -737,6 +740,7 @@ impl MaterialAsset {
             .context("material bake tasks failed")?;
 
         Ok(MaterialInfo {
+            alpha_test: self.alpha_test,
             color,
             emissive,
             normal,
@@ -1063,6 +1067,16 @@ mod test {
         super::{MaterialAsset, ScalarRef},
         ordered_float::OrderedFloat,
     };
+
+    #[test]
+    fn alpha_test_defaults_off_and_can_be_enabled() {
+        let default = toml::from_str::<MaterialAsset>("").expect("material should deserialize");
+        let enabled = toml::from_str::<MaterialAsset>("alpha-test = true")
+            .expect("alpha-test should deserialize");
+
+        assert!(!default.alpha_test);
+        assert!(enabled.alpha_test);
+    }
 
     #[test]
     fn deserializes_height_scalar_value() {

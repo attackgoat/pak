@@ -205,6 +205,9 @@ id_struct!(Scene);
 /// Holds bitmap handles to match what was setup in the asset `.toml` file.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MaterialInfo {
+    /// Whether base-color alpha should reject fragments below the engine cutoff.
+    pub alpha_test: bool,
+
     /// Three or four channel base color, aka albedo or diffuse, of the material.
     pub color: BitmapId,
 

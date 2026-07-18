@@ -181,6 +181,7 @@ color = 'my-texture.png'
 
 Item | Description
 ---- | -----------
+`alpha-test` | (_boolean_) Reject base-color alpha below the consumer's alpha-test cutoff.
 `color` | Hex string, path string, inline bitmap asset, or sequence.
 `height` | Hex string, path string, inline bitmap asset, or floating point value.
 `double-sided` | (`boolean`_) When set, indicates the material is double-sided.
