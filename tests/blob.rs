@@ -1,6 +1,6 @@
 #[cfg(feature = "bake")]
 use {
-    pak::{Pak, PakBuf},
+    pak::{BlobId, Pak, PakBuf},
     std::{
         fs,
         io::{Error, Read, Seek, SeekFrom, Write},
@@ -109,5 +109,46 @@ fn hash_validation_is_explicit() -> Result<(), Error> {
 
     fs::remove_dir_all(generated_dir)?;
 
+    Ok(())
+}
+
+#[cfg(feature = "bake")]
+#[test]
+fn repeated_bakes_assign_stable_blob_ids() -> Result<(), Error> {
+    let generated_dir = std::env::temp_dir().join(format!("pak-stable-ids-{}", std::process::id()));
+    fs::create_dir_all(&generated_dir)?;
+    for idx in 0..32 {
+        fs::write(
+            generated_dir.join(format!("asset_{idx:02}.bin")),
+            vec![idx as u8; idx * 4096 + 1],
+        )?;
+    }
+    let pak_src = generated_dir.join("pak.toml");
+    fs::write(
+        &pak_src,
+        "[content]\ncompression = 'snap'\n\n[[content.group]]\nassets = ['*.bin']\n",
+    )?;
+
+    let mut expected_bytes = None;
+    for bake_idx in 0..3 {
+        let pak_dst = generated_dir.join(format!("blob-{bake_idx}.pak"));
+        PakBuf::bake(&pak_src, &pak_dst).unwrap();
+        let pak = PakBuf::open(&pak_dst)?;
+        for idx in 0..32 {
+            assert_eq!(
+                pak.blob_id(&format!("asset_{idx:02}.bin")),
+                Some(BlobId(idx))
+            );
+        }
+
+        let bytes = fs::read(pak_dst)?;
+        if let Some(expected_bytes) = &expected_bytes {
+            assert_eq!(&bytes, expected_bytes);
+        } else {
+            expected_bytes = Some(bytes);
+        }
+    }
+
+    fs::remove_dir_all(generated_dir)?;
     Ok(())
 }

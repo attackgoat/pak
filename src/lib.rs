@@ -20,7 +20,7 @@ use {
     paste::paste,
     serde::{Deserialize, Serialize, de::DeserializeOwned},
     std::{
-        collections::HashMap,
+        collections::BTreeMap,
         fmt::{Debug, Formatter},
         fs::File,
         io::{BufReader, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},
@@ -85,7 +85,7 @@ fn read_hash_trailer(reader: &mut impl Read) -> Result<u64, Error> {
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct Data {
     // These fields are handled by bincode serialization as-is
-    ids: HashMap<String, Id>,
+    ids: BTreeMap<String, Id>,
     materials: Vec<MaterialInfo>,
 
     // These fields are loaded on demand

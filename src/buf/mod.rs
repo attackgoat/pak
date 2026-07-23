@@ -743,6 +743,11 @@ impl PakBuf {
                     }));
                 }
             }
+
+            // IDs are assigned when an asset commits to Writer. Await each top-level asset before
+            // spawning the next one so task completion timing cannot change the generated IDs.
+            let task = tasks.pop().expect("asset branch must create one bake task");
+            rt.block_on(task).context("spawned task failed")??;
         }
 
         let result: anyhow::Result<()> = rt.block_on(async {
