@@ -272,6 +272,13 @@ pub trait Pak {
     /// Gets the corresponding blob for the given ID.
     fn read_blob_id(&mut self, id: impl Into<BlobId>) -> Result<Vec<u8>, Error>;
 
+    /// Opens a seekable reader over the corresponding blob payload.
+    ///
+    /// This is experimental and only supports uncompressed pak files. Blobs are still stored as
+    /// serialized `Vec<u8>` values, so the reader skips the bincode length prefix and exposes only
+    /// the byte payload.
+    fn stream_blob_id(&self, id: impl Into<BlobId>) -> Result<BlobStream, Error>;
+
     /// Gets the material for the given handle, if one exists.
     fn read_material_id(&self, id: impl Into<MaterialId>) -> Option<MaterialInfo>;
 
@@ -329,6 +336,16 @@ pub trait Pak {
 
         if let Some(h) = self.blob_id(key) {
             self.read_blob_id(h)
+        } else {
+            Err(Error::from(ErrorKind::InvalidInput))
+        }
+    }
+
+    fn stream_blob(&self, key: impl AsRef<str>) -> Result<BlobStream, Error> {
+        trace!("Streaming blob {}", key.as_ref());
+
+        if let Some(h) = self.blob_id(key) {
+            self.stream_blob_id(h)
         } else {
             Err(Error::from(ErrorKind::InvalidInput))
         }
@@ -642,6 +659,37 @@ impl Pak for PakBuf {
         self.deserialize(pos, len)
     }
 
+    fn stream_blob_id(&self, id: impl Into<BlobId>) -> Result<BlobStream, Error> {
+        if self.compression.is_some() {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                "streaming compressed pak blobs is not supported",
+            ));
+        }
+
+        let id = id.into();
+        let (pos, len) = self
+            .data
+            .blobs
+            .get(id.0)
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?
+            .pos_len()?;
+        let mut reader = self.reader.open()?;
+        reader.seek(SeekFrom::Start(pos))?;
+        let payload_len = read_bincode_legacy_len(&mut reader)?;
+        if payload_len > len.saturating_sub(8) as u64 {
+            return Err(Error::from(ErrorKind::InvalidData));
+        }
+        let start = reader.stream_position()?;
+
+        Ok(BlobStream {
+            reader,
+            start,
+            len: payload_len,
+            pos: 0,
+        })
+    }
+
     /// Gets the material for the given ID.
     fn read_material_id(&self, id: impl Into<MaterialId>) -> Option<MaterialInfo> {
         let id = id.into();
@@ -678,6 +726,58 @@ impl Pak for PakBuf {
             .pos_len()?;
         self.deserialize(pos, len)
     }
+}
+
+#[derive(Debug)]
+pub struct BlobStream {
+    reader: Box<dyn Stream>,
+    start: u64,
+    len: u64,
+    pos: u64,
+}
+
+impl BlobStream {
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Read for BlobStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos >= self.len {
+            return Ok(0);
+        }
+
+        let remaining = (self.len - self.pos) as usize;
+        let count = buf.len().min(remaining);
+        let count = self.reader.read(&mut buf[..count])?;
+        self.pos += count as u64;
+        Ok(count)
+    }
+}
+
+impl Seek for BlobStream {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        let next = match pos {
+            SeekFrom::Start(pos) => pos,
+            SeekFrom::End(offset) => self.len.saturating_add_signed(offset),
+            SeekFrom::Current(offset) => self.pos.saturating_add_signed(offset),
+        }
+        .min(self.len);
+        self.reader.seek(SeekFrom::Start(self.start + next))?;
+        self.pos = next;
+        Ok(self.pos)
+    }
+}
+
+fn read_bincode_legacy_len(reader: &mut dyn Read) -> Result<u64, Error> {
+    let mut bytes = [0u8; 8];
+    reader.read_exact(&mut bytes)?;
+    Ok(u64::from_le_bytes(bytes))
 }
 
 #[derive(Debug)]
@@ -820,5 +920,28 @@ mod test {
                 .kind(),
             ErrorKind::InvalidData,
         );
+    }
+
+    #[test]
+    fn stream_blob_reads_payload_without_bincode_prefix() {
+        let payload = vec![1, 2, 3, 4];
+        let mut encoded = Vec::new();
+        bincode::serde::encode_into_std_write(&payload, &mut encoded, bincode::config::legacy())
+            .unwrap();
+        let stream_data: &'static [u8] = Box::leak(encoded.into_boxed_slice());
+        let mut pak = empty_pak();
+        pak.data
+            .blobs
+            .push(DataRef::Ref(0..stream_data.len() as u32));
+        pak.reader = Box::new(Cursor::new(stream_data));
+
+        assert_eq!(pak.read_blob_id(BlobId(0)).unwrap(), payload);
+
+        let mut stream = pak.stream_blob_id(BlobId(0)).unwrap();
+        assert_eq!(stream.len(), 4);
+        stream.seek(SeekFrom::Start(1)).unwrap();
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, [2, 3, 4]);
     }
 }
