@@ -1,6 +1,9 @@
 #[cfg(feature = "bake")]
 use {
-    pak::{Pak, PakBuf, bitmap::BitmapFormat},
+    pak::{
+        Pak, PakBuf,
+        bitmap::{BitmapCompression, BitmapFormat},
+    },
     std::{fs, io::Error, path::PathBuf, sync::LazyLock},
 };
 
@@ -68,7 +71,7 @@ fn material_bitmap_toml_src_resolves_relative_to_bitmap_toml() -> Result<(), Err
     let pak_dst = generated_dir.join("material.pak");
     fs::write(
         &pak_src,
-        "[content]\ncompression = 'snap'\n\n[[content.group]]\nassets = ['materials/mat.toml']\n",
+        "[content]\ncompression = 'snap'\ntexture-compression = true\n\n[[content.group]]\nassets = ['materials/mat.toml', 'textures/albedo.toml']\n",
     )?;
 
     let source_files = PakBuf::source_files(&pak_src).unwrap();
@@ -79,6 +82,11 @@ fn material_bitmap_toml_src_resolves_relative_to_bitmap_toml() -> Result<(), Err
 
     let mut pak = PakBuf::open(&pak_dst)?;
     let material = pak.read_material("materials/mat").unwrap();
+    assert_eq!(pak.bitmap_count(), 1);
+    assert_eq!(pak.bitmap_id("textures/albedo"), Some(material.color));
+    let color_info = pak.bitmap_info_id(material.color).unwrap();
+    assert_eq!(color_info.compression(), Some(BitmapCompression::Bc1Srgb));
+    assert!(pak.read_compressed_bitmap_id(material.color)?.is_some());
     let color = pak.read_bitmap_id(material.color)?;
     assert!(!color.pixels().is_empty());
 

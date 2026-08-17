@@ -124,8 +124,9 @@ impl MeshAsset {
 
         // Early-out if we have already baked this mesh
         let asset = self.clone().into();
+        let key = path.as_ref().map(|path| file_key(&project_dir, path));
 
-        if let Some(id) = writer.lock().ctx.get(&asset) {
+        if let Some(id) = writer.lock().asset_id(&asset, key.as_deref())? {
             return id.as_mesh().context("asset context returned non-mesh id");
         }
 
@@ -133,7 +134,6 @@ impl MeshAsset {
 
         // If a path is given it will be available as a key inside the .pak (paths are not
         // given if the asset is specified inline - those are only available in the .pak via ID)
-        let key = path.as_ref().map(|path| file_key(&project_dir, path));
         if let Some(key) = &key {
             // This mesh will be accessible using this key
             info!("Baking mesh: {}", key);
@@ -149,20 +149,23 @@ impl MeshAsset {
 
         // Bake the unstructured data blob too
         if let Some(data) = &self.data {
-            let data_id = BlobAsset::new(data)
-                .bake(writer, project_dir)
-                .context("Baking unstructured mesh data")?;
+            let data_id = Writer::with_asset_policy(writer, &asset, || {
+                BlobAsset::new(data)
+                    .bake(writer, &project_dir)
+                    .context("Baking unstructured mesh data")
+            })?;
             mesh.set_data(data_id);
         }
 
         // Check again to see if we are the first one to finish this
         let mut writer = writer.lock();
-        if let Some(id) = writer.ctx.get(&asset) {
+        if let Some(id) = writer.asset_id(&asset, key.as_deref())? {
             return id.as_mesh().context("asset context returned non-mesh id");
         }
 
-        let id = writer.push_mesh(mesh, key);
-        writer.ctx.insert(asset, id.into());
+        let policy = writer.policy_for(&asset);
+        let id = writer.push_mesh(mesh, policy)?;
+        writer.commit_asset(asset, id, key)?;
 
         Ok(id)
     }

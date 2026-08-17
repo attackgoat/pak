@@ -1,6 +1,6 @@
 use {
     super::{
-        Canonicalize, Writer,
+        Asset, Canonicalize, Writer,
         bitmap::{BitmapAsset, BitmapSwizzle},
         file_key, re_run_if_changed,
     },
@@ -61,14 +61,13 @@ impl BlobAsset {
             return Err(anyhow::Error::msg("unspecified blob source"));
         };
 
-        let asset = self.clone().into();
+        let asset = Asset::Blob(self.clone());
+        let key = file_key(&project_dir, path);
 
         // Early-out if we have already baked this blob
-        if let Some(id) = writer.lock().ctx.get(&asset) {
+        if let Some(id) = writer.lock().asset_id(&asset, Some(&key))? {
             return id.as_blob().context("asset context returned non-blob id");
         }
-
-        let key = file_key(&project_dir, path);
 
         info!("Baking blob: {}", key);
 
@@ -80,12 +79,13 @@ impl BlobAsset {
             .context("Unable to read blob file")?;
 
         let mut writer = writer.lock();
-        if let Some(id) = writer.ctx.get(&asset) {
+        if let Some(id) = writer.asset_id(&asset, Some(&key))? {
             return id.as_blob().context("asset context returned non-blob id");
         }
 
-        let id = writer.push_blob(value, Some(key));
-        writer.ctx.insert(asset, id.into());
+        let policy = writer.policy_for(&asset);
+        let id = writer.push_blob(value, policy)?;
+        writer.commit_asset(asset, id, Some(key))?;
 
         Ok(id)
     }
@@ -101,16 +101,15 @@ impl BlobAsset {
             return Err(anyhow::Error::msg("unspecified blob source"));
         };
 
-        let asset = self.clone().into();
+        let asset = Asset::BitmapFont(self.clone());
+        let key = file_key(&project_dir, &path);
 
         // Early-out if we have already baked this blob
-        if let Some(id) = writer.lock().ctx.get(&asset) {
+        if let Some(id) = writer.lock().asset_id(&asset, Some(&key))? {
             return id
                 .as_bitmap_font()
                 .context("asset context returned non-bitmap-font id");
         }
-
-        let key = file_key(&project_dir, &path);
 
         info!("Baking bitmap font: {}", key);
 
@@ -176,14 +175,15 @@ impl BlobAsset {
             .collect();
 
         let mut writer = writer.lock();
-        if let Some(id) = writer.ctx.get(&asset) {
+        if let Some(id) = writer.asset_id(&asset, Some(&key))? {
             return id
                 .as_bitmap_font()
                 .context("asset context returned non-bitmap-font id");
         }
 
-        let id = writer.push_bitmap_font(BitmapFont::new(def_file, page_bufs), Some(key));
-        writer.ctx.insert(asset, id.into());
+        let policy = writer.policy_for(&asset);
+        let id = writer.push_bitmap_font(BitmapFont::new(def_file, page_bufs), policy)?;
+        writer.commit_asset(asset, id, Some(key))?;
 
         Ok(id)
     }

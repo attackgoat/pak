@@ -9,7 +9,7 @@ use {
 use {brotli::CompressorWriter, snap::write::FrameEncoder, std::io::Write};
 
 /// Describes Brotli-based compression.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct BrotliParams {
     /// Buffer size.
     pub buffer_size: usize,
@@ -29,7 +29,7 @@ impl Default for BrotliParams {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum Compression {
     Brotli(BrotliParams),
     Snap,

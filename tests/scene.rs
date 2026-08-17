@@ -1,7 +1,11 @@
 use {
     glam::{EulerRot, Quat},
     pak::{MaterialParameterFlags, Pak, PakBuf},
-    std::{io::Error, path::PathBuf, sync::LazyLock},
+    std::{
+        io::{Error, Read},
+        path::PathBuf,
+        sync::LazyLock,
+    },
 };
 
 #[cfg(feature = "bake")]
@@ -132,5 +136,54 @@ fn bake_with_generated_content_file() -> Result<(), Error> {
     let mut pak = PakBuf::open(&pak_dst)?;
     pak.read_scene("scene/scene")?;
 
+    Ok(())
+}
+
+#[cfg(feature = "bake")]
+#[test]
+fn transitive_direct_aggregate_uses_its_own_policy_for_dependencies() -> Result<(), Error> {
+    let generated_dir =
+        std::env::temp_dir().join(format!("pak-direct-aggregate-{}", std::process::id()));
+    fs::create_dir_all(&generated_dir)?;
+    fs::copy(
+        TESTS_DATA_DIR.join("scene/cube.glb"),
+        generated_dir.join("cube.glb"),
+    )?;
+    fs::write(generated_dir.join("payload.bin"), b"mesh dependency")?;
+    fs::write(
+        generated_dir.join("z-mesh.toml"),
+        "[mesh]\nsrc = 'cube.glb'\ndata = 'payload.bin'\nlod = false\noptimize = false\n",
+    )?;
+    fs::write(
+        generated_dir.join("a-scene.toml"),
+        "[scene]\n\n[[scene.ref]]\nmesh = 'z-mesh.toml'\n",
+    )?;
+    let manifest = generated_dir.join("pak.toml");
+    fs::write(
+        &manifest,
+        "[[content.group]]\nname = 'scene'\nsegment = 'outer'\ncompression = 'brotli'\nassets = ['a-scene.toml']\n\n[[content.group]]\nname = 'mesh'\nsegment = 'meshdata'\ncompression = 'none'\nassets = ['z-mesh.toml']\n",
+    )?;
+    let destination = generated_dir.join("scene.pak");
+
+    PakBuf::bake(&manifest, &destination).unwrap();
+    let pak = PakBuf::open(&destination)?;
+    let mut dependency = pak.stream_blob("payload.bin")?;
+    let mut bytes = Vec::new();
+    dependency.read_to_end(&mut bytes)?;
+    assert_eq!(bytes, b"mesh dependency");
+    drop(dependency);
+
+    let mesh_sidecar = pak
+        .segment_file_names()
+        .find(|name| name.starts_with("meshdata."))
+        .map(|name| generated_dir.join(name))
+        .unwrap();
+    fs::remove_file(mesh_sidecar)?;
+    let mut dependency = pak.stream_blob("payload.bin")?;
+    let mut bytes = Vec::new();
+    dependency.read_to_end(&mut bytes)?;
+    assert_eq!(bytes, b"mesh dependency");
+
+    fs::remove_dir_all(generated_dir)?;
     Ok(())
 }

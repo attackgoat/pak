@@ -1,6 +1,6 @@
 [package]
 name = "pak"
-version = "0.7.6"
+version = "0.8.0"
 authors = ["John Wells <john@attackgoat.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -14,12 +14,23 @@ description = "An easy-to-use data pak format for games."
 
 [features]
 default = []
-bake = ["bmfont", "glob", "image", "parking_lot", "tokio"]
+bake = [
+    "blake3",
+    "bmfont",
+    "glob",
+    "image",
+    "parking_lot",
+    "rayon",
+    "texpresso",
+    "tempfile",
+    "tokio",
+]
 
 [dependencies]
 anyhow = "1.0"
 bincode = { version = "=2.0", features = ["serde"] }
 bitflags = { version = "2.10", features = ["serde"] }
+blake3 = { version = "1.8", optional = true }
 bmfont = { version = "0.3", default-features = false, optional = true }
 brotli = "8.0"
 dunce = "1.0"
@@ -31,6 +42,7 @@ log = "0.4"
 meshopt = "0.6"
 mikktspace = { version = "0.16", package = "bevy_mikktspace" }
 parking_lot = { version = "0.12", optional = true }
+rayon = { version = "1.11", optional = true }
 ordered-float = { version = "5.1", features = ["serde"] }
 paste = "1.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -40,6 +52,8 @@ tokio = { version = "1.49", default-features = false, features = [
     "rt-multi-thread",
 ], optional = true }
 toml = "0.9"
+texpresso = { version = "2.0", features = ["rayon"], optional = true }
+tempfile = { version = "3.20", optional = true }
 
 [dev-dependencies]
 pretty_env_logger = "0.5"
