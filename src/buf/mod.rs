@@ -67,16 +67,7 @@ fn file_key(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> String {
     }
 
     let key = key.into_iter().rev().collect::<String>();
-
-    // Strip off the toml extension as needed
-    let mut key = PathBuf::from(key);
-    if is_toml(&key)
-        && let Some(stem) = key.file_stem().map(ToOwned::to_owned)
-    {
-        key.set_file_name(stem);
-    }
-
-    key.to_str().unwrap_or_default().to_owned()
+    key.strip_suffix(".toml").unwrap_or(&key).to_owned()
 }
 
 fn is_cargo_build() -> bool {
@@ -839,5 +830,21 @@ impl<'de> Deserialize<'de> for Rotation {
         D: Deserializer<'de>,
     {
         Rotation::de(deserializer)?.ok_or_else(|| D::Error::custom("expected rotation"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {super::file_key, std::path::Path};
+
+    #[test]
+    fn file_keys_use_forward_slashes_on_every_platform() {
+        let root = Path::new("project").join("art");
+        let asset = root
+            .join("kaykit")
+            .join("adventurer")
+            .join("barbarian.toml");
+
+        assert_eq!(file_key(root, asset), "kaykit/adventurer/barbarian");
     }
 }
