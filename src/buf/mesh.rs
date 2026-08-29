@@ -55,6 +55,7 @@ pub struct MeshAsset {
     flip_y: Option<bool>,
     flip_z: Option<bool>,
     ignore_skin: Option<bool>,
+    ignore_texture1: Option<bool>,
     lod: Option<bool>,
     lod_lock_border: Option<bool>,
     lod_target_error: Option<OrderedFloat<f32>>,
@@ -92,6 +93,7 @@ impl MeshAsset {
             flip_y: None,
             flip_z: None,
             ignore_skin: None,
+            ignore_texture1: None,
             lod: None,
             lod_lock_border: None,
             lod_target_error: None,
@@ -282,6 +284,11 @@ impl MeshAsset {
     /// When `true` (the default) normal values will be stored (or generated if needed).
     pub fn normals(&self) -> bool {
         self.normals.unwrap_or(true)
+    }
+
+    /// When `true`, the second texture coordinate channel will not be stored.
+    pub fn ignore_texture1(&self) -> bool {
+        self.ignore_texture1.unwrap_or_default()
     }
 
     /// Translation of the mesh origin.
@@ -949,6 +956,10 @@ impl MeshAsset {
                 data.skin = None;
             }
 
+            if self.ignore_texture1() {
+                data.textures.1.clear();
+            }
+
             if !self.normals() {
                 data.normals.clear();
             } else if data.normals.is_empty() {
@@ -1487,6 +1498,16 @@ mod test {
             toml::from_str("max-index = 4095").expect("max-index should accept exact values");
         assert_eq!(mesh.max_index, Some(MaxIndex::Exact(4095)));
         assert_eq!(mesh.max_index(), Some(4095));
+    }
+
+    #[test]
+    fn ignore_texture1_defaults_to_false_and_deserializes() {
+        let default: MeshAsset = toml::from_str("").expect("default mesh should deserialize");
+        assert!(!default.ignore_texture1());
+
+        let ignored: MeshAsset =
+            toml::from_str("ignore-texture1 = true").expect("ignore-texture1 should deserialize");
+        assert!(ignored.ignore_texture1());
     }
 
     #[test]

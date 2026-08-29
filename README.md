@@ -127,6 +127,7 @@ Item | Description
 `flip-y` | (_`boolean`_) When set, flips the Y component of all position vertices.
 `flip-z` | (_`boolean`_) When set, flips the Z component of all position vertices.
 `ignore-skin` | (_`boolean`_) When set, any embedded skin data is ignored.
+`ignore-texture1` | (_`boolean`_) When set, the second texture coordinate channel is ignored.
 `lod` | (_`boolean`_) When set, generates level of detail meshes using MeshOpt.
 `lod-lock-border` | (_`boolean`_) When set, tells MeshOpt to generate level of detail meshes using only interior vertices.
 `lod-target-error` | (_`float`_) When set, tells MeshOpt to attempt to hit a certain error threshold between level of detail meshes.
