@@ -386,6 +386,10 @@ impl PakBuf {
                 None => (),
             }
 
+            if let Some(occlusion) = &material.occlusion {
+                handle_scalar_ref(res, project_dir, occlusion)?;
+            }
+
             if let Some(rough) = &material.rough {
                 handle_scalar_ref(res, project_dir, rough)?;
             }

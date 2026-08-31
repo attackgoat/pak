@@ -239,7 +239,7 @@ pub struct MaterialInfo {
     /// A standard three channel normal map.
     pub normal: Option<BitmapId>,
 
-    /// Optional RGBA material parameter map: metal, rough, height, transmission.
+    /// Optional RGBA material parameter map: metal, rough, height or occlusion, transmission.
     pub params: Option<BitmapId>,
 
     /// Indicates which `params` channels were authored in the material source.
@@ -253,6 +253,7 @@ bitflags! {
         const ROUGH = 1 << 1;
         const HEIGHT = 1 << 2;
         const TRANSMISSION = 1 << 3;
+        const OCCLUSION = 1 << 4;
     }
 }
 

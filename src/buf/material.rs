@@ -8,7 +8,7 @@ use {
         BitmapId, MaterialId, MaterialInfo, MaterialParameterFlags,
         bitmap::{Bitmap, BitmapColor, BitmapCompression, BitmapFormat},
     },
-    anyhow::Context as _,
+    anyhow::{Context as _, bail},
     image::{DynamicImage, GenericImageView, GrayImage, imageops::FilterType},
     log::{info, warn},
     ordered_float::OrderedFloat,
@@ -310,6 +310,11 @@ pub struct MaterialAsset {
     pub normal: Option<NormalRef>,
 
     /// A `Bitmap` asset, `Bitmap` asset file, single channel image source file, or a single
+    /// normalized value. Shares the packed parameter B channel with `height`.
+    #[serde(deserialize_with = "ScalarRef::de")]
+    pub occlusion: Option<ScalarRef>,
+
+    /// A `Bitmap` asset, `Bitmap` asset file, single channel image source file, or a single
     /// normalized value.
     #[serde(deserialize_with = "ScalarRef::de")]
     pub rough: Option<ScalarRef>,
@@ -382,6 +387,12 @@ impl MaterialAsset {
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
     ) -> anyhow::Result<MaterialInfo> {
+        if self.height.is_some() && self.occlusion.is_some() {
+            bail!(
+                "material cannot specify both height and occlusion because they share parameter B"
+            );
+        }
+
         let compress_textures = writer.lock().texture_compression();
         let color = match &self.color {
             Some(ColorRef::Asset(bitmap)) => {
@@ -624,17 +635,22 @@ impl MaterialAsset {
         if self.height.is_some() {
             params_used |= MaterialParameterFlags::HEIGHT;
         }
+        if self.occlusion.is_some() {
+            params_used |= MaterialParameterFlags::OCCLUSION;
+        }
         if self.transmission.is_some() {
             params_used |= MaterialParameterFlags::TRANSMISSION;
         }
 
         let height_ref = self.height.clone();
         let metal = self.metal.clone();
+        let occlusion = self.occlusion.clone();
         let rough = self.rough.clone();
         let transmission = self.transmission.clone();
         let params_asset = Asset::MaterialParams(MaterialParams {
             height: height_ref,
             metal,
+            occlusion,
             rough,
             transmission,
         });
@@ -645,6 +661,7 @@ impl MaterialAsset {
             let height_ref = self.height.clone();
             let preserve_height = height_ref.is_some();
             let metal = self.metal.clone();
+            let occlusion = self.occlusion.clone();
             let rough = self.rough.clone();
             let transmission = self.transmission.clone();
 
@@ -661,9 +678,15 @@ impl MaterialAsset {
                     Self::scalar_ref_into_gray_image(&rough, &project_dir, u8::MAX)
                         .context("Unable to create rough bitmap buf")?,
                 );
-                let mut height_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&height_ref, &project_dir, 0)
-                        .context("Unable to create height bitmap buf")?,
+                let parameter_b_default = if occlusion.is_some() { u8::MAX } else { 0 };
+                let parameter_b = height_ref.or(occlusion);
+                let mut parameter_b_image = DynamicImage::ImageLuma8(
+                    Self::scalar_ref_into_gray_image(
+                        &parameter_b,
+                        &project_dir,
+                        parameter_b_default,
+                    )
+                    .context("Unable to create height or occlusion bitmap buf")?,
                 );
                 let mut transmission_image = DynamicImage::ImageLuma8(
                     Self::scalar_ref_into_gray_image(&transmission, &project_dir, 0)
@@ -673,12 +696,12 @@ impl MaterialAsset {
                 let width = metal_image
                     .width()
                     .max(rough_image.width())
-                    .max(height_image.width())
+                    .max(parameter_b_image.width())
                     .max(transmission_image.width());
                 let height = metal_image
                     .height()
                     .max(rough_image.height())
-                    .max(height_image.height())
+                    .max(parameter_b_image.height())
                     .max(transmission_image.height());
 
                 if metal_image.width() != width || metal_image.height() != height {
@@ -701,14 +724,15 @@ impl MaterialAsset {
                     rough_image = rough_image.resize_to_fill(width, height, filter_ty);
                 }
 
-                if height_image.width() != width || height_image.height() != height {
-                    let filter_ty = if height_image.width() == 1 && height_image.height() == 1 {
-                        FilterType::Nearest
-                    } else {
-                        FilterType::CatmullRom
-                    };
+                if parameter_b_image.width() != width || parameter_b_image.height() != height {
+                    let filter_ty =
+                        if parameter_b_image.width() == 1 && parameter_b_image.height() == 1 {
+                            FilterType::Nearest
+                        } else {
+                            FilterType::CatmullRom
+                        };
 
-                    height_image = height_image.resize_to_fill(width, height, filter_ty);
+                    parameter_b_image = parameter_b_image.resize_to_fill(width, height, filter_ty);
                 }
 
                 if transmission_image.width() != width || transmission_image.height() != height {
@@ -729,7 +753,7 @@ impl MaterialAsset {
                     for x in 0..width {
                         params.push(metal_image.get_pixel(x, y).0[0]);
                         params.push(rough_image.get_pixel(x, y).0[0]);
-                        params.push(height_image.get_pixel(x, y).0[0]);
+                        params.push(parameter_b_image.get_pixel(x, y).0[0]);
                         params.push(transmission_image.get_pixel(x, y).0[0]);
                     }
                 }
@@ -924,6 +948,10 @@ impl Canonicalize for MaterialAsset {
             normal.canonicalize(&project_dir, &src_dir);
         }
 
+        if let Some(occlusion) = self.occlusion.as_mut() {
+            occlusion.canonicalize(&project_dir, &src_dir);
+        }
+
         if let Some(rough) = self.rough.as_mut() {
             rough.canonicalize(&project_dir, &src_dir);
         }
@@ -944,6 +972,11 @@ pub struct MaterialParams {
     /// normalized value.
     #[serde(default, deserialize_with = "ScalarRef::de")]
     pub metal: Option<ScalarRef>,
+
+    /// A `Bitmap` asset, `Bitmap` asset file, single channel image source file, or a single
+    /// normalized value.
+    #[serde(default, deserialize_with = "ScalarRef::de")]
+    pub occlusion: Option<ScalarRef>,
 
     /// A `Bitmap` asset, `Bitmap` asset file, single channel image source file, or a single
     /// normalized value.
@@ -1141,6 +1174,17 @@ mod test {
         assert_eq!(
             material.height,
             Some(ScalarRef::Value(OrderedFloat(0.5f32)))
+        );
+    }
+
+    #[test]
+    fn deserializes_occlusion_path() {
+        let material = toml::from_str::<MaterialAsset>("occlusion = 'textures/ao.png'")
+            .expect("occlusion path should deserialize");
+
+        assert_eq!(
+            material.occlusion,
+            Some(ScalarRef::Path("textures/ao.png".into()))
         );
     }
 
