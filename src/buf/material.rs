@@ -21,6 +21,7 @@ use {
         },
     },
     std::{
+        collections::BTreeMap,
         fmt::Formatter,
         num::FpCategory,
         path::{Path, PathBuf},
@@ -289,6 +290,9 @@ pub struct MaterialAsset {
     #[serde(deserialize_with = "ColorRef::de")]
     pub color: Option<ColorRef>,
 
+    /// Whether the material uses landscape-specific surface shading.
+    pub landscape: bool,
+
     #[serde(deserialize_with = "ScalarRef::de")]
     pub height: Option<ScalarRef>,
 
@@ -323,6 +327,9 @@ pub struct MaterialAsset {
     /// normalized value.
     #[serde(deserialize_with = "ScalarRef::de")]
     pub transmission: Option<ScalarRef>,
+
+    /// Application-defined data, using the same value types as scene data.
+    pub data: Option<BTreeMap<String, super::scene::Data>>,
 }
 
 impl MaterialAsset {
@@ -641,7 +648,6 @@ impl MaterialAsset {
         if self.transmission.is_some() {
             params_used |= MaterialParameterFlags::TRANSMISSION;
         }
-
         let height_ref = self.height.clone();
         let metal = self.metal.clone();
         let occlusion = self.occlusion.clone();
@@ -655,6 +661,9 @@ impl MaterialAsset {
             transmission,
         });
         let use_params = !params_used.is_empty();
+        if self.landscape {
+            params_used |= MaterialParameterFlags::LANDSCAPE;
+        }
         let params = use_params.then(|| {
             let project_dir = project_dir.as_ref().to_path_buf();
             let writer = writer.clone();
@@ -824,6 +833,12 @@ impl MaterialAsset {
             normal,
             params,
             params_used,
+            data: self
+                .data
+                .iter()
+                .flat_map(|data| data.iter())
+                .map(|(key, value)| (key.clone(), value.clone().into()))
+                .collect(),
         })
     }
 
@@ -1164,6 +1179,12 @@ mod test {
 
         assert!(!default.alpha_test);
         assert!(enabled.alpha_test);
+    }
+
+    #[test]
+    fn data_defaults_to_absent() {
+        let default = toml::from_str::<MaterialAsset>("").expect("material should deserialize");
+        assert!(default.data.is_none());
     }
 
     #[test]

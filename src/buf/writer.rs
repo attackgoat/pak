@@ -2,17 +2,18 @@ use {
     super::{super::compression::Compression, Asset},
     crate::{
         AnimationId, BitmapData, BitmapFontId, BitmapId, BlobId, Data, DataRange, DataRef, Id,
-        MaterialId, MaterialInfo, MeshId, SceneId, SegmentMeta,
+        MaterialId, MaterialInfo, MeshId, OpacityMicromapId, SceneId, SegmentMeta,
         anim::Animation,
         bitmap::{Bitmap, BitmapInfo},
         bitmap_font::BitmapFont,
         mesh::Mesh,
+        opacity_micromap::{OpacityMicromap, OpacityMicromapInfo, OpacityMicromapKey},
         pak_hash_stream,
         scene::Scene,
     },
-    anyhow::bail,
+    anyhow::{Context as _, bail},
     parking_lot::Mutex,
-    serde::Serialize,
+    serde::{Serialize, de::DeserializeOwned},
     std::{
         collections::HashMap,
         fs::{File, OpenOptions, create_dir, remove_dir_all},
@@ -45,6 +46,8 @@ pub struct Writer {
     direct_policies: HashMap<Asset, StoragePolicy>,
     ctx: HashMap<Asset, AssetEntry>,
     segment_names: Vec<String>,
+    mesh_policies: Vec<StoragePolicy>,
+    mesh_spool: Option<Spool>,
     spool: Option<Spool>,
     data: Data,
 }
@@ -112,6 +115,47 @@ impl Spool {
         file.flush()?;
         file.seek(SeekFrom::Start(0))?;
         copy(file, output)
+    }
+
+    fn read<T>(&mut self, range: &DataRange) -> Result<T, Error>
+    where
+        T: DeserializeOwned,
+    {
+        let len = range
+            .range
+            .end
+            .checked_sub(range.range.start)
+            .ok_or_else(|| Error::from(ErrorKind::InvalidData))?;
+        if len > crate::MAX_STORED_PAYLOAD_BYTES {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "stored pak payload exceeds allocation limit",
+            ));
+        }
+        let file = self
+            .files
+            .get_mut(&range.segment)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unknown pak segment ID"))?;
+        file.flush()?;
+        file.seek(SeekFrom::Start(range.range.start))?;
+        let mut stored = file.take(len);
+
+        let decoded = if let Some(compression) = range.compression {
+            let mut reader = compression.new_reader(&mut stored);
+            let decoded =
+                bincode::serde::decode_from_std_read(&mut reader, bincode::config::legacy())
+                    .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+            ensure_reader_end(&mut reader)?;
+            decoded
+        } else {
+            let decoded =
+                bincode::serde::decode_from_std_read(&mut stored, bincode::config::legacy())
+                    .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+            ensure_reader_end(&mut stored)?;
+            decoded
+        };
+
+        Ok(decoded)
     }
 
     fn segment_generation(&mut self, segment: u16, name: &str) -> Result<[u8; 32], Error> {
@@ -229,9 +273,44 @@ impl Writer {
 
     pub fn push_mesh(&mut self, mesh: Mesh, policy: StoragePolicy) -> Result<MeshId, Error> {
         let id = MeshId(self.data.meshes.len());
-        let data = self.spool(&mesh, policy)?;
+        // Keep unfinished meshes out of archive payloads until the metadata hook has run.
+        std::mem::swap(&mut self.spool, &mut self.mesh_spool);
+        let data = self.spool(&mesh, policy);
+        std::mem::swap(&mut self.spool, &mut self.mesh_spool);
+        let data = data?;
         self.data.meshes.push(data);
+        self.mesh_policies.push(policy);
 
+        Ok(id)
+    }
+
+    #[allow(dead_code)]
+    pub fn push_opacity_micromap(
+        &mut self,
+        key: OpacityMicromapKey,
+        payload: OpacityMicromap,
+        policy: StoragePolicy,
+    ) -> Result<OpacityMicromapId, Error> {
+        payload
+            .validate()
+            .map_err(|message| Error::new(ErrorKind::InvalidInput, message))?;
+        if self
+            .data
+            .opacity_micromap_infos
+            .last()
+            .is_some_and(|info| info.key >= key)
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "opacity micromap keys must be pushed in strictly sorted order",
+            ));
+        }
+        let id = OpacityMicromapId(self.data.opacity_micromaps.len());
+        let data = self.spool(&payload, policy)?;
+        self.data.opacity_micromaps.push(data);
+        self.data
+            .opacity_micromap_infos
+            .push(OpacityMicromapInfo { key, payload: id });
         Ok(id)
     }
 
@@ -360,6 +439,7 @@ impl Writer {
     }
 
     pub fn write(&mut self, path: impl AsRef<Path>) -> Result<(), Error> {
+        self.finalize_meshes(None).map_err(Error::other)?;
         let path = path.as_ref();
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         let mut data = self.data.clone();
@@ -429,6 +509,143 @@ impl Writer {
             let _ = directory.sync_all();
         }
         Ok(())
+    }
+
+    fn finalize_meshes(
+        &mut self,
+        mut baker: Option<&mut dyn super::DerivedAssetBaker>,
+    ) -> anyhow::Result<()> {
+        let Some(mut spool) = self.mesh_spool.take() else {
+            return Ok(());
+        };
+
+        for idx in 0..self.data.meshes.len() {
+            let source = self.data.meshes[idx].data_range()?;
+            let mut mesh: Mesh = spool.read(&source)?;
+            if let Some(baker) = baker.as_deref_mut() {
+                baker
+                    .bake_mesh(&mut mesh)
+                    .with_context(|| format!("baking mesh metadata for mesh {idx}"))?;
+            }
+
+            self.data.meshes[idx] = self.spool(&mesh, self.mesh_policies[idx])?;
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn bake_derived_assets(
+        &mut self,
+        baker: &mut dyn super::DerivedAssetBaker,
+    ) -> anyhow::Result<()> {
+        self.finalize_meshes(Some(baker))?;
+
+        let mut candidates = std::collections::BTreeSet::new();
+        for scene in self.data.scenes.clone() {
+            let scene: Scene = self.read_spooled(&scene)?;
+            for reference in scene.refs() {
+                let Some(mesh_id) = reference.mesh() else {
+                    continue;
+                };
+                let Some(mesh) = self.data.meshes.get(mesh_id.0).cloned() else {
+                    continue;
+                };
+                let mesh: Mesh = self.read_spooled(&mesh)?;
+                for (primitive_index, primitive) in mesh.primitives().iter().enumerate() {
+                    let Some(material) = reference
+                        .materials()
+                        .get(primitive.material() as usize)
+                        .copied()
+                    else {
+                        continue;
+                    };
+                    candidates.insert((
+                        mesh_id,
+                        u32::try_from(primitive_index).map_err(|_| {
+                            anyhow::anyhow!("mesh contains too many primitives for derived assets")
+                        })?,
+                        material,
+                    ));
+                }
+            }
+        }
+
+        let mut outputs = Vec::new();
+        for (mesh_id, primitive_index, material_id) in candidates {
+            let Some(material) = self.data.materials.get(material_id.0) else {
+                continue;
+            };
+            if !material.alpha_test {
+                continue;
+            }
+            let color = material.color;
+            let Some(mesh) = self.data.meshes.get(mesh_id.0).cloned() else {
+                continue;
+            };
+            let mesh: Mesh = self.read_spooled(&mesh)?;
+            let Some(primitive) = mesh.primitives().get(primitive_index as usize) else {
+                continue;
+            };
+            let Some(indices) = primitive.lods().first() else {
+                continue;
+            };
+            let Some(texture0) = primitive.texture0() else {
+                continue;
+            };
+            let Some(bitmap) = self.data.bitmaps.get(color.0) else {
+                continue;
+            };
+            let Some(compressed) = bitmap.compressed.clone() else {
+                continue;
+            };
+            let compressed = self.read_spooled(&compressed)?;
+            if compressed.format() != crate::bitmap::BitmapCompression::Bc3 {
+                continue;
+            }
+
+            let candidate = super::DerivedAssetBakeCandidate {
+                alpha_bitmap: &compressed,
+                indices: indices.as_u32().into_boxed_slice(),
+                material: material_id,
+                mesh: mesh_id,
+                primitive: primitive_index,
+                texture0: texture0.collect(),
+            };
+            let policy =
+                self.mesh_policies.get(mesh_id.0).copied().ok_or_else(|| {
+                    anyhow::anyhow!("derived asset source mesh policy is missing")
+                })?;
+            for output in baker.bake(&candidate)? {
+                if output.source_mip as usize >= compressed.mips().len() {
+                    bail!("derived asset source mip is out of bounds");
+                }
+                let key = OpacityMicromapKey {
+                    mesh: mesh_id,
+                    primitive: primitive_index,
+                    material: material_id,
+                    source_mip: output.source_mip,
+                    recipe: output.recipe,
+                };
+                outputs.push((key, output.payload, policy));
+            }
+        }
+
+        outputs.sort_by_key(|(key, _, _)| *key);
+        for (key, payload, policy) in outputs {
+            self.push_opacity_micromap(key, payload, policy)?;
+        }
+        Ok(())
+    }
+
+    fn read_spooled<T>(&mut self, data: &DataRef<T>) -> Result<T, Error>
+    where
+        T: DeserializeOwned,
+    {
+        let range = data.data_range()?;
+        self.spool
+            .as_mut()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "pak spool is missing"))?
+            .read(&range)
     }
 
     fn segment_generation(&mut self, segment: u16, name: &str) -> Result<[u8; 32], Error> {
@@ -572,7 +789,7 @@ impl Writer {
         data: &mut Data,
     ) -> Result<(), Error> {
         let mut magic_bytes = [0u8; 20];
-        magic_bytes.copy_from_slice(b"ATTACKGOAT-PAK-V1.6 ");
+        magic_bytes.copy_from_slice(b"ATTACKGOAT-PAK-V1.8 ");
 
         // Write a known value so we can identify this file
         bincode::serde::encode_into_std_write(magic_bytes, &mut writer, bincode::config::legacy())
@@ -673,6 +890,9 @@ impl Writer {
         for range in &mut data.meshes {
             offset(range, base)?;
         }
+        for range in &mut data.opacity_micromaps {
+            offset(range, base)?;
+        }
         for range in &mut data.scenes {
             offset(range, base)?;
         }
@@ -692,16 +912,38 @@ impl Writer {
     }
 }
 
+fn ensure_reader_end(reader: &mut impl Read) -> Result<(), Error> {
+    let mut trailing = [0; 1];
+    match reader.read(&mut trailing)? {
+        0 => Ok(()),
+        _ => Err(Error::new(
+            ErrorKind::InvalidData,
+            "trailing bytes after deserialized data",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use {
         super::{StoragePolicy, Writer},
-        crate::buf::{Asset, blob::BlobAsset},
-        crate::{
-            BlobId,
-            compression::{BrotliParams, Compression},
+        crate::buf::{
+            Asset, DerivedAssetBakeCandidate, DerivedAssetBakeOutput, DerivedAssetBaker,
+            blob::BlobAsset,
         },
-        std::{fs, path::PathBuf},
+        crate::{
+            BlobId, MaterialInfo, MaterialParameterFlags, PakBuf,
+            bitmap::{
+                Bitmap, BitmapColor, BitmapCompression, BitmapFormat, CompressedBitmap,
+                CompressedMip,
+            },
+            compression::{BrotliParams, Compression},
+            index::IndexBuffer,
+            mesh::{Joint, Mesh, Primitive, Skin, VertexType},
+            opacity_micromap::{OpacityMicromap, OpacityMicromapKey, OpacityMicromapRecipe},
+            scene::{ReferenceData, Scene},
+        },
+        std::{fs, io::ErrorKind, path::PathBuf},
     };
 
     fn asset() -> Asset {
@@ -713,6 +955,94 @@ mod test {
             segment: 0,
             compression,
             texture_compression: false,
+        }
+    }
+
+    fn opacity_micromap() -> OpacityMicromap {
+        OpacityMicromap::new([], [], [], [-1], [], 1, 0).unwrap()
+    }
+
+    fn opacity_micromap_key(recipe: u8) -> OpacityMicromapKey {
+        OpacityMicromapKey {
+            mesh: crate::MeshId(0),
+            primitive: 0,
+            material: crate::MaterialId(0),
+            source_mip: 0,
+            recipe: OpacityMicromapRecipe([recipe; 32]),
+        }
+    }
+
+    struct FakeDerivedBaker {
+        calls: usize,
+    }
+
+    #[test]
+    fn mesh_hook_visits_empty_and_skinned_meshes_without_candidates() {
+        struct Baker(usize);
+
+        impl DerivedAssetBaker for Baker {
+            fn bake_mesh(&mut self, mesh: &mut Mesh) -> anyhow::Result<()> {
+                assert_eq!(mesh.skin().is_some(), self.0 == 1);
+                mesh.data.insert("visited", crate::scene::DataData::Bool(true));
+                self.0 += 1;
+                Ok(())
+            }
+
+            fn bake(
+                &mut self,
+                _: &DerivedAssetBakeCandidate<'_>,
+            ) -> anyhow::Result<Box<[DerivedAssetBakeOutput]>> {
+                panic!("unexpected OMM candidate")
+            }
+        }
+
+        let mut writer = Writer::default();
+        writer
+            .push_mesh(Mesh::new(Vec::new(), None), policy(None))
+            .unwrap();
+        writer
+            .push_mesh(
+                Mesh::new(
+                    vec![Primitive::new(0, &[0; 20], VertexType::JOINTS_WEIGHTS)],
+                    Some(Skin::new(vec![Joint {
+                        inverse_bind: glam::Mat4::IDENTITY.to_cols_array(),
+                        name: "root".to_owned(),
+                        parent_index: 0,
+                    }])),
+                ),
+                policy(Some(Compression::Snap)),
+            )
+            .unwrap();
+        let mut baker = Baker(0);
+        writer.bake_derived_assets(&mut baker).unwrap();
+        assert_eq!(baker.0, 2);
+        assert!(writer.mesh_spool.is_none());
+        assert_eq!(writer.spool.as_ref().unwrap().entries[&0].len(), 2);
+        for source in writer.data.meshes.clone() {
+            let mesh: Mesh = writer.read_spooled(&source).unwrap();
+            assert!(mesh.data("visited").unwrap().expect_bool());
+            assert!(mesh.blob().is_none());
+        }
+    }
+
+    impl DerivedAssetBaker for FakeDerivedBaker {
+        fn bake(
+            &mut self,
+            candidate: &DerivedAssetBakeCandidate<'_>,
+        ) -> anyhow::Result<Box<[DerivedAssetBakeOutput]>> {
+            self.calls += 1;
+            assert_eq!(candidate.mesh, crate::MeshId(0));
+            assert_eq!(candidate.primitive, 0);
+            assert_eq!(candidate.material, crate::MaterialId(0));
+            assert_eq!(candidate.indices.as_ref(), &[0, 1, 2]);
+            assert_eq!(candidate.texture0.as_ref(), &[[0.0, 0.0]; 3]);
+            assert_eq!(candidate.alpha_bitmap.format(), BitmapCompression::Bc3);
+            Ok(vec![DerivedAssetBakeOutput {
+                payload: opacity_micromap(),
+                recipe: OpacityMicromapRecipe([7; 32]),
+                source_mip: 0,
+            }]
+            .into_boxed_slice())
         }
     }
 
@@ -784,6 +1114,132 @@ mod test {
 
         assert!(matches!(writer.data.blobs[0], crate::DataRef::Ref(_)));
         assert!(writer.spool.is_some());
+    }
+
+    #[test]
+    fn opacity_micromap_payload_round_trips_independently() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("opacity-micromap.pak");
+        let mut writer = Writer::default();
+        let bitmap = Bitmap::new(BitmapColor::Srgb, BitmapFormat::Rgba, 1, 1, [0; 4])
+            .with_compressed(CompressedBitmap::new(
+                BitmapCompression::Bc3,
+                vec![CompressedMip::new(1, 1, vec![0; 16])],
+            ));
+        let color = writer.push_bitmap(bitmap, policy(None)).unwrap();
+        writer.push_material(MaterialInfo {
+            alpha_test: true,
+            color,
+            emissive: None,
+            normal: None,
+            params: None,
+            params_used: MaterialParameterFlags::empty(),
+            data: Default::default(),
+        });
+        writer
+            .push_mesh(Mesh::new(Vec::new(), None), policy(None))
+            .unwrap();
+        let key = opacity_micromap_key(1);
+        let expected = opacity_micromap();
+        let id = writer
+            .push_opacity_micromap(key, expected.clone(), policy(None))
+            .unwrap();
+
+        assert!(matches!(
+            writer.data.opacity_micromaps[0],
+            crate::DataRef::Ref(_)
+        ));
+        writer.write(&destination).unwrap();
+
+        let mut pak = PakBuf::open(destination).unwrap();
+        assert_eq!(pak.opacity_micromap_infos()[0].key, key);
+        assert_eq!(pak.opacity_micromap_id(key), Some(id));
+        assert_eq!(pak.read_opacity_micromap(key).unwrap(), Some(expected));
+        assert!(
+            pak.read_opacity_micromap(opacity_micromap_key(2))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn derived_assets_use_final_scene_bindings_and_deduplicate_candidates() {
+        let mut writer = Writer::default();
+        let policy = policy(Some(Compression::Snap));
+        let bitmap = Bitmap::new(BitmapColor::Srgb, BitmapFormat::Rgba, 1, 1, [0; 4])
+            .with_compressed(CompressedBitmap::new(
+                BitmapCompression::Bc3,
+                vec![CompressedMip::new(1, 1, vec![0; 16])],
+            ));
+        let color = writer.push_bitmap(bitmap, policy).unwrap();
+        let material = writer.push_material(MaterialInfo {
+            alpha_test: true,
+            color,
+            emissive: None,
+            normal: None,
+            params: None,
+            params_used: MaterialParameterFlags::empty(),
+            data: Default::default(),
+        });
+        let mut primitive =
+            Primitive::new(0, &[0; 60], VertexType::POSITION | VertexType::TEXTURE0);
+        primitive.push_lod(IndexBuffer::new(&[0, 1, 2]).unwrap());
+        let mesh = writer
+            .push_mesh(Mesh::new(vec![primitive], None), policy)
+            .unwrap();
+        let reference = ReferenceData {
+            materials: vec![material],
+            mesh: Some(mesh),
+            ..Default::default()
+        };
+        writer
+            .push_scene(
+                Scene::new(
+                    [],
+                    [
+                        reference,
+                        ReferenceData {
+                            materials: vec![material],
+                            mesh: Some(mesh),
+                            ..Default::default()
+                        },
+                    ],
+                )
+                .unwrap(),
+                policy,
+            )
+            .unwrap();
+        let mut baker = FakeDerivedBaker { calls: 0 };
+
+        writer.bake_derived_assets(&mut baker).unwrap();
+
+        assert_eq!(baker.calls, 1);
+        assert_eq!(writer.data.opacity_micromaps.len(), 1);
+        assert_eq!(writer.data.opacity_micromap_infos[0].key.recipe.0, [7; 32]);
+    }
+
+    #[test]
+    fn opacity_micromap_keys_must_be_strictly_sorted() {
+        let mut writer = Writer::default();
+        let key = opacity_micromap_key(1);
+        writer
+            .push_opacity_micromap(key, opacity_micromap(), policy(None))
+            .unwrap();
+
+        assert_eq!(
+            writer
+                .push_opacity_micromap(key, opacity_micromap(), policy(None))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            writer
+                .push_opacity_micromap(opacity_micromap_key(0), opacity_micromap(), policy(None),)
+                .unwrap_err()
+                .kind(),
+            ErrorKind::InvalidInput
+        );
     }
 
     #[test]

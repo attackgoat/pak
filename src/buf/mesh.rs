@@ -26,7 +26,7 @@ use {
         de::{SeqAccess, Visitor, value::SeqAccessDeserializer},
     },
     std::{
-        collections::{BTreeSet, HashMap, HashSet},
+        collections::{BTreeMap, BTreeSet, HashMap, HashSet},
         fmt::Formatter,
         io::{Error, ErrorKind},
         iter::repeat_n,
@@ -49,7 +49,8 @@ fn extract_transform(node: &Node) -> Mat4 {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub struct MeshAsset {
-    data: Option<PathBuf>,
+    blob: Option<PathBuf>,
+    pub data: Option<BTreeMap<String, super::scene::Data>>,
     euler: Option<Euler>,
     flip_x: Option<bool>,
     flip_y: Option<bool>,
@@ -87,6 +88,7 @@ impl MeshAsset {
 
     pub fn new(src: impl AsRef<Path>) -> Self {
         Self {
+            blob: None,
             data: None,
             euler: None,
             flip_x: None,
@@ -150,13 +152,13 @@ impl MeshAsset {
             .context("Baking mesh data")?;
 
         // Bake the unstructured data blob too
-        if let Some(data) = &self.data {
+        if let Some(data) = &self.blob {
             let data_id = Writer::with_asset_policy(writer, &asset, || {
                 BlobAsset::new(data)
                     .bake(writer, &project_dir)
                     .context("Baking unstructured mesh data")
             })?;
-            mesh.set_data(data_id);
+            mesh.set_blob(data_id);
         }
 
         // Check again to see if we are the first one to finish this
@@ -241,8 +243,8 @@ impl MeshAsset {
     }
 
     /// Optional associated unstructured data.
-    pub fn data(&self) -> Option<&Path> {
-        self.data.as_deref()
+    pub fn blob(&self) -> Option<&Path> {
+        self.blob.as_deref()
     }
 
     /// When `true` levels of detail will be generated for all meshes.
@@ -1019,12 +1021,19 @@ impl MeshAsset {
             }
         }
 
-        Ok(Mesh::new(primitives, skin))
+        let mut mesh = Mesh::new(primitives, skin);
+        mesh.data = self
+            .data
+            .iter()
+            .flat_map(|data| data.iter())
+            .map(|(key, value)| (key.clone(), value.clone().into()))
+            .collect();
+        Ok(mesh)
     }
 
     fn re_run_if_changed(&self) {
         // Watch the unstructered data file for changes, only if we're in a cargo build
-        if let Some(data) = self.data() {
+        if let Some(data) = self.blob() {
             re_run_if_changed(data);
         }
 
@@ -1042,8 +1051,8 @@ impl MeshAsset {
 
 impl Canonicalize for MeshAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
-        if let Some(data) = &self.data {
-            self.data = Some(Self::canonicalize_project_path(
+        if let Some(data) = &self.blob {
+            self.blob = Some(Self::canonicalize_project_path(
                 &project_dir,
                 &src_dir,
                 data,

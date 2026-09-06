@@ -12,6 +12,8 @@ mod mesh;
 mod scene;
 mod writer;
 
+pub use self::bitmap::decode_bc3_alpha_mip;
+
 use {
     self::{
         asset::Asset,
@@ -22,7 +24,11 @@ use {
         scene::AssetRef,
         writer::{StoragePolicy, Writer},
     },
-    crate::PakBuf,
+    crate::{
+        MaterialId, MeshId, PakBuf,
+        bitmap::CompressedBitmap,
+        opacity_micromap::{OpacityMicromap, OpacityMicromapRecipe},
+    },
     anyhow::Context,
     log::info,
     ordered_float::OrderedFloat,
@@ -45,6 +51,35 @@ use {
     },
     tokio::runtime::Runtime,
 };
+
+pub struct DerivedAssetBakeCandidate<'a> {
+    pub alpha_bitmap: &'a CompressedBitmap,
+    pub indices: Box<[u32]>,
+    pub material: MaterialId,
+    pub mesh: MeshId,
+    pub primitive: u32,
+    pub texture0: Box<[[f32; 2]]>,
+}
+
+pub struct DerivedAssetBakeOutput {
+    pub payload: OpacityMicromap,
+    pub recipe: OpacityMicromapRecipe,
+    pub source_mip: u32,
+}
+
+pub trait DerivedAssetBaker {
+    /// Augments each unique final mesh, including meshes without scene references or OMM
+    /// candidates. Authored metadata and the associated blob are already available.
+    /// Called once after geometry processing and before final archive serialization.
+    fn bake_mesh(&mut self, _mesh: &mut crate::mesh::Mesh) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn bake(
+        &mut self,
+        candidate: &DerivedAssetBakeCandidate<'_>,
+    ) -> anyhow::Result<Box<[DerivedAssetBakeOutput]>>;
+}
 
 /// Given some parent directory and a filename, returns just the portion after the directory.
 fn file_key(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> String {
@@ -402,7 +437,7 @@ impl PakBuf {
         }
 
         fn handle_mesh(res: &mut BTreeSet<PathBuf>, mesh: &MeshAsset) {
-            if let Some(data) = mesh.data() {
+            if let Some(data) = mesh.blob() {
                 res.insert(data.to_path_buf());
             }
 
@@ -543,7 +578,7 @@ impl PakBuf {
         dst: impl AsRef<Path>,
         dir: impl AsRef<Path>,
     ) -> anyhow::Result<()> {
-        Self::bake_with_dir_impl(src, dst, dir, true)
+        Self::bake_with_dir_impl(src, dst, dir, true, None)
     }
 
     /// Bakes content into a `.pak` file using `dir` as the asset root without emitting Cargo
@@ -555,7 +590,26 @@ impl PakBuf {
         dst: impl AsRef<Path>,
         dir: impl AsRef<Path>,
     ) -> anyhow::Result<()> {
-        Self::bake_with_dir_impl(src, dst, dir, false)
+        Self::bake_with_dir_impl(src, dst, dir, false, None)
+    }
+
+    pub fn bake_with_dir_and_derived_assets(
+        src: impl AsRef<Path>,
+        dst: impl AsRef<Path>,
+        dir: impl AsRef<Path>,
+        baker: &mut dyn DerivedAssetBaker,
+    ) -> anyhow::Result<()> {
+        Self::bake_with_dir_impl(src, dst, dir, true, Some(baker))
+    }
+
+    /// Bakes content with derived assets without emitting Cargo change watches.
+    pub fn bake_with_dir_and_derived_assets_without_cargo_watches(
+        src: impl AsRef<Path>,
+        dst: impl AsRef<Path>,
+        dir: impl AsRef<Path>,
+        baker: &mut dyn DerivedAssetBaker,
+    ) -> anyhow::Result<()> {
+        Self::bake_with_dir_impl(src, dst, dir, false, Some(baker))
     }
 
     fn bake_with_dir_impl(
@@ -563,6 +617,7 @@ impl PakBuf {
         dst: impl AsRef<Path>,
         dir: impl AsRef<Path>,
         cargo_watches: bool,
+        mut baker: Option<&mut dyn DerivedAssetBaker>,
     ) -> anyhow::Result<()> {
         let _cargo_watches = CargoWatchesGuard::set(cargo_watches);
 
@@ -748,10 +803,13 @@ impl PakBuf {
                 create_dir_all(parent).context("Unable to create directory")?;
             }
 
-            writer
-                .lock()
-                .write(&dst)
-                .context("Unable to write pak file")?;
+            let mut writer = Arc::try_unwrap(writer)
+                .map_err(|_| anyhow::anyhow!("pak writer still has active users"))?
+                .into_inner();
+            if let Some(baker) = baker.as_deref_mut() {
+                writer.bake_derived_assets(baker)?;
+            }
+            writer.write(&dst).context("Unable to write pak file")?;
 
             Ok(())
         });

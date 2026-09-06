@@ -120,7 +120,8 @@ All fields are optional.
 
 Item | Description
 ---- | -----------
-`data` | File path to an optional unstructured byte blob associated with this mesh.
+`blob` | File path to an optional unstructured byte blob associated with this mesh.
+`data` | TOML table of application-defined metadata, using the same value types as material data. Included in mesh identity and deduplication.
 `src` | File path to a `.gltf` or `.glb` mesh. May be relative to the `[mesh]` TOML file or absolute where the root is the same folder as the `[content]` TOML file. When unspecified, attempts to load a mesh with the same name as the `[mesh]` TOML file.
 `euler` | (_`string`_) Order of operations applied to 3-channel `rotation` values (example: `xyz`, `zyx`, _etc_).
 `flip-x` | (_`boolean`_) When set, flips the X component of all position vertices.
@@ -145,6 +146,18 @@ Item | Description
 `tangents` | (_`boolean`_) When set (default `true`), imports geometry tangents. If missing, tangents are generated using the MikkTSpace algorithm
 
 `max-index` is a hard cap on the maximum index value, not just a triangle-count target. If a mesh initially needs indices above the cap, baking simplifies the mesh and compacts the vertex buffer so `IndexBuffer` can store the result as `u8` or `u16` where possible. Lower generated LODs are derived from the capped mesh.
+
+Meshes expose `blob()` / `set_blob(BlobId)` separately from `data(key)` and the public
+`data: DataMap`. Use `mesh.data.insert(key, pak::scene::DataData::Float(value))` to
+add or replace metadata while preserving other authored entries. `MeshAsset` accepts
+`blob = 'payload.bin'` alongside `[mesh.data]`; its public `data` map matches materials.
+The derived-asset baking entry points call `DerivedAssetBaker::bake_mesh(&mut Mesh)`
+once per unique final mesh, after transforms, optimization, and primitive construction,
+even without scene references or eligible opacity micromaps. The hook defaults to no-op.
+Pak does not interpret mesh metadata or calculate renderer-specific bounds.
+
+The mesh metadata layout uses pak format V1.8. Older packs are rejected and must be
+rebuilt; old mesh blob declarations must rename `data` to `blob`.
 
 ## Raw Blobs
 
@@ -194,6 +207,21 @@ Item | Description
 `transmission` | Hex string, path string, inline bitmap asset, or floating point value.
 
 When any material parameter is set, `MaterialInfo::params` stores the packed RGBA parameter map as `R = metal`, `G = rough`, `B = height or occlusion`, and `A = transmission`. Height and occlusion cannot both be authored. `MaterialInfo::params_used` indicates which channels were authored; missing channels are default-filled, with occlusion's neutral value being `1`.
+
+Materials can also carry application-defined data using the same value types as scene data: booleans, `f32` floats, `i32` numbers, strings, and recursively nested arrays. Pak stores these values without application-specific interpretation or validation. Data participates in material deduplication; key order does not matter.
+
+```toml
+[material]
+rough = 0.5
+
+[material.data]
+category = "fabric"
+enabled = true
+layers = [1, 2, 3]
+settings = [0.25, ["detail", false]]
+```
+
+Inline scene materials also accept a `data` table. At runtime, `MaterialInfo::data(key)` and `MaterialInfo::data.get(key)` return a borrowed `pak::scene::DataRef`; `MaterialInfo::data.iter()` yields `(&str, DataRef)` entries in key order, including application-unknown keys. Absent authored data produces an empty `DataMap`. `MaterialInfo` is owned and cloneable, not `Copy`; material reads return clones.
 
 ## Bitmaps
 

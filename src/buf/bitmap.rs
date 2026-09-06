@@ -6,7 +6,7 @@ use {
             Bitmap, BitmapColor, BitmapCompression, BitmapFormat, CompressedBitmap, CompressedMip,
         },
     },
-    anyhow::{Context, bail},
+    anyhow::{Context, bail, ensure},
     image::{
         DynamicImage, RgbaImage,
         buffer::ConvertBuffer,
@@ -32,6 +32,75 @@ const MIP_LEVELS_MAX: u32 = u32::BITS;
 const MIP_LEVELS_MIN: u32 = 1;
 const TEXTURE_CACHE_RECIPE: &[u8] = b"pak-bc-texture/v1";
 static TEXTURE_CACHE_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+pub fn decode_bc3_alpha_mip(
+    compressed: &CompressedBitmap,
+    mip_level: usize,
+) -> anyhow::Result<Box<[u8]>> {
+    ensure!(
+        compressed.format() == BitmapCompression::Bc3,
+        "alpha decoding requires BC3 bitmap data"
+    );
+    let mip = compressed
+        .mips()
+        .get(mip_level)
+        .context("BC3 alpha mip level is out of range")?;
+    let width = mip.width() as usize;
+    let height = mip.height() as usize;
+    let block_width = width.div_ceil(4);
+    let block_height = height.div_ceil(4);
+    ensure!(
+        mip.bytes().len() == block_width * block_height * 16,
+        "BC3 mip byte length is invalid"
+    );
+    let mut alpha = vec![0; width * height];
+
+    for block_y in 0..block_height {
+        for block_x in 0..block_width {
+            let offset = (block_y * block_width + block_x) * 16;
+            let block = decode_bc3_alpha_block(&mip.bytes()[offset..offset + 8]);
+            for block_pixel in 0..16 {
+                let x = block_x * 4 + block_pixel % 4;
+                let y = block_y * 4 + block_pixel / 4;
+                if x < width && y < height {
+                    alpha[y * width + x] = block[block_pixel];
+                }
+            }
+        }
+    }
+
+    Ok(alpha.into_boxed_slice())
+}
+
+fn decode_bc3_alpha_block(bytes: &[u8]) -> [u8; 16] {
+    debug_assert_eq!(bytes.len(), 8);
+    let alpha_0 = u32::from(bytes[0]);
+    let alpha_1 = u32::from(bytes[1]);
+    let mut code = [0; 8];
+    code[0] = bytes[0];
+    code[1] = bytes[1];
+    if alpha_0 > alpha_1 {
+        for weight in 1..7 {
+            code[weight + 1] =
+                (((7 - weight) as u32 * alpha_0 + weight as u32 * alpha_1) / 7) as u8;
+        }
+    } else {
+        for weight in 1..5 {
+            code[weight + 1] =
+                (((5 - weight) as u32 * alpha_0 + weight as u32 * alpha_1) / 5) as u8;
+        }
+        code[6] = 0;
+        code[7] = u8::MAX;
+    }
+
+    let indices = bytes[2..8]
+        .iter()
+        .enumerate()
+        .fold(0_u64, |packed, (idx, &byte)| {
+            packed | u64::from(byte) << (idx * 8)
+        });
+    std::array::from_fn(|idx| code[((indices >> (idx * 3)) & 0b111) as usize])
+}
 
 fn de_mip_levels<'de, D>(deserializer: D) -> Result<u32, D::Error>
 where
@@ -841,6 +910,124 @@ impl BitmapSwizzle {
 #[cfg(test)]
 mod test {
     use {super::*, toml::de::ValueDeserializer};
+
+    fn bc3_block(alpha_0: u8, alpha_1: u8, indices: [u8; 16]) -> [u8; 16] {
+        let packed = indices
+            .iter()
+            .enumerate()
+            .fold(0_u64, |packed, (idx, &index)| {
+                packed | u64::from(index) << (idx * 3)
+            });
+        let mut block = [0; 16];
+        block[0] = alpha_0;
+        block[1] = alpha_1;
+        block[2..8].copy_from_slice(&packed.to_le_bytes()[..6]);
+        block
+    }
+
+    #[test]
+    fn bc3_alpha_decodes_seven_step_palette_and_index_order() {
+        let block = bc3_block(240, 16, [0, 1, 2, 3, 4, 5, 6, 7, 7, 6, 5, 4, 3, 2, 1, 0]);
+
+        assert_eq!(
+            decode_bc3_alpha_block(&block[..8]),
+            [
+                240, 16, 208, 176, 144, 112, 80, 48, 48, 80, 112, 144, 176, 208, 16, 240,
+            ]
+        );
+    }
+
+    #[test]
+    fn bc3_alpha_decodes_five_step_palette_with_explicit_extremes() {
+        let block = bc3_block(10, 210, [0, 1, 2, 3, 4, 5, 6, 7, 7, 6, 5, 4, 3, 2, 1, 0]);
+
+        assert_eq!(
+            decode_bc3_alpha_block(&block[..8]),
+            [
+                10, 210, 50, 90, 130, 170, 0, 255, 255, 0, 170, 130, 90, 50, 210, 10,
+            ]
+        );
+    }
+
+    #[test]
+    fn bc3_alpha_crops_partial_edge_blocks() {
+        let left = bc3_block(1, 1, [0; 16]);
+        let right = bc3_block(2, 2, [0; 16]);
+        let compressed = CompressedBitmap::new(
+            BitmapCompression::Bc3,
+            vec![CompressedMip::new(
+                5,
+                3,
+                left.into_iter().chain(right).collect(),
+            )],
+        );
+
+        assert_eq!(
+            decode_bc3_alpha_mip(&compressed, 0).unwrap().as_ref(),
+            &[1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2]
+        );
+    }
+
+    #[test]
+    fn bc3_alpha_decodes_uniform_transparent_and_opaque_blocks() {
+        for (value, endpoint) in [(0, 0), (u8::MAX, u8::MAX)] {
+            let compressed = CompressedBitmap::new(
+                BitmapCompression::Bc3,
+                vec![CompressedMip::new(
+                    4,
+                    4,
+                    bc3_block(endpoint, endpoint, [0; 16]).into(),
+                )],
+            );
+
+            assert_eq!(
+                decode_bc3_alpha_mip(&compressed, 0).unwrap().as_ref(),
+                &[value; 16]
+            );
+        }
+    }
+
+    #[test]
+    fn bc3_alpha_rejects_other_formats_and_missing_mips() {
+        let compressed = CompressedBitmap::new(
+            BitmapCompression::Bc1Rgb,
+            vec![CompressedMip::new(4, 4, vec![0; 8])],
+        );
+        assert!(decode_bc3_alpha_mip(&compressed, 0).is_err());
+
+        let compressed = CompressedBitmap::new(BitmapCompression::Bc3, Vec::new());
+        assert!(decode_bc3_alpha_mip(&compressed, 0).is_err());
+    }
+
+    #[test]
+    fn compressed_bc3_mips_match_reference_alpha_decode() {
+        let pixels = (0..5 * 3)
+            .flat_map(|idx| [20, 40, 60, (idx * 17) as u8])
+            .collect::<Vec<_>>();
+        let bitmap = Bitmap::new(BitmapColor::Srgb, BitmapFormat::Rgba, 5, 3, pixels);
+        let compressed = BitmapAsset::compress(&bitmap, BitmapCompression::Bc3);
+
+        for (mip_level, mip) in compressed.mips().iter().enumerate() {
+            let mut rgba = vec![0; mip.width() as usize * mip.height() as usize * 4];
+            texpresso::Format::Bc3.decompress(
+                mip.bytes(),
+                mip.width() as usize,
+                mip.height() as usize,
+                &mut rgba,
+            );
+            let expected = rgba
+                .chunks_exact(4)
+                .map(|pixel| pixel[3])
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                decode_bc3_alpha_mip(&compressed, mip_level)
+                    .unwrap()
+                    .as_ref(),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn compression_quality_follows_profile() {

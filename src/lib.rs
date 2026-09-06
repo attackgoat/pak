@@ -3,6 +3,7 @@ pub mod bitmap;
 pub mod bitmap_font;
 pub mod index;
 pub mod mesh;
+pub mod opacity_micromap;
 pub mod scene;
 
 #[cfg(feature = "bake")]
@@ -13,10 +14,11 @@ mod compression;
 use {
     self::{
         anim::Animation,
-        bitmap::{Bitmap, BitmapInfo, CompressedBitmap},
+        bitmap::{Bitmap, BitmapCompression, BitmapInfo, CompressedBitmap},
         bitmap_font::BitmapFont,
         compression::Compression,
         mesh::Mesh,
+        opacity_micromap::{OpacityMicromap, OpacityMicromapInfo, OpacityMicromapKey},
         scene::Scene,
     },
     bitflags::bitflags,
@@ -95,6 +97,7 @@ struct Data {
     segments: Vec<SegmentMeta>,
     ids: BTreeMap<String, Id>,
     materials: Vec<MaterialInfo>,
+    opacity_micromap_infos: Vec<OpacityMicromapInfo>,
 
     // These fields are loaded on demand
     anims: Vec<DataRef<Animation>>,
@@ -102,6 +105,7 @@ struct Data {
     bitmaps: Vec<BitmapData>,
     blobs: Vec<DataRef<Vec<u8>>>,
     meshes: Vec<DataRef<Mesh>>,
+    opacity_micromaps: Vec<DataRef<OpacityMicromap>>,
     scenes: Vec<DataRef<Scene>>,
 }
 
@@ -222,10 +226,11 @@ id_struct!(BitmapFont);
 id_struct!(Blob);
 id_struct!(Material);
 id_struct!(Mesh);
+id_struct!(OpacityMicromap);
 id_struct!(Scene);
 
 /// Holds bitmap handles to match what was setup in the asset `.toml` file.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct MaterialInfo {
     /// Whether base-color alpha should reject fragments below the engine cutoff.
     pub alpha_test: bool,
@@ -242,8 +247,18 @@ pub struct MaterialInfo {
     /// Optional RGBA material parameter map: metal, rough, height or occlusion, transmission.
     pub params: Option<BitmapId>,
 
-    /// Indicates which `params` channels were authored in the material source.
+    /// Compact authored material properties and parameter-channel usage.
     pub params_used: MaterialParameterFlags,
+
+    /// Application-defined material data, using the same value types as scene data.
+    pub data: scene::DataMap,
+}
+
+impl MaterialInfo {
+    /// Returns the data for the given key, if it exists.
+    pub fn data(&self, key: &str) -> Option<scene::DataRef<'_>> {
+        self.data.get(key)
+    }
 }
 
 bitflags! {
@@ -254,6 +269,7 @@ bitflags! {
         const HEIGHT = 1 << 2;
         const TRANSMISSION = 1 << 3;
         const OCCLUSION = 1 << 4;
+        const LANDSCAPE = 1 << 6;
     }
 }
 
@@ -425,6 +441,50 @@ impl PakBuf {
 
     pub fn bitmap_count(&self) -> usize {
         self.data.bitmaps.len()
+    }
+
+    pub fn opacity_micromap_count(&self) -> usize {
+        self.data.opacity_micromaps.len()
+    }
+
+    pub fn opacity_micromap_infos(&self) -> &[OpacityMicromapInfo] {
+        &self.data.opacity_micromap_infos
+    }
+
+    pub fn opacity_micromap_id(&self, key: OpacityMicromapKey) -> Option<OpacityMicromapId> {
+        self.data
+            .opacity_micromap_infos
+            .binary_search_by_key(&key, |info| info.key)
+            .ok()
+            .map(|index| self.data.opacity_micromap_infos[index].payload)
+    }
+
+    pub fn read_opacity_micromap_id(
+        &mut self,
+        id: impl Into<OpacityMicromapId>,
+    ) -> Result<OpacityMicromap, Error> {
+        let id = id.into();
+        let range = self
+            .data
+            .opacity_micromaps
+            .get(id.0)
+            .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?
+            .data_range()?;
+        let payload: OpacityMicromap = self.deserialize(&range)?;
+        payload
+            .validate()
+            .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+
+        Ok(payload)
+    }
+
+    pub fn read_opacity_micromap(
+        &mut self,
+        key: OpacityMicromapKey,
+    ) -> Result<Option<OpacityMicromap>, Error> {
+        self.opacity_micromap_id(key)
+            .map(|id| self.read_opacity_micromap_id(id))
+            .transpose()
     }
 
     /// Returns header-resident bitmap information without reading either payload variant.
@@ -603,7 +663,7 @@ impl PakBuf {
         }
 
         let magic_bytes: [u8; 20] = decode(&mut stream, "Unable to read magic bytes")?;
-        if &magic_bytes != b"ATTACKGOAT-PAK-V1.6 " {
+        if &magic_bytes != b"ATTACKGOAT-PAK-V1.8 " {
             warn!("Unsupported magic bytes");
 
             return Err(Error::from(ErrorKind::InvalidData));
@@ -641,6 +701,8 @@ impl PakBuf {
             decode(&mut header, "Unable to read header")?
         };
 
+        Self::validate_header(&data)?;
+
         trace!(
             "Read header: {} bytes ({} keys)",
             header_len,
@@ -648,6 +710,39 @@ impl PakBuf {
         );
 
         Ok((data, Box::new(stream), payload_start, skip))
+    }
+
+    fn validate_header(data: &Data) -> Result<(), Error> {
+        if data
+            .opacity_micromap_infos
+            .windows(2)
+            .any(|infos| infos[0].key >= infos[1].key)
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "opacity micromap keys are not strictly sorted",
+            ));
+        }
+
+        for info in &data.opacity_micromap_infos {
+            let material = data
+                .materials
+                .get(info.key.material.0)
+                .ok_or_else(|| Error::from(ErrorKind::InvalidData))?;
+            let bitmap = data
+                .bitmaps
+                .get(material.color.0)
+                .ok_or_else(|| Error::from(ErrorKind::InvalidData))?;
+            if info.key.mesh.0 >= data.meshes.len()
+                || info.payload.0 >= data.opacity_micromaps.len()
+                || info.key.source_mip >= bitmap.info.mip_levels()
+                || bitmap.info.compression() != Some(BitmapCompression::Bc3)
+            {
+                return Err(Error::from(ErrorKind::InvalidData));
+            }
+        }
+
+        Ok(())
     }
 
     pub fn from_stream(stream: impl Stream + 'static) -> Result<Self, Error> {
@@ -970,7 +1065,7 @@ impl Pak for PakBuf {
     fn read_material_id(&self, id: impl Into<MaterialId>) -> Option<MaterialInfo> {
         let id = id.into();
 
-        self.data.materials.get(id.0).copied()
+        self.data.materials.get(id.0).cloned()
     }
 
     /// Gets the corresponding mesh for the given ID.
@@ -1106,6 +1201,19 @@ impl Stream for Cursor<&'static [u8]> {
 mod test {
     use super::*;
 
+    fn opacity_micromap_info(recipe: u8) -> OpacityMicromapInfo {
+        OpacityMicromapInfo {
+            key: OpacityMicromapKey {
+                mesh: MeshId(0),
+                primitive: 0,
+                material: MaterialId(0),
+                source_mip: 0,
+                recipe: opacity_micromap::OpacityMicromapRecipe([recipe; 32]),
+            },
+            payload: OpacityMicromapId(0),
+        }
+    }
+
     fn data_ref<T>(range: Range<u64>, compression: Option<Compression>) -> DataRef<T> {
         DataRef::Ref(DataRange {
             segment: 0,
@@ -1173,10 +1281,33 @@ mod test {
         );
         assert_eq!(
             empty_pak()
+                .read_opacity_micromap_id(OpacityMicromapId(0))
+                .expect_err("invalid opacity micromap id should error")
+                .kind(),
+            ErrorKind::InvalidInput,
+        );
+        assert_eq!(
+            empty_pak()
                 .read_scene_id(SceneId(0))
                 .expect_err("invalid scene id should error")
                 .kind(),
             ErrorKind::InvalidInput,
+        );
+    }
+
+    #[test]
+    fn opacity_micromap_header_keys_must_be_sorted_and_valid() {
+        let mut data = Data::default();
+        data.opacity_micromap_infos = vec![opacity_micromap_info(1), opacity_micromap_info(0)];
+        assert_eq!(
+            PakBuf::validate_header(&data).unwrap_err().kind(),
+            ErrorKind::InvalidData
+        );
+
+        data.opacity_micromap_infos = vec![opacity_micromap_info(0)];
+        assert_eq!(
+            PakBuf::validate_header(&data).unwrap_err().kind(),
+            ErrorKind::InvalidData
         );
     }
 
@@ -1289,7 +1420,7 @@ mod test {
     fn root_index_offset_cannot_precede_payload_prefix() {
         let mut encoded = Vec::new();
         bincode::serde::encode_into_std_write(
-            *b"ATTACKGOAT-PAK-V1.6 ",
+            *b"ATTACKGOAT-PAK-V1.8 ",
             &mut encoded,
             bincode::config::legacy(),
         )

@@ -1,6 +1,9 @@
 use {
     super::{Mat4, index::IndexBuffer},
-    crate::BlobId,
+    crate::{
+        BlobId,
+        scene::{DataMap, DataRef},
+    },
     bitflags::bitflags,
     serde::{Deserialize, Deserializer, Serialize, de::Error},
 };
@@ -19,7 +22,8 @@ pub struct Joint {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Mesh {
-    data: Option<BlobId>,
+    blob: Option<BlobId>,
+    pub data: DataMap,
     primitives: Vec<Primitive>,
     skin: Option<Skin>,
 }
@@ -28,22 +32,27 @@ impl Mesh {
     #[cfg(feature = "bake")]
     pub(super) fn new(primitives: Vec<Primitive>, skin: Option<Skin>) -> Self {
         Self {
-            data: None,
+            blob: None,
+            data: DataMap::default(),
             primitives,
             skin,
         }
     }
 
-    pub fn data(&self) -> Option<BlobId> {
-        self.data
+    pub fn blob(&self) -> Option<BlobId> {
+        self.blob
+    }
+
+    pub fn data(&self, key: &str) -> Option<DataRef<'_>> {
+        self.data.get(key)
     }
 
     pub fn primitives(&self) -> &[Primitive] {
         &self.primitives
     }
 
-    pub fn set_data(&mut self, id: BlobId) {
-        self.data = Some(id);
+    pub fn set_blob(&mut self, id: BlobId) {
+        self.blob = Some(id);
     }
 
     pub fn skin(&self) -> Option<&Skin> {
@@ -151,6 +160,30 @@ impl Primitive {
         &self.vertex_buf
     }
 
+    /// Returns the first texture coordinate for each vertex, when present.
+    pub fn texture0(&self) -> Option<impl ExactSizeIterator<Item = [f32; 2]> + '_> {
+        if !self.vertex_type.contains(VertexType::TEXTURE0) {
+            return None;
+        }
+
+        let offset = 12
+            + if self.vertex_type.contains(VertexType::NORMAL) {
+                12
+            } else {
+                0
+            };
+
+        Some(
+            self.vertex_buf
+                .chunks_exact(self.vertex_type.stride())
+                .map(move |vertex| {
+                    let u = f32::from_ne_bytes(vertex[offset..offset + 4].try_into().unwrap());
+                    let v = f32::from_ne_bytes(vertex[offset + 4..offset + 8].try_into().unwrap());
+                    [u, v]
+                }),
+        )
+    }
+
     pub fn vertex_type(&self) -> VertexType {
         self.vertex_type
     }
@@ -238,5 +271,30 @@ mod test {
             bincode::serde::decode_from_slice::<Primitive, _>(&encoded, bincode::config::legacy());
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn texture0_reads_interleaved_vertices() {
+        let vertex_type = VertexType::POSITION | VertexType::NORMAL | VertexType::TEXTURE0;
+        let mut vertices = Vec::new();
+        for texture in [[0.25_f32, 0.5_f32], [0.75, 1.0]] {
+            vertices.extend_from_slice(&[0; 24]);
+            vertices.extend_from_slice(&texture[0].to_ne_bytes());
+            vertices.extend_from_slice(&texture[1].to_ne_bytes());
+        }
+
+        let primitive = Primitive::new(0, &vertices, vertex_type);
+
+        assert_eq!(
+            primitive.texture0().unwrap().collect::<Vec<_>>(),
+            [[0.25, 0.5], [0.75, 1.0]]
+        );
+    }
+
+    #[test]
+    fn texture0_is_absent_when_not_in_vertex_type() {
+        let primitive = Primitive::new(0, &[0; 12], VertexType::POSITION);
+
+        assert!(primitive.texture0().is_none());
     }
 }
