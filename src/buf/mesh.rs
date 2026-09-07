@@ -69,6 +69,7 @@ pub struct MeshAsset {
     normals: Option<bool>,
     offset: Option<[OrderedFloat<f32>; 3]>,
     optimize: Option<bool>,
+    optimize_vertex_cache: Option<bool>,
     overdraw_threshold: Option<OrderedFloat<f32>>,
 
     rotation: Option<Rotation>,
@@ -105,6 +106,7 @@ impl MeshAsset {
             normals: None,
             offset: None,
             optimize: None,
+            optimize_vertex_cache: None,
             overdraw_threshold: None,
             rotation: None,
             scale: None,
@@ -307,6 +309,14 @@ impl MeshAsset {
         self.optimize.unwrap_or(true)
     }
 
+    /// Reorders triangles for vertex reuse, without changing their winding or vertices.
+    /// Defaults to `optimize`; explicitly enabling this with `optimize = false`
+    /// leaves overdraw and vertex-fetch reordering disabled.
+    pub fn optimize_vertex_cache(&self) -> bool {
+        self.optimize_vertex_cache
+            .unwrap_or_else(|| self.optimize())
+    }
+
     /// At the very least this function will re-index the vertices, and optionally may
     /// perform full meshopt optimization.
     fn optimize_mesh(
@@ -393,13 +403,16 @@ impl MeshAsset {
         assert_eq!(vertex_buf.len() / vertex_stride, vertex_count);
 
         // Run the suggested routines from meshopt: https://github.com/gwihlidal/meshopt-rs#pipeline
+        if self.optimize_vertex_cache() {
+            optimize_vertex_cache_in_place(indices, vertex_count);
+        }
+
         if self.optimize() {
             let vertices = VertexDataAdapter::new(vertex_buf, vertex_stride, 0)
                 .context("creating vertex data adapter for mesh optimization")?;
 
             // HACK: These functions take immutable borrows, BUT USE MUTABLE!
             // See: https://github.com/gwihlidal/meshopt-rs/pull/26 not yet released
-            optimize_vertex_cache_in_place(indices, vertex_count);
             optimize_overdraw_in_place(indices, &vertices, self.overdraw_threshold());
 
             hack::optimize_vertex_fetch_in_place(indices, vertex_buf, vertex_stride);
@@ -1532,6 +1545,64 @@ mod test {
         assert_eq!(indices, [0, 1, 0, 2, 1, 0]);
         assert_eq!(vertex_count, 3);
         assert_eq!(compact, [40, 0, 0, 0, 20, 0, 0, 0, 30, 0, 0, 0]);
+    }
+
+    #[test]
+    fn cache_only_optimization_preserves_vertices_and_oriented_triangles() {
+        let disabled: MeshAsset = toml::from_str("optimize = false").unwrap();
+        let cache_only: MeshAsset =
+            toml::from_str("optimize = false\noptimize-vertex-cache = true").unwrap();
+        assert!(!disabled.optimize_vertex_cache());
+        assert!(!cache_only.optimize());
+        assert!(MeshAsset::new("mesh.glb").optimize_vertex_cache());
+        let mut vertices = Vec::new();
+        for y in 0..24 {
+            for x in 0..24 {
+                for value in [
+                    x as f32,
+                    y as f32,
+                    0.0,
+                    (x + y) as f32,
+                    x as f32 / 23.0,
+                    y as f32 / 23.0,
+                ] {
+                    vertices.extend_from_slice(&value.to_ne_bytes());
+                }
+            }
+        }
+        let mut triangles = Vec::new();
+        for y in 0..23 {
+            for x in 0..23 {
+                let i = y * 24 + x;
+                triangles.extend([[i, i + 1, i + 24], [i + 1, i + 25, i + 24]]);
+            }
+        }
+        let count = triangles.len();
+        triangles.sort_by_key(|triangle| {
+            ((triangle[0] * 2 + u32::from(triangle[1] == triangle[0] + 24)) as usize * 97) % count
+        });
+        let mut indices = triangles.into_iter().flatten().collect::<Vec<_>>();
+        let mut optimized_indices = indices.clone();
+        let mut optimized_vertices = vertices.clone();
+        disabled
+            .optimize_mesh(&mut indices, &mut vertices, 24)
+            .unwrap();
+        cache_only
+            .optimize_mesh(&mut optimized_indices, &mut optimized_vertices, 24)
+            .unwrap();
+        assert_eq!(vertices, optimized_vertices);
+        let oriented = |indices: &[u32]| {
+            let mut triangles = indices
+                .chunks_exact(3)
+                .map(|triangle| <[u32; 3]>::try_from(triangle).unwrap())
+                .collect::<Vec<_>>();
+            triangles.sort();
+            triangles
+        };
+        assert_eq!(oriented(&indices), oriented(&optimized_indices));
+        let before = meshopt::analyze_vertex_cache(&indices, 24 * 24, 32, 32, 256);
+        let after = meshopt::analyze_vertex_cache(&optimized_indices, 24 * 24, 32, 32, 256);
+        assert!(after.vertices_transformed < before.vertices_transformed);
     }
 
     #[test]

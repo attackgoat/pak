@@ -138,6 +138,7 @@ Item | Description
 `normals` | (_`boolean`_) When set (default `true`), imports geometry normals.
 `offset` | (_array of `float` with a length of 3_) When set, offsets geometry positions by the given amount.
 `optimize` | (_`boolean`_) When set (default `true`), reorders geometry indices and vertices using MeshOpt.
+`optimize-vertex-cache` | (_`boolean`_) Overrides the vertex-cache part of `optimize`. Defaults to the value of `optimize`; explicitly setting `true` with `optimize = false` reorders triangles only, retaining vertex bytes and leaving overdraw/fetch optimization disabled. Triangle IDs change, so derive triangle-indexed metadata from the baked result.
 `overdraw-threshold` | (_`float`_) When set (default `1.05`), controls MeshOpt optimization.
 `rotation` | (_array of `float` with a length of 3 or 4_) When set, the vector (XYZ) or quaternion (XYZW) rotation applied to geometry.
 `scale` | (_`float` or array of `float` with a length of 3_) When set, the uniform or vector (XYZ) scale applied to geometry.
