@@ -99,6 +99,56 @@ fn material_bitmap_toml_src_resolves_relative_to_bitmap_toml() -> Result<(), Err
 
 #[cfg(feature = "bake")]
 #[test]
+fn high_color_references_keep_shared_bitmap_identity_and_direct_policy() -> Result<(), Error> {
+    for quality in ["default", "high"] {
+        for bitmap_key in ["z-shared", "a-shared"] {
+            let directory = tempfile::tempdir()?;
+            let root = directory.path();
+            image::RgbImage::from_pixel(4, 4, image::Rgb([73, 129, 201]))
+                .save(root.join("source.png"))
+                .map_err(Error::other)?;
+            fs::write(
+                root.join(format!("{bitmap_key}.toml")),
+                format!("[bitmap]\nsrc = 'source.png'\nmip-quality = '{quality}'\n"),
+            )?;
+            for name in ["a", "b"] {
+                fs::write(
+                    root.join(format!("material-{name}.toml")),
+                    format!("[material]\ncolor = '{bitmap_key}.toml'\ndata.tag = '{name}'\n"),
+                )?;
+            }
+            let manifest = root.join("pak.toml");
+            fs::write(
+                &manifest,
+                format!(
+                    "[content]\ntexture-compression = true\n\
+                     [[content.group]]\nassets = ['{bitmap_key}.toml']\nsegment = 'shared'\n\
+                     [[content.group]]\nassets = ['material-a.toml']\nsegment = 'a'\n\
+                     [[content.group]]\nassets = ['material-b.toml']\nsegment = 'b'\n"
+                ),
+            )?;
+            let output = root.join("materials.pak");
+            PakBuf::bake_with_dir_without_cargo_watches(&manifest, &output, root).unwrap();
+
+            let mut pak = PakBuf::open(output)?;
+            let bitmap = pak.bitmap_id(bitmap_key).unwrap();
+            assert_eq!(pak.bitmap_count(), 1);
+            for name in ["a", "b"] {
+                assert_eq!(
+                    pak.read_material(format!("material-{name}")).unwrap().color,
+                    bitmap
+                );
+            }
+            let compressed = pak.read_compressed_bitmap_id(bitmap)?.unwrap();
+            assert_eq!(compressed.format(), BitmapCompression::Bc1Srgb);
+            assert_eq!(compressed.mip_levels(), 3);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "bake")]
+#[test]
 fn material_occlusion_path_is_a_source_dependency() -> Result<(), Error> {
     let generated_dir =
         std::env::temp_dir().join(format!("pak-material-occlusion-src-{}", std::process::id()));

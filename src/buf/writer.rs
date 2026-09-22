@@ -41,6 +41,8 @@ pub(super) struct StoragePolicy {
 
 #[derive(Default)]
 pub struct Writer {
+    pub(super) lod: super::mesh::lod::LodSettings,
+    pub(super) default_lods: Box<[super::mesh::lod::LodRequest]>,
     header_compression: Option<Compression>,
     active_policy: StoragePolicy,
     direct_policies: HashMap<Asset, StoragePolicy>,
@@ -586,10 +588,9 @@ impl Writer {
             let Some(primitive) = mesh.primitives().get(primitive_index as usize) else {
                 continue;
             };
-            let Some(indices) = primitive.lods().first() else {
-                continue;
-            };
-            let Some(texture0) = primitive.texture0() else {
+            let base = primitive.base();
+            let indices = base.indices();
+            let Some(texture0) = base.texture0() else {
                 continue;
             };
             let Some(bitmap) = self.data.bitmaps.get(color.0) else {
@@ -789,7 +790,7 @@ impl Writer {
         data: &mut Data,
     ) -> Result<(), Error> {
         let mut magic_bytes = [0u8; 20];
-        magic_bytes.copy_from_slice(b"ATTACKGOAT-PAK-V1.8 ");
+        magic_bytes.copy_from_slice(b"ATTACKGOAT-PAK-V1.10");
 
         // Write a known value so we can identify this file
         bincode::serde::encode_into_std_write(magic_bytes, &mut writer, bincode::config::legacy())
@@ -928,22 +929,23 @@ mod test {
     use {
         super::{StoragePolicy, Writer},
         crate::buf::{
-            Asset, DerivedAssetBakeCandidate, DerivedAssetBakeOutput, DerivedAssetBaker,
-            blob::BlobAsset,
+            Asset, Canonicalize as _, DerivedAssetBakeCandidate, DerivedAssetBakeOutput,
+            DerivedAssetBaker, blob::BlobAsset, mesh::MeshAsset,
         },
         crate::{
-            BlobId, MaterialInfo, MaterialParameterFlags, PakBuf,
+            BlobId, MaterialInfo, MaterialParameterFlags, Pak as _, PakBuf,
             bitmap::{
                 Bitmap, BitmapColor, BitmapCompression, BitmapFormat, CompressedBitmap,
                 CompressedMip,
             },
             compression::{BrotliParams, Compression},
             index::IndexBuffer,
-            mesh::{Joint, Mesh, Primitive, Skin, VertexType},
+            mesh::{Geometry, Joint, Mesh, Primitive, Skin, VertexType},
             opacity_micromap::{OpacityMicromap, OpacityMicromapKey, OpacityMicromapRecipe},
             scene::{ReferenceData, Scene},
         },
-        std::{fs, io::ErrorKind, path::PathBuf},
+        parking_lot::Mutex,
+        std::{fs, io::ErrorKind, path::PathBuf, sync::Arc},
     };
 
     fn asset() -> Asset {
@@ -974,6 +976,7 @@ mod test {
 
     struct FakeDerivedBaker {
         calls: usize,
+        base: Geometry,
     }
 
     #[test]
@@ -983,7 +986,8 @@ mod test {
         impl DerivedAssetBaker for Baker {
             fn bake_mesh(&mut self, mesh: &mut Mesh) -> anyhow::Result<()> {
                 assert_eq!(mesh.skin().is_some(), self.0 == 1);
-                mesh.data.insert("visited", crate::scene::DataData::Bool(true));
+                mesh.data
+                    .insert("visited", crate::scene::DataData::Bool(true));
                 self.0 += 1;
                 Ok(())
             }
@@ -998,18 +1002,30 @@ mod test {
 
         let mut writer = Writer::default();
         writer
-            .push_mesh(Mesh::new(Vec::new(), None), policy(None))
+            .push_mesh(Mesh::new(Vec::new(), None).unwrap(), policy(None))
             .unwrap();
         writer
             .push_mesh(
                 Mesh::new(
-                    vec![Primitive::new(0, &[0; 20], VertexType::JOINTS_WEIGHTS)],
+                    vec![
+                        Primitive::new(
+                            0,
+                            Geometry::new(
+                                &[0; 20],
+                                VertexType::JOINTS_WEIGHTS,
+                                IndexBuffer::new(&[0, 0, 0]).unwrap(),
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap(),
+                    ],
                     Some(Skin::new(vec![Joint {
                         inverse_bind: glam::Mat4::IDENTITY.to_cols_array(),
                         name: "root".to_owned(),
                         parent_index: 0,
                     }])),
-                ),
+                )
+                .unwrap(),
                 policy(Some(Compression::Snap)),
             )
             .unwrap();
@@ -1034,11 +1050,24 @@ mod test {
             assert_eq!(candidate.mesh, crate::MeshId(0));
             assert_eq!(candidate.primitive, 0);
             assert_eq!(candidate.material, crate::MaterialId(0));
-            assert_eq!(candidate.indices.as_ref(), &[0, 1, 2]);
-            assert_eq!(candidate.texture0.as_ref(), &[[0.0, 0.0]; 3]);
+            assert_eq!(candidate.indices.as_ref(), self.base.indices().as_u32());
+            assert_eq!(
+                candidate.texture0.as_ref(),
+                self.base.texture0().unwrap().collect::<Vec<_>>()
+            );
             assert_eq!(candidate.alpha_bitmap.format(), BitmapCompression::Bc3);
+            let triangles = candidate.indices.len() / 3;
             Ok(vec![DerivedAssetBakeOutput {
-                payload: opacity_micromap(),
+                payload: OpacityMicromap::new(
+                    [],
+                    [],
+                    [],
+                    vec![-1; triangles],
+                    [],
+                    triangles as u32,
+                    0,
+                )
+                .unwrap(),
                 recipe: OpacityMicromapRecipe([7; 32]),
                 source_mip: 0,
             }]
@@ -1096,6 +1125,81 @@ mod test {
     }
 
     #[test]
+    fn mesh_pack_defaults_preserve_raw_recipe_identity_and_dependency_policy() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/scene/cube.glb"),
+            root.join("cube.glb"),
+        )
+        .unwrap();
+        fs::write(root.join("payload.bin"), b"mesh dependency").unwrap();
+        let mut recipe: MeshAsset =
+            toml::from_str("src = 'cube.glb'\nblob = 'payload.bin'").unwrap();
+        recipe.canonicalize(root, root);
+        let asset: Asset = recipe.clone().into();
+        let direct = StoragePolicy {
+            segment: 1,
+            ..policy(Some(Compression::Snap))
+        };
+        let inherited = StoragePolicy {
+            segment: 2,
+            ..policy(None)
+        };
+        let writer = Arc::new(Mutex::new(Writer {
+            default_lods: vec![
+                crate::buf::LodRequest {
+                    layout: crate::mesh::VertexType::POSITION,
+                    simplify: true,
+                },
+                crate::buf::LodRequest {
+                    layout: crate::mesh::VertexType::PACKED_NORMAL,
+                    simplify: true,
+                },
+            ]
+            .into_boxed_slice(),
+            ..Writer::default()
+        }));
+        {
+            let mut writer = writer.lock();
+            writer
+                .set_segments(vec!["meshdata".to_owned(), "outer".to_owned()])
+                .unwrap();
+            writer
+                .register_direct_policy(asset.clone(), direct)
+                .unwrap();
+            writer.set_active_policy(inherited);
+        }
+        let id = recipe
+            .bake(&writer, root, Some(root.join("mesh.toml")))
+            .unwrap();
+        assert_eq!(
+            recipe
+                .bake(&writer, root, Some(root.join("alias.toml")))
+                .unwrap(),
+            id
+        );
+        assert!(recipe.lod_requests().is_empty());
+        let mut writer = writer.lock();
+        assert_eq!(writer.ctx[&asset].id, id.into());
+        assert_eq!(writer.ctx[&asset].policy, direct);
+        assert_eq!(writer.ctx.len(), 2, "one raw mesh identity and its blob");
+        assert_eq!(writer.data.ids["mesh"], writer.data.ids["alias"]);
+        assert_eq!(writer.mesh_policies, [direct]);
+        assert_eq!(writer.active_policy, inherited);
+        let blob_range = writer.data.blobs[0].data_range().unwrap();
+        assert_eq!(blob_range.segment, direct.segment);
+        assert_eq!(blob_range.compression, direct.compression);
+        let range = writer.data.meshes[id.0].data_range().unwrap();
+        let mesh: Mesh = writer.mesh_spool.as_mut().unwrap().read(&range).unwrap();
+        assert!(
+            mesh.primitives()
+                .iter()
+                .all(|primitive| primitive.lod_sets().len() == 2)
+        );
+    }
+
+    #[test]
     fn blob_and_bitmap_font_have_distinct_typed_identity() {
         let mut writer = Writer::default();
         let source = BlobAsset::new(PathBuf::from("font.fnt"));
@@ -1137,7 +1241,7 @@ mod test {
             data: Default::default(),
         });
         writer
-            .push_mesh(Mesh::new(Vec::new(), None), policy(None))
+            .push_mesh(Mesh::new(Vec::new(), None).unwrap(), policy(None))
             .unwrap();
         let key = opacity_micromap_key(1);
         let expected = opacity_micromap();
@@ -1164,58 +1268,95 @@ mod test {
 
     #[test]
     fn derived_assets_use_final_scene_bindings_and_deduplicate_candidates() {
-        let mut writer = Writer::default();
-        let policy = policy(Some(Compression::Snap));
-        let bitmap = Bitmap::new(BitmapColor::Srgb, BitmapFormat::Rgba, 1, 1, [0; 4])
-            .with_compressed(CompressedBitmap::new(
-                BitmapCompression::Bc3,
-                vec![CompressedMip::new(1, 1, vec![0; 16])],
-            ));
-        let color = writer.push_bitmap(bitmap, policy).unwrap();
-        let material = writer.push_material(MaterialInfo {
-            alpha_test: true,
-            color,
-            emissive: None,
-            normal: None,
-            params: None,
-            params_used: MaterialParameterFlags::empty(),
-            data: Default::default(),
-        });
-        let mut primitive =
-            Primitive::new(0, &[0; 60], VertexType::POSITION | VertexType::TEXTURE0);
-        primitive.push_lod(IndexBuffer::new(&[0, 1, 2]).unwrap());
-        let mesh = writer
-            .push_mesh(Mesh::new(vec![primitive], None), policy)
-            .unwrap();
-        let reference = ReferenceData {
-            materials: vec![material],
-            mesh: Some(mesh),
-            ..Default::default()
-        };
-        writer
-            .push_scene(
-                Scene::new(
-                    [],
-                    [
-                        reference,
-                        ReferenceData {
-                            materials: vec![material],
-                            mesh: Some(mesh),
-                            ..Default::default()
-                        },
-                    ],
+        let base = crate::mesh::test::grid(17, true);
+        let directory = tempfile::tempdir().unwrap();
+        let mut previous = None;
+        for alternatives in [false, true] {
+            let mut writer = Writer::default();
+            let policy = policy(Some(Compression::Snap));
+            let bitmap = Bitmap::new(BitmapColor::Srgb, BitmapFormat::Rgba, 1, 1, [0; 4])
+                .with_compressed(CompressedBitmap::new(
+                    BitmapCompression::Bc3,
+                    vec![CompressedMip::new(1, 1, vec![0; 16])],
+                ));
+            let color = writer.push_bitmap(bitmap, policy).unwrap();
+            let material = writer.push_material(MaterialInfo {
+                alpha_test: true,
+                color,
+                emissive: None,
+                normal: None,
+                params: None,
+                params_used: MaterialParameterFlags::empty(),
+                data: Default::default(),
+            });
+            let mut primitive = Primitive::new(0, base.clone()).unwrap();
+            if alternatives {
+                let asset: MeshAsset =
+                    toml::from_str("lods = [{layout='POSITION', simplify=true}, {layout='PACKED_NORMAL', simplify=true}]").unwrap();
+                asset.generate_lods(&mut primitive).unwrap();
+                assert!(
+                    primitive
+                        .lod_sets()
+                        .iter()
+                        .all(|set| set.levels().len() > 1)
+                );
+            }
+            assert_eq!(primitive.base(), &base);
+            let expected = primitive.clone();
+            let mesh = writer
+                .push_mesh(Mesh::new(vec![primitive], None).unwrap(), policy)
+                .unwrap();
+            let reference = ReferenceData {
+                materials: vec![material],
+                mesh: Some(mesh),
+                ..Default::default()
+            };
+            writer
+                .push_scene(
+                    Scene::new(
+                        [],
+                        [
+                            reference,
+                            ReferenceData {
+                                materials: vec![material],
+                                mesh: Some(mesh),
+                                ..Default::default()
+                            },
+                        ],
+                    )
+                    .unwrap(),
+                    policy,
                 )
-                .unwrap(),
-                policy,
-            )
-            .unwrap();
-        let mut baker = FakeDerivedBaker { calls: 0 };
+                .unwrap();
+            let mut baker = FakeDerivedBaker {
+                calls: 0,
+                base: base.clone(),
+            };
 
-        writer.bake_derived_assets(&mut baker).unwrap();
+            writer.bake_derived_assets(&mut baker).unwrap();
 
-        assert_eq!(baker.calls, 1);
-        assert_eq!(writer.data.opacity_micromaps.len(), 1);
-        assert_eq!(writer.data.opacity_micromap_infos[0].key.recipe.0, [7; 32]);
+            assert_eq!(baker.calls, 1);
+            assert_eq!(writer.data.opacity_micromaps.len(), 1);
+            assert_eq!(writer.data.opacity_micromap_infos[0].key.recipe.0, [7; 32]);
+            let destination = directory.path().join(format!("native-{alternatives}.pak"));
+            writer.write(&destination).unwrap();
+            let bytes = fs::read(&destination).unwrap();
+            assert_eq!(&bytes[..20], b"ATTACKGOAT-PAK-V1.10");
+            let mut pak = PakBuf::open(destination).unwrap();
+            let decoded = pak.read_mesh_id(mesh).unwrap();
+            assert_eq!(decoded.primitives(), &[expected]);
+            let key = pak.opacity_micromap_infos()[0].key;
+            let payload = pak.read_opacity_micromap(key).unwrap().unwrap();
+            let output =
+                bincode::serde::encode_to_vec((key, payload), bincode::config::legacy()).unwrap();
+            if let Some(previous) = previous {
+                assert_eq!(
+                    output, previous,
+                    "alternatives must not change base OMM output"
+                );
+            }
+            previous = Some(output);
+        }
     }
 
     #[test]

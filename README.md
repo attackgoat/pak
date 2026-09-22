@@ -36,6 +36,7 @@ _`game_art.toml`:_
 ```toml
 [content]
 compression = 'snap'
+default-lods = [{ layout = 'POSITION', simplify = true }]
 
 [[content.group]]
 assets = [
@@ -55,9 +56,14 @@ All fields are optional.
 Item | Description
 ---- | -----------
 compression | `'snap'`, `'brotli'`, or unspecified (_no compression_).
+default-lods | (_array_, default `[]`) Default layout requests inherited by meshes, each containing `layout` and `simplify`.
 buffer-size | (_`unsigned integer`_) Brotli buffer size. Used only when `compression = 'brotli'`. Defaults to `4096`.
 quality | (_`unsigned integer`_) Brotli compression quality. Used only when `compression = 'brotli'`. Defaults to `8`.
 window-size | (_`unsigned integer`_) Brotli window size. Used only when `compression = 'brotli'`. Defaults to `22`.
+
+Mesh LOD defaults are content-wide, not group settings. Direct `.glb`/`.gltf` assets,
+keyed mesh recipes, and inline or referenced scene meshes all inherit the root
+`[content].default-lods`. Mesh `lods` adds requests to these defaults.
 
 ### _`[content.group]` Schema_
 
@@ -110,7 +116,7 @@ _Example, `large-goblet.toml`:_
 ```toml
 [mesh]
 src = 'some_file.gltf'
-lod = true
+lods = [{ layout = 'PACKED_NORMAL', simplify = true }]
 max-index = 'u16'
 ```
 
@@ -129,9 +135,10 @@ Item | Description
 `flip-z` | (_`boolean`_) When set, flips the Z component of all position vertices.
 `ignore-skin` | (_`boolean`_) When set, any embedded skin data is ignored.
 `ignore-texture1` | (_`boolean`_) When set, the second texture coordinate channel is ignored.
-`lod` | (_`boolean`_) When set, generates level of detail meshes using MeshOpt.
+`inherit-lods` | (_`boolean`_, default `true`) Include `[content].default-lods`. Set `false` to use only local `lods`; this does not disable inheritance of `[content.lod]` processing settings.
+`lods` | (_array_, default `[]`) Local layout requests added to inherited defaults, overriding matching layouts. An empty list does not disable inheritance. Use `simplify = false` for a source-only request.
 `lod-lock-border` | (_`boolean`_) When set, tells MeshOpt to generate level of detail meshes using only interior vertices.
-`lod-target-error` | (_`float`_) When set, tells MeshOpt to attempt to hit a certain error threshold between level of detail meshes.
+`lod-target-error` | (_`float`_, default `0.05`) Finite nonnegative base-relative MeshOpt error budget. Overrides nested `target-error`; iterative group errors accumulate within the original absolute budget.
 `max-index` | (_`string` or `unsigned integer`_) When set, reduces and compacts the baked mesh so no LOD references an index greater than this value. Accepts `'u8'`, `'u16'`, or an exact value such as `4095` or `65535`. Uses MeshOpt simplification and may reduce the base mesh before generating LODs.
 `min-lod-triangles` | (_`unsigned integer`_) When set, tells MeshOpt to stop generating level of detail meshes below this threshold.
 `name` | (_`string`_) When set, imports this named mesh. Otherwise, imports the first mesh.
@@ -143,7 +150,6 @@ Item | Description
 `rotation` | (_array of `float` with a length of 3 or 4_) When set, the vector (XYZ) or quaternion (XYZW) rotation applied to geometry.
 `scale` | (_`float` or array of `float` with a length of 3_) When set, the uniform or vector (XYZ) scale applied to geometry.
 `scene-name` | (_`string`_) When set, controls which GLTF scene is imported from the source file.
-`shadow` | (_`boolean`_) When set, imports position-only geometry optimized for use in shadow or other similar rendering techniques.
 `tangents` | (_`boolean`_) When set (default `true`), imports geometry tangents. If missing, tangents are generated using the MikkTSpace algorithm
 
 `max-index` is a hard cap on the maximum index value, not just a triangle-count target. If a mesh initially needs indices above the cap, baking simplifies the mesh and compacts the vertex buffer so `IndexBuffer` can store the result as `u8` or `u16` where possible. Lower generated LODs are derived from the capped mesh.
@@ -155,10 +161,7 @@ add or replace metadata while preserving other authored entries. `MeshAsset` acc
 The derived-asset baking entry points call `DerivedAssetBaker::bake_mesh(&mut Mesh)`
 once per unique final mesh, after transforms, optimization, and primitive construction,
 even without scene references or eligible opacity micromaps. The hook defaults to no-op.
-Pak does not interpret mesh metadata or calculate renderer-specific bounds.
-
-The mesh metadata layout uses pak format V1.8. Older packs are rejected and must be
-rebuilt; old mesh blob declarations must rename `data` to `blob`.
+Pak writes `pak.mesh-lod.*` for LOD generation reports; other mesh metadata is application-defined.
 
 ## Raw Blobs
 
@@ -202,6 +205,7 @@ Item | Description
 `double-sided` | (`boolean`_) When set, indicates the material is double-sided.
 `emissive` | Hex string, path string, inline bitmap asset, or array of three floating point values.
 `metal` | Hex string, path string, inline bitmap asset, or floating point value.
+`mip-quality` | `'default'` (also when omitted) or `'high'`. See High-Quality Mips below.
 `normal` | Path string or inline bitmap asset.
 `occlusion` | Hex string, path string, inline bitmap asset, or floating point value. Mutually exclusive with `height`.
 `rough` | Hex string, path string, inline bitmap asset, or floating point value.
@@ -243,9 +247,31 @@ Item | Description
 ---- | -----------
 `src` | File path to an image. May be relative to the `[bitmap]` TOML file or absolute where the root is the same folder as the `[content]` TOML file. When unspecified, attempts to load a bitmap with the same name as the `[bitmap]` TOML file.
 `mip-levels` | (_`boolean` or `non-zero unsigned integer`_) When set (default `1`), allows configuration of the desired count of mip levels to be stored with a bitmap for later use by a program.
+`mip-quality` | `'default'` (also when omitted) or `'high'`.
 `resize` | (_`unsigned integer`_) When set, the image is uniformly resized to have this maximum dimension.
 `color` | (_`string`_) When set (default `srgb`), the image is imported as either `linear` or `srgb` color data.
 `swizzle` | (_`string`_) When set (default `rgba` for four channel images), the specified image color channels are imported in the given order (example: `r`, `rg` or `bgr`).
+
+### High-Quality Mips
+
+Set `mip-quality = 'high'` on a material or standalone bitmap:
+
+```toml
+[material]
+mip-quality = 'high'
+color = 'face-color.png'
+```
+
+High requires BC compression; materials require `texture-compression = true`.
+Standalone bitmaps may instead set `compression` to `bc1-srgb`, `bc1-rgb`, `bc3`,
+`bc4` or `bc5`. Base pixels are preserved; mips extend to 1x1 regardless of `mip-levels`.
+Color uses linear-light, premultiplied-alpha Lanczos3 filtering. Linear data and
+packed parameters use area averages. Material normals require BC5 and filter vector
+moments reconstructed from RG, normalizing only emitted directions. Filtering stays
+float32 between levels; RGB encoding uses `IterativeClusterFit` regardless of `PROFILE`.
+
+High rejects `resize`, uncompressed output, material height and alpha-test color.
+Parameter images must match dimensions.
 
 ### Bitmap Fonts
 

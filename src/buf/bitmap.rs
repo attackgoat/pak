@@ -8,7 +8,7 @@ use {
     },
     anyhow::{Context, bail, ensure},
     image::{
-        DynamicImage, RgbaImage,
+        DynamicImage, Rgba32FImage, RgbaImage,
         buffer::ConvertBuffer,
         imageops::{FilterType, resize},
         open,
@@ -20,6 +20,7 @@ use {
     std::{
         fmt::Formatter,
         fs::{create_dir_all, read, remove_file, rename, write},
+        hash::{Hash, Hasher},
         path::{Path, PathBuf},
         sync::{
             Arc, OnceLock,
@@ -28,9 +29,14 @@ use {
     },
 };
 
+/// Texture/mip producer identity for outer bake cache keys, including opt-in high quality.
+/// Bump when filtering, semantic policies, or encoder recipes change; the inner BC cache
+/// uses this same identity. Referencing it also requires a high-quality-capable producer.
+pub const TEXTURE_MIP_PRODUCER: &str = "pak-bc-texture/v2";
+
 const MIP_LEVELS_MAX: u32 = u32::BITS;
 const MIP_LEVELS_MIN: u32 = 1;
-const TEXTURE_CACHE_RECIPE: &[u8] = b"pak-bc-texture/v1";
+const TEXTURE_CACHE_RECIPE: &[u8] = TEXTURE_MIP_PRODUCER.as_bytes();
 static TEXTURE_CACHE_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn decode_bc3_alpha_mip(
@@ -149,7 +155,7 @@ fn default_mip_levels() -> u32 {
 }
 
 /// Holds a description of `.jpeg` and other regular images.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct BitmapAsset {
     color: Option<BitmapColor>,
@@ -157,6 +163,12 @@ pub struct BitmapAsset {
 
     #[serde(default = "default_mip_levels", deserialize_with = "de_mip_levels")]
     mip_levels: u32,
+
+    #[serde(default)]
+    mip_quality: MipQuality,
+
+    #[serde(skip)]
+    semantic: MipSemantic,
 
     resize: Option<u32>,
     src: Option<PathBuf>,
@@ -173,6 +185,8 @@ impl BitmapAsset {
             color: None,
             compression: None,
             mip_levels: 1,
+            mip_quality: MipQuality::Default,
+            semantic: MipSemantic::Auto,
             resize: None,
             src: Some(src.as_ref().to_path_buf()),
             swizzle: None,
@@ -183,6 +197,54 @@ impl BitmapAsset {
     pub fn with_color(mut self, color: BitmapColor) -> Self {
         self.color = Some(color);
         self
+    }
+
+    /// Selects bake-time filtering and BC encoder quality; does not change the pak format.
+    #[allow(dead_code)]
+    pub fn with_mip_quality(mut self, quality: MipQuality) -> Self {
+        self.mip_quality = quality;
+        self
+    }
+
+    pub fn mip_quality(&self) -> MipQuality {
+        self.mip_quality
+    }
+
+    pub(super) fn with_material_quality(
+        mut self,
+        quality: MipQuality,
+        semantic: MipSemantic,
+    ) -> Self {
+        if quality == MipQuality::High {
+            self.mip_quality = quality;
+        }
+        if self.mip_quality == MipQuality::High {
+            self.semantic = semantic;
+        }
+        self
+    }
+
+    pub(super) fn validate_native_size(&self) -> anyhow::Result<()> {
+        ensure!(
+            self.resize.is_none(),
+            "high mip quality does not support resize; retain native source dimensions"
+        );
+        Ok(())
+    }
+
+    pub(super) fn scalar_pixels(&self, quality: MipQuality) -> anyhow::Result<Bitmap> {
+        ensure!(
+            self.mip_quality != MipQuality::High,
+            "scalar input mip-quality is not a final parameter policy; set mip-quality on the material root"
+        );
+        if quality == MipQuality::High {
+            self.validate_native_size()?;
+            let mut source = self.clone();
+            source.compression = None;
+            source.as_bitmap_buf()
+        } else {
+            self.as_bitmap_buf()
+        }
     }
 
     #[allow(dead_code)]
@@ -293,6 +355,18 @@ impl BitmapAsset {
     }
 
     pub fn as_bitmap_buf(&self) -> anyhow::Result<Bitmap> {
+        if self.mip_quality == MipQuality::High {
+            self.validate_native_size()?;
+            ensure!(
+                self.compression.is_some(),
+                "high mip quality requires BC compression; raw bitmap mip chains cannot be stored"
+            );
+            ensure!(
+                self.semantic != MipSemantic::Normal
+                    || self.compression == Some(BitmapCompression::Bc5),
+                "high material normals require bc5 compression"
+            );
+        }
         let Some(src) = self.src() else {
             return Err(anyhow::Error::msg("unspecified bitmap source"));
         };
@@ -329,7 +403,8 @@ impl BitmapAsset {
             } else {
                 compression
             };
-            let compressed = Self::compress(&bitmap, compression);
+            let compressed =
+                Self::compress_with_quality(&bitmap, compression, self.mip_quality, self.semantic);
             bitmap.with_compressed(compressed)
         } else {
             bitmap
@@ -346,8 +421,34 @@ impl BitmapAsset {
     }
 
     pub(super) fn compress(bitmap: &Bitmap, compression: BitmapCompression) -> CompressedBitmap {
-        let algorithm = Self::compression_algorithm();
-        let cache_key = Self::texture_cache_key(bitmap, compression, algorithm);
+        Self::compress_with_quality(bitmap, compression, MipQuality::Default, MipSemantic::Auto)
+    }
+
+    pub(super) fn compress_with_quality(
+        bitmap: &Bitmap,
+        compression: BitmapCompression,
+        quality: MipQuality,
+        semantic: MipSemantic,
+    ) -> CompressedBitmap {
+        let semantic = semantic.resolve(bitmap.color());
+        let algorithm = if quality == MipQuality::High {
+            texpresso::Algorithm::IterativeClusterFit
+        } else {
+            Self::compression_algorithm()
+        };
+        let weights = if quality == MipQuality::High && semantic != MipSemantic::Color {
+            [1.0; 3]
+        } else {
+            texpresso::Params::default().weights
+        };
+        let cache_key = Self::texture_cache_key_with_quality(
+            bitmap,
+            compression,
+            algorithm,
+            quality,
+            semantic,
+            weights,
+        );
         if let Some(compressed) = Self::read_texture_cache(bitmap, compression, &cache_key) {
             trace!("BC texture cache hit: {cache_key}");
             return compressed;
@@ -371,8 +472,11 @@ impl BitmapAsset {
         let mut mips = Vec::with_capacity(bitmap.mip_levels() as usize);
         let params = texpresso::Params {
             algorithm,
+            weights,
             ..Default::default()
         };
+        let mut working = (quality == MipQuality::High)
+            .then(|| Self::float_image(&image, bitmap.color(), semantic));
 
         loop {
             let (width, height) = image.dimensions();
@@ -391,7 +495,14 @@ impl BitmapAsset {
             }
             let next_width = (width / 2).max(1);
             let next_height = (height / 2).max(1);
-            image = if bitmap.color() == BitmapColor::Srgb {
+            image = if let Some(working) = &mut working {
+                *working = if semantic == MipSemantic::Color {
+                    resize(working, next_width, next_height, FilterType::Lanczos3)
+                } else {
+                    Self::resize_area(working, next_width, next_height)
+                };
+                Self::quantize_image(working, bitmap.color(), semantic)
+            } else if bitmap.color() == BitmapColor::Srgb {
                 Self::resize_srgb(&image, next_width, next_height)
             } else {
                 resize(&image, next_width, next_height, FilterType::CatmullRom)
@@ -401,6 +512,105 @@ impl BitmapAsset {
         let compressed = CompressedBitmap::new(compression, mips);
         Self::write_texture_cache(&cache_key, &compressed);
         compressed
+    }
+
+    fn float_image(image: &RgbaImage, color: BitmapColor, semantic: MipSemantic) -> Rgba32FImage {
+        Rgba32FImage::from_fn(image.width(), image.height(), |x, y| {
+            let mut pixel = image.get_pixel(x, y).0.map(|v| v as f32 / 255.0);
+            if semantic == MipSemantic::Normal {
+                let source = image.get_pixel(x, y);
+                let x = (2.0 * source[0] as f32 - 255.0) / 255.0;
+                let y = (2.0 * source[1] as f32 - 255.0) / 255.0;
+                let z = (1.0 - x * x - y * y).max(0.0).sqrt();
+                let length = (x * x + y * y + z * z).sqrt();
+                pixel = [x / length, y / length, z / length, 1.0];
+            } else if semantic == MipSemantic::Color {
+                for channel in 0..3 {
+                    let value = pixel[channel];
+                    let linear = if color != BitmapColor::Srgb {
+                        value
+                    } else if value <= 0.04045 {
+                        value / 12.92
+                    } else {
+                        ((value + 0.055) / 1.055).powf(2.4)
+                    };
+                    pixel[channel] = linear * pixel[3];
+                }
+            }
+            image::Rgba(pixel)
+        })
+    }
+
+    // Exact box overlap, including fractional NPOT edges. The same nonnegative weights
+    // apply to independent data channels and unnormalized normal first moments.
+    fn resize_area(image: &Rgba32FImage, width: u32, height: u32) -> Rgba32FImage {
+        let scale_x = image.width() as f32 / width as f32;
+        let scale_y = image.height() as f32 / height as f32;
+        Rgba32FImage::from_fn(width, height, |x, y| {
+            let left = x as f32 * scale_x;
+            let right = (x + 1) as f32 * scale_x;
+            let top = y as f32 * scale_y;
+            let bottom = (y + 1) as f32 * scale_y;
+            let mut sum = [0.0; 4];
+            let mut total = 0.0;
+            for sy in top.floor() as u32..(bottom.ceil() as u32).min(image.height()) {
+                let wy = (bottom.min((sy + 1) as f32) - top.max(sy as f32)).max(0.0);
+                for sx in left.floor() as u32..(right.ceil() as u32).min(image.width()) {
+                    let weight = wy * (right.min((sx + 1) as f32) - left.max(sx as f32)).max(0.0);
+                    let pixel = image.get_pixel(sx, sy).0;
+                    for channel in 0..4 {
+                        sum[channel] += pixel[channel] * weight;
+                    }
+                    total += weight;
+                }
+            }
+            image::Rgba(sum.map(|value| value / total))
+        })
+    }
+
+    fn quantize_image(
+        image: &Rgba32FImage,
+        color: BitmapColor,
+        semantic: MipSemantic,
+    ) -> RgbaImage {
+        RgbaImage::from_fn(image.width(), image.height(), |x, y| {
+            let mut pixel = image.get_pixel(x, y).0;
+            if semantic == MipSemantic::Normal {
+                let length =
+                    (pixel[0] * pixel[0] + pixel[1] * pixel[1] + pixel[2] * pixel[2]).sqrt();
+                let direction = if length.is_finite() && length > 1e-6 {
+                    [pixel[0] / length, pixel[1] / length, pixel[2] / length]
+                } else {
+                    [0.0, 0.0, 1.0]
+                };
+                pixel = [
+                    direction[0] * 0.5 + 0.5,
+                    direction[1] * 0.5 + 0.5,
+                    direction[2] * 0.5 + 0.5,
+                    1.0,
+                ];
+            } else if semantic == MipSemantic::Color {
+                // image's float Lanczos clamps to [0, 1]. Unpremultiplication can
+                // still overshoot; bound emitted straight RGB without quantizing the chain.
+                let alpha = pixel[3].clamp(0.0, 1.0);
+                for channel in 0..3 {
+                    let linear = if pixel[3] > 1e-8 {
+                        (pixel[channel] / pixel[3]).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    pixel[channel] = if color != BitmapColor::Srgb {
+                        linear
+                    } else if linear <= 0.003_130_8 {
+                        linear * 12.92
+                    } else {
+                        1.055 * linear.powf(1.0 / 2.4) - 0.055
+                    };
+                }
+                pixel[3] = alpha;
+            }
+            image::Rgba(pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+        })
     }
 
     fn resize_srgb(image: &RgbaImage, width: u32, height: u32) -> RgbaImage {
@@ -474,10 +684,29 @@ impl BitmapAsset {
         }
     }
 
+    #[cfg(test)]
     fn texture_cache_key(
         bitmap: &Bitmap,
         compression: BitmapCompression,
         algorithm: texpresso::Algorithm,
+    ) -> String {
+        Self::texture_cache_key_with_quality(
+            bitmap,
+            compression,
+            algorithm,
+            MipQuality::Default,
+            MipSemantic::Auto.resolve(bitmap.color()),
+            texpresso::Params::default().weights,
+        )
+    }
+
+    fn texture_cache_key_with_quality(
+        bitmap: &Bitmap,
+        compression: BitmapCompression,
+        algorithm: texpresso::Algorithm,
+        quality: MipQuality,
+        semantic: MipSemantic,
+        weights: [f32; 3],
     ) -> String {
         let mut hasher = blake3::Hasher::new();
         hasher.update(TEXTURE_CACHE_RECIPE);
@@ -501,11 +730,15 @@ impl BitmapAsset {
             BitmapCompression::Bc4 => 3,
             BitmapCompression::Bc5 => 4,
         }]);
-        hasher.update(&[if algorithm == texpresso::Algorithm::RangeFit {
-            0
-        } else {
-            1
+        hasher.update(&[match algorithm {
+            texpresso::Algorithm::RangeFit => 0,
+            texpresso::Algorithm::ClusterFit => 1,
+            texpresso::Algorithm::IterativeClusterFit => 2,
         }]);
+        hasher.update(&[quality as u8, semantic as u8]);
+        for weight in weights {
+            hasher.update(&weight.to_le_bytes());
+        }
         hasher.update(bitmap.pixels());
         hasher.finalize().to_hex().to_string()
     }
@@ -771,6 +1004,62 @@ impl Canonicalize for BitmapAsset {
     }
 }
 
+// Resolve automatic semantics only for identity, so explicit material roles still
+// survive later color changes while matching equivalent directly declared bitmaps.
+impl Hash for BitmapAsset {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.color.hash(state);
+        self.compression.hash(state);
+        self.mip_levels.hash(state);
+        self.mip_quality.hash(state);
+        self.semantic.resolve(self.color()).hash(state);
+        self.resize.hash(state);
+        self.src.hash(state);
+        self.swizzle.hash(state);
+    }
+}
+
+impl PartialEq for BitmapAsset {
+    fn eq(&self, other: &Self) -> bool {
+        self.color == other.color
+            && self.compression == other.compression
+            && self.mip_levels == other.mip_levels
+            && self.mip_quality == other.mip_quality
+            && self.semantic.resolve(self.color()) == other.semantic.resolve(other.color())
+            && self.resize == other.resize
+            && self.src == other.src
+            && self.swizzle == other.swizzle
+    }
+}
+
+/// Opt-in bake policy. The default retains legacy filtering and profile-selected encoding.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum MipQuality {
+    #[default]
+    Default,
+    High,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub(super) enum MipSemantic {
+    #[default]
+    Auto,
+    Color,
+    Data,
+    Normal,
+}
+
+impl MipSemantic {
+    fn resolve(self, color: BitmapColor) -> Self {
+        match self {
+            Self::Auto if color == BitmapColor::Srgb => Self::Color,
+            Self::Auto => Self::Data,
+            semantic => semantic,
+        }
+    }
+}
+
 /// Describes a single channel of a `Bitmap`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub enum BitmapChannel {
@@ -910,6 +1199,344 @@ impl BitmapSwizzle {
 #[cfg(test)]
 mod test {
     use {super::*, toml::de::ValueDeserializer};
+
+    #[test]
+    fn texture_producer_stamp_matches_inner_cache_recipe() {
+        let producer = crate::buf::TEXTURE_MIP_PRODUCER;
+        assert!(!producer.is_empty());
+        assert_eq!(producer.as_bytes(), TEXTURE_CACHE_RECIPE);
+    }
+
+    #[test]
+    fn high_quality_schema_and_asset_identity() {
+        let default: BitmapAsset = toml::from_str("src = 'same.png'").unwrap();
+        let explicit: BitmapAsset =
+            toml::from_str("src = 'same.png'\nmip-quality = 'default'").unwrap();
+        let high: BitmapAsset = toml::from_str("src = 'same.png'\nmip-quality = 'high'").unwrap();
+        assert_eq!(default, explicit);
+        assert_eq!(default.clone().with_mip_quality(MipQuality::High), high);
+        assert!(toml::from_str::<BitmapAsset>("mip-quality = 'highest'").is_err());
+        let normal = high
+            .clone()
+            .with_material_quality(MipQuality::High, MipSemantic::Normal);
+        let assets = [default, high, normal];
+        let hashes = assets
+            .iter()
+            .map(|asset| {
+                use std::hash::{Hash as _, Hasher as _};
+                let mut hash = std::hash::DefaultHasher::new();
+                asset.hash(&mut hash);
+                hash.finish()
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(hashes.len(), 3);
+    }
+
+    #[test]
+    fn high_identity_resolves_auto_without_merging_distinct_material_semantics() {
+        let source = BitmapAsset::new("same.png").with_mip_quality(MipQuality::High);
+        for (color, semantic) in [
+            (BitmapColor::Srgb, MipSemantic::Color),
+            (BitmapColor::Linear, MipSemantic::Data),
+        ] {
+            let standalone = source.clone().with_color(color);
+            let material = standalone
+                .clone()
+                .with_material_quality(MipQuality::High, semantic);
+            let assets = std::collections::HashSet::from([standalone.clone()]);
+            assert!(assets.contains(&material));
+            let normal = standalone.with_material_quality(MipQuality::High, MipSemantic::Normal);
+            assert!(!assets.contains(&normal));
+        }
+        let color = source.with_material_quality(MipQuality::High, MipSemantic::Color);
+        let data = BitmapAsset::new("same.png")
+            .with_color(BitmapColor::Linear)
+            .with_mip_quality(MipQuality::High);
+        assert_ne!(color.with_color(BitmapColor::Linear), data);
+    }
+
+    #[test]
+    fn high_color_linear_light_alpha_and_constant() {
+        let source = RgbaImage::from_raw(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]).unwrap();
+        let working = BitmapAsset::float_image(&source, BitmapColor::Srgb, MipSemantic::Color);
+        let working = resize(&working, 1, 1, FilterType::Lanczos3);
+        let emitted = BitmapAsset::quantize_image(&working, BitmapColor::Srgb, MipSemantic::Color);
+        assert_eq!(emitted.get_pixel(0, 0).0, [188, 188, 188, 255]);
+
+        let source = RgbaImage::from_raw(2, 1, vec![255, 0, 0, 0, 0, 0, 255, 255]).unwrap();
+        let working = BitmapAsset::float_image(&source, BitmapColor::Srgb, MipSemantic::Color);
+        let working = resize(&working, 1, 1, FilterType::Lanczos3);
+        let emitted = BitmapAsset::quantize_image(&working, BitmapColor::Srgb, MipSemantic::Color);
+        assert_eq!(emitted.get_pixel(0, 0).0, [0, 0, 255, 128]);
+
+        let source = RgbaImage::from_pixel(7, 3, image::Rgba([73, 129, 201, 255]));
+        let mut working = BitmapAsset::float_image(&source, BitmapColor::Srgb, MipSemantic::Color);
+        for (width, height) in [(3, 1), (1, 1)] {
+            working = resize(&working, width, height, FilterType::Lanczos3);
+            let emitted =
+                BitmapAsset::quantize_image(&working, BitmapColor::Srgb, MipSemantic::Color);
+            assert!(emitted.pixels().all(|p| p.0 == [73, 129, 201, 255]));
+        }
+    }
+
+    #[test]
+    fn high_area_npot_energy_precision_and_independent_channels() {
+        let source = RgbaImage::from_fn(7, 5, |x, y| {
+            image::Rgba([
+                if x == 3 { 1 } else { 0 },
+                (x * 31) as u8,
+                (y * 53) as u8,
+                91,
+            ])
+        });
+        let mut working = BitmapAsset::float_image(&source, BitmapColor::Linear, MipSemantic::Data);
+        let expected: [f32; 4] =
+            std::array::from_fn(|channel| working.pixels().map(|p| p[channel]).sum::<f32>() / 35.0);
+        for (width, height) in [(3, 2), (1, 1)] {
+            working = BitmapAsset::resize_area(&working, width, height);
+            assert!(
+                working
+                    .pixels()
+                    .all(|p| p.0.iter().all(|v| (0.0..=1.0).contains(v)))
+            );
+            for channel in 0..4 {
+                let mean =
+                    working.pixels().map(|p| p[channel]).sum::<f32>() / (width * height) as f32;
+                assert!((mean - expected[channel]).abs() < 1e-6);
+            }
+        }
+        assert!(working.get_pixel(0, 0)[0] > 0.0);
+        assert_eq!(
+            BitmapAsset::quantize_image(&working, BitmapColor::Linear, MipSemantic::Data)
+                .get_pixel(0, 0)[0],
+            0
+        );
+    }
+
+    #[test]
+    fn high_normal_carries_first_moments_and_emits_unit_direction() {
+        let source = RgbaImage::from_raw(
+            4,
+            1,
+            vec![
+                255, 128, 0, 255, 0, 127, 0, 255, 128, 128, 0, 255, 128, 128, 0, 255,
+            ],
+        )
+        .unwrap();
+        let working = BitmapAsset::float_image(&source, BitmapColor::Linear, MipSemantic::Normal);
+        let direct = BitmapAsset::resize_area(&working, 1, 1);
+        let half = BitmapAsset::resize_area(&working, 2, 1);
+        assert!(half.get_pixel(0, 0).0[..3].iter().all(|v| v.abs() < 1e-6));
+        let fallback = BitmapAsset::quantize_image(&half, BitmapColor::Linear, MipSemantic::Normal);
+        assert_eq!(fallback.get_pixel(0, 0).0, [128, 128, 255, 255]);
+        let final_moment = BitmapAsset::resize_area(&half, 1, 1);
+        for channel in 0..3 {
+            assert!(
+                (direct.get_pixel(0, 0)[channel] - final_moment.get_pixel(0, 0)[channel]).abs()
+                    < 1e-6
+            );
+        }
+        assert!(final_moment.get_pixel(0, 0)[2] < 0.51);
+        let emitted =
+            BitmapAsset::quantize_image(&final_moment, BitmapColor::Linear, MipSemantic::Normal);
+        let p = emitted.get_pixel(0, 0).0;
+        let len_sq = p[..3]
+            .iter()
+            .map(|v| (*v as f32 / 255.0 * 2.0 - 1.0).powi(2))
+            .sum::<f32>();
+        assert!((len_sq - 1.0).abs() < 0.02);
+        let invalid = Rgba32FImage::from_pixel(1, 1, image::Rgba([f32::NAN; 4]));
+        assert_eq!(
+            BitmapAsset::quantize_image(&invalid, BitmapColor::Linear, MipSemantic::Normal)
+                .get_pixel(0, 0)
+                .0,
+            [128, 128, 255, 255]
+        );
+    }
+
+    #[test]
+    fn high_cache_separates_quality_algorithm_semantic_and_weights() {
+        let bitmap = Bitmap::new(BitmapColor::Linear, BitmapFormat::Rgb, 1, 1, [127; 3]);
+        let mut keys = std::collections::HashSet::new();
+        for quality in [MipQuality::Default, MipQuality::High] {
+            for algorithm in [
+                texpresso::Algorithm::RangeFit,
+                texpresso::Algorithm::ClusterFit,
+                texpresso::Algorithm::IterativeClusterFit,
+            ] {
+                for semantic in [MipSemantic::Color, MipSemantic::Data, MipSemantic::Normal] {
+                    for weights in [[1.0; 3], texpresso::Params::default().weights] {
+                        assert!(keys.insert(BitmapAsset::texture_cache_key_with_quality(
+                            &bitmap,
+                            BitmapCompression::Bc5,
+                            algorithm,
+                            quality,
+                            semantic,
+                            weights
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn high_bc_data_preserves_float_chain_and_channel_masks() {
+        let bitmap = Bitmap::new(
+            BitmapColor::Linear,
+            BitmapFormat::R,
+            8,
+            4,
+            [0, 1, 0, 1, 0, 0, 0, 0],
+        );
+        let compressed = BitmapAsset::compress_with_quality(
+            &bitmap,
+            BitmapCompression::Bc4,
+            MipQuality::High,
+            MipSemantic::Data,
+        );
+        let mut decoded = [0; 4];
+        texpresso::Format::Bc4.decompress(
+            compressed.mips().last().unwrap().bytes(),
+            1,
+            1,
+            &mut decoded,
+        );
+        // Recursively rounding the half-integer averages would instead yield one.
+        assert_eq!(decoded[0], 0);
+        for format in [BitmapFormat::R, BitmapFormat::Rg] {
+            let pixels = if format == BitmapFormat::R {
+                vec![0, 255]
+            } else {
+                vec![0, 73, 255, 73]
+            };
+            let bitmap = Bitmap::new(BitmapColor::Srgb, format, 2, 2, pixels);
+            let compressed = BitmapAsset::compress_with_quality(
+                &bitmap,
+                BitmapCompression::Bc5,
+                MipQuality::High,
+                MipSemantic::Auto,
+            );
+            texpresso::Format::Bc5.decompress(compressed.mips()[1].bytes(), 1, 1, &mut decoded);
+            assert!((i16::from(decoded[0]) - 188).abs() <= 1);
+            assert_eq!(decoded[1], if format == BitmapFormat::Rg { 73 } else { 0 });
+        }
+    }
+
+    #[test]
+    fn high_bc5_normal_direction_matches_source_moment_not_normalized_intermediates() {
+        let source = RgbaImage::from_raw(
+            4,
+            1,
+            vec![
+                255, 128, 0, 255, 0, 127, 0, 255, 218, 128, 0, 255, 218, 128, 0, 255,
+            ],
+        )
+        .unwrap();
+        let working = BitmapAsset::float_image(&source, BitmapColor::Linear, MipSemantic::Normal);
+        let mean = BitmapAsset::resize_area(&working, 1, 1);
+        let expected = BitmapAsset::quantize_image(&mean, BitmapColor::Linear, MipSemantic::Normal);
+        let bitmap = Bitmap::new(
+            BitmapColor::Linear,
+            BitmapFormat::Rgba,
+            4,
+            3,
+            source.into_raw(),
+        );
+        let compressed = BitmapAsset::compress_with_quality(
+            &bitmap,
+            BitmapCompression::Bc5,
+            MipQuality::High,
+            MipSemantic::Normal,
+        );
+        let mut decoded = [0; 4];
+        texpresso::Format::Bc5.decompress(compressed.mips()[2].bytes(), 1, 1, &mut decoded);
+        for channel in 0..2 {
+            assert!(
+                (i16::from(decoded[channel]) - i16::from(expected.get_pixel(0, 0)[channel])).abs()
+                    <= 1
+            );
+        }
+    }
+
+    #[test]
+    fn high_bake_preserves_base_and_encodes_full_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("source.png");
+        let source = RgbaImage::from_fn(7, 3, |x, _| {
+            image::Rgba([if x < 3 { 0 } else { 255 }, 64, 129, 255])
+        });
+        source.save(&src).unwrap();
+        let asset = BitmapAsset::new(&src)
+            .with_swizzle(BitmapSwizzle::RGBA)
+            .with_mip_quality(MipQuality::High);
+        assert!(
+            asset
+                .as_bitmap_buf()
+                .unwrap_err()
+                .to_string()
+                .contains("requires BC compression")
+        );
+        let resized: BitmapAsset = toml::from_str(
+            "src = 'missing.png'\nmip-quality = 'high'\ncompression = 'bc3'\nresize = 8",
+        )
+        .unwrap();
+        assert!(
+            resized
+                .as_bitmap_buf()
+                .unwrap_err()
+                .to_string()
+                .contains("retain native")
+        );
+        let bitmap = asset
+            .with_compression(BitmapCompression::Bc3)
+            .as_bitmap_buf()
+            .unwrap();
+        assert_eq!(bitmap.pixels(), source.as_raw());
+        let compressed = BitmapAsset::compress_with_quality(
+            &bitmap,
+            BitmapCompression::Bc3,
+            MipQuality::High,
+            MipSemantic::Color,
+        );
+        assert_eq!(
+            compressed
+                .mips()
+                .iter()
+                .map(CompressedMip::extent)
+                .collect::<Vec<_>>(),
+            [(7, 3), (3, 1), (1, 1)]
+        );
+        let base = &compressed.mips()[0];
+        let mut reference = vec![0; base.bytes().len()];
+        texpresso::Format::Bc3.compress(
+            source.as_raw(),
+            7,
+            3,
+            texpresso::Params {
+                algorithm: texpresso::Algorithm::IterativeClusterFit,
+                ..Default::default()
+            },
+            &mut reference,
+        );
+        assert_eq!(base.bytes(), reference);
+        let bw = Bitmap::new(
+            BitmapColor::Srgb,
+            BitmapFormat::Rgb,
+            2,
+            2,
+            [0, 0, 0, 255, 255, 255],
+        );
+        let compressed = BitmapAsset::compress_with_quality(
+            &bw,
+            BitmapCompression::Bc1Srgb,
+            MipQuality::High,
+            MipSemantic::Color,
+        );
+        let mut decoded = [0; 4];
+        texpresso::Format::Bc1.decompress(compressed.mips()[1].bytes(), 1, 1, &mut decoded);
+        assert!(decoded[..3].iter().all(|v| (180..=196).contains(v)));
+    }
 
     fn bc3_block(alpha_0: u8, alpha_1: u8, indices: [u8; 16]) -> [u8; 16] {
         let packed = indices

@@ -1,11 +1,7 @@
 use {
     glam::{EulerRot, Quat},
     pak::{MaterialParameterFlags, Pak, PakBuf},
-    std::{
-        io::Error,
-        path::PathBuf,
-        sync::LazyLock,
-    },
+    std::{io::Error, path::PathBuf, sync::LazyLock},
 };
 
 #[cfg(feature = "bake")]
@@ -25,6 +21,8 @@ fn deserialize_scene_materials() -> Result<(), Error> {
     {
         let pak_src = TESTS_DATA_DIR.join("scene/pak.toml");
         PakBuf::bake(&pak_src, &pak_dst).unwrap();
+        fs::remove_file(pak_dst.with_extension("mesh-lods.csv"))?;
+        fs::remove_file(pak_dst.with_extension("mesh-lod-diagnostics.csv"))?;
     }
 
     let mut pak = PakBuf::open(&pak_dst)?;
@@ -152,7 +150,7 @@ fn transitive_direct_aggregate_uses_its_own_policy_for_dependencies() -> Result<
     fs::write(generated_dir.join("payload.bin"), b"mesh dependency")?;
     fs::write(
         generated_dir.join("z-mesh.toml"),
-        "[mesh]\nsrc = 'cube.glb'\nblob = 'payload.bin'\nlod = false\noptimize = false\n",
+        "[mesh]\nsrc = 'cube.glb'\nblob = 'payload.bin'\ninherit-lods = false\nlods = []\noptimize = false\n",
     )?;
     fs::write(
         generated_dir.join("a-scene.toml"),

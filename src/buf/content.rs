@@ -16,8 +16,14 @@ use {
 /// Holds a description of top-level content files which simply group other asset files for ease of
 /// use.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Content {
+    #[serde(default)]
+    pub(super) lod: super::mesh::lod::LodSettings,
     compression: Option<CompressionType>,
+
+    #[serde(default, rename = "default-lods")]
+    default_lods: Box<[super::mesh::lod::LodRequest]>,
 
     #[serde(default, rename = "texture-compression")]
     texture_compression: bool,
@@ -39,6 +45,11 @@ pub struct Content {
 }
 
 impl Content {
+    /// Layout requests inherited by meshes unless they opt out with `inherit-lods = false`.
+    pub fn default_lod_requests(&self) -> &[super::mesh::lod::LodRequest] {
+        &self.default_lods
+    }
+
     /// An iterator of grouped content file descriptions.
     #[allow(unused)]
     pub fn groups(&self) -> impl Iterator<Item = &Group> {
@@ -332,6 +343,22 @@ mod test {
             .expect("content groups should be optional");
 
         assert_eq!(content.groups().count(), 0);
+        assert!(content.default_lod_requests().is_empty());
+    }
+
+    #[test]
+    fn mesh_lod_defaults_are_explicit_layout_requests() {
+        let content: Content = toml::from_str("default-lods = [{layout='POSITION', simplify=true}, {layout='PACKED_NORMAL | TEXTURE0', simplify=false}]").unwrap();
+        assert_eq!(content.default_lod_requests().len(), 2);
+        assert!(!content.default_lod_requests()[1].simplify);
+        for invalid in [
+            "guide-lods = true",
+            "shadow-lods = true",
+            "lods = []",
+            "default-lods = true",
+        ] {
+            assert!(toml::from_str::<Content>(invalid).is_err());
+        }
     }
 
     #[test]

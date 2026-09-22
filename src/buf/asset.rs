@@ -1,7 +1,7 @@
 use {
     super::{
         anim::AnimationAsset,
-        bitmap::BitmapAsset,
+        bitmap::{BitmapAsset, MipQuality},
         blob::BlobAsset,
         content::Content,
         material::{MaterialAsset, MaterialParams},
@@ -30,9 +30,9 @@ pub enum Asset {
     /// Raw byte blobs.
     Blob(BlobAsset),
     /// Solid color.
-    ColorRgb([OrderedFloat<f32>; 3]),
+    ColorRgb([OrderedFloat<f32>; 3], MipQuality),
     /// Solid color with alpha channel.
-    ColorRgba([OrderedFloat<f32>; 4]),
+    ColorRgba([OrderedFloat<f32>; 4], MipQuality),
     /// Top-level content files which simply group other asset files for ease of use.
     Content(Content),
     /// Used for 3D mesh rendering.
@@ -188,13 +188,13 @@ impl From<BlobAsset> for Asset {
 
 impl From<[OrderedFloat<f32>; 3]> for Asset {
     fn from(val: [OrderedFloat<f32>; 3]) -> Self {
-        Self::ColorRgb(val)
+        Self::ColorRgb(val, MipQuality::Default)
     }
 }
 
 impl From<[OrderedFloat<f32>; 4]> for Asset {
     fn from(val: [OrderedFloat<f32>; 4]) -> Self {
-        Self::ColorRgba(val)
+        Self::ColorRgba(val, MipQuality::Default)
     }
 }
 

@@ -1,14 +1,14 @@
 use {
     super::{
         Asset, Canonicalize, Writer,
-        bitmap::{BitmapAsset, BitmapSwizzle},
+        bitmap::{BitmapAsset, BitmapSwizzle, MipQuality, MipSemantic},
         file_key, is_toml, parent, parse_hex_color, parse_hex_scalar,
     },
     crate::{
         BitmapId, MaterialId, MaterialInfo, MaterialParameterFlags,
         bitmap::{Bitmap, BitmapColor, BitmapCompression, BitmapFormat},
     },
-    anyhow::{Context as _, bail},
+    anyhow::{Context as _, bail, ensure},
     image::{DynamicImage, GenericImageView, GrayImage, imageops::FilterType},
     log::{info, warn},
     ordered_float::OrderedFloat,
@@ -282,6 +282,9 @@ impl Default for EmissiveRef {
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct MaterialAsset {
+    /// Bake policy applied to final color, normal, emissive and packed parameter maps.
+    pub mip_quality: MipQuality,
+
     /// Whether base-color alpha should reject fragments below the engine cutoff.
     pub alpha_test: bool,
 
@@ -401,11 +404,32 @@ impl MaterialAsset {
         }
 
         let compress_textures = writer.lock().texture_compression();
+        let quality = self.mip_quality;
+        if quality == MipQuality::High {
+            ensure!(
+                !self.alpha_test,
+                "high mip quality does not support alpha-test coverage preservation"
+            );
+            ensure!(
+                self.height.is_none(),
+                "high mip quality does not support height; retain the legacy single-level height policy"
+            );
+            ensure!(
+                compress_textures,
+                "high material mip quality requires texture-compression = true"
+            );
+        }
         let color = match &self.color {
             Some(ColorRef::Asset(bitmap)) => {
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
-                let bitmap = bitmap.clone();
+                let bitmap = bitmap
+                    .clone()
+                    .with_material_quality(quality, MipSemantic::Color);
+                ensure!(
+                    !self.alpha_test || bitmap.mip_quality() != MipQuality::High,
+                    "high mip quality does not support alpha-test coverage preservation"
+                );
 
                 rt.spawn_blocking(move || {
                     bitmap
@@ -425,6 +449,11 @@ impl MaterialAsset {
                 } else {
                     BitmapAsset::new(src)
                 };
+                let bitmap = bitmap.with_material_quality(quality, MipSemantic::Color);
+                ensure!(
+                    !self.alpha_test || bitmap.mip_quality() != MipQuality::High,
+                    "high mip quality does not support alpha-test coverage preservation"
+                );
                 let writer = writer.clone();
                 let project_dir = project_dir.as_ref().to_path_buf();
 
@@ -440,7 +469,7 @@ impl MaterialAsset {
 
                 rt.spawn_blocking(move || -> anyhow::Result<BitmapId> {
                     let mut writer = writer.lock();
-                    let asset = Asset::ColorRgba(val);
+                    let asset = Asset::ColorRgba(val, quality);
                     if let Some(id) = writer.asset_id(&asset, None)? {
                         id.as_bitmap().context("expected bitmap id for color value")
                     } else {
@@ -456,6 +485,7 @@ impl MaterialAsset {
                                 (val[3].0 * u8::MAX as f32) as u8,
                             ],
                         );
+                        let bitmap = Self::compress_constant(bitmap, quality);
                         let policy = writer.policy_for(&asset);
                         let id = writer.push_bitmap(bitmap, policy)?;
                         writer.commit_asset(asset, id, None)?;
@@ -476,7 +506,7 @@ impl MaterialAsset {
                         OrderedFloat(1.0),
                     ];
                     let mut writer = writer.lock();
-                    let asset = Asset::ColorRgba(potters_clay);
+                    let asset = Asset::ColorRgba(potters_clay, quality);
                     if let Some(id) = writer.asset_id(&asset, None)? {
                         id.as_bitmap()
                             .context("expected bitmap id for default color")
@@ -493,6 +523,7 @@ impl MaterialAsset {
                                 (potters_clay[3].0 * u8::MAX as f32) as u8,
                             ],
                         );
+                        let bitmap = Self::compress_constant(bitmap, quality);
                         let policy = writer.policy_for(&asset);
                         let id = writer.push_bitmap(bitmap, policy)?;
                         writer.commit_asset(asset, id, None)?;
@@ -512,6 +543,7 @@ impl MaterialAsset {
                         let project_dir = project_dir.as_ref().to_path_buf();
                         let mut bitmap = bitmap
                             .clone()
+                            .with_material_quality(quality, MipSemantic::Normal)
                             .with_color(BitmapColor::Linear)
                             .with_swizzle(BitmapSwizzle::RGB)
                             .with_default_compression_if(compress_textures, BitmapCompression::Bc5);
@@ -542,6 +574,7 @@ impl MaterialAsset {
 
                         rt.spawn_blocking(move || {
                             bitmap = bitmap
+                                .with_material_quality(quality, MipSemantic::Normal)
                                 .with_color(BitmapColor::Linear)
                                 .with_swizzle(BitmapSwizzle::RGB)
                                 .with_default_compression_if(
@@ -569,7 +602,10 @@ impl MaterialAsset {
                     EmissiveRef::Asset(bitmap) => {
                         let writer = writer.clone();
                         let project_dir = project_dir.as_ref().to_path_buf();
-                        let bitmap = bitmap.clone().with_swizzle(BitmapSwizzle::RGB);
+                        let bitmap = bitmap
+                            .clone()
+                            .with_swizzle(BitmapSwizzle::RGB)
+                            .with_material_quality(quality, MipSemantic::Color);
 
                         rt.spawn_blocking(move || -> anyhow::Result<BitmapId> {
                             bitmap
@@ -595,6 +631,7 @@ impl MaterialAsset {
                         rt.spawn_blocking(move || -> anyhow::Result<BitmapId> {
                             bitmap
                                 .with_swizzle(BitmapSwizzle::RGB)
+                                .with_material_quality(quality, MipSemantic::Color)
                                 .with_default_color_compression_if(compress_textures)
                                 .bake_from_path(&writer, &project_dir, Option::<PathBuf>::None)
                                 .context("Unable to bake emissive asset bitmap from path")
@@ -606,7 +643,7 @@ impl MaterialAsset {
 
                         rt.spawn_blocking(move || -> anyhow::Result<BitmapId> {
                             let mut writer = writer.lock();
-                            let asset = Asset::ColorRgb(val);
+                            let asset = Asset::ColorRgb(val, quality);
                             if let Some(id) = writer.asset_id(&asset, None)? {
                                 id.as_bitmap().context("expected bitmap id for emissive")
                             } else {
@@ -621,6 +658,7 @@ impl MaterialAsset {
                                         (val[2].0 * u8::MAX as f32) as u8,
                                     ],
                                 );
+                                let bitmap = Self::compress_constant(bitmap, quality);
                                 let policy = writer.policy_for(&asset);
                                 let id = writer.push_bitmap(bitmap, policy)?;
                                 writer.commit_asset(asset, id, None)?;
@@ -654,6 +692,7 @@ impl MaterialAsset {
         let rough = self.rough.clone();
         let transmission = self.transmission.clone();
         let params_asset = Asset::MaterialParams(MaterialParams {
+            mip_quality: quality,
             height: height_ref,
             metal,
             occlusion,
@@ -680,11 +719,11 @@ impl MaterialAsset {
                 }
 
                 let mut metal_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&metal, &project_dir, 0)
+                    Self::scalar_ref_into_gray_image(&metal, &project_dir, 0, quality)
                         .context("Unable to create metal bitmap buf")?,
                 );
                 let mut rough_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&rough, &project_dir, u8::MAX)
+                    Self::scalar_ref_into_gray_image(&rough, &project_dir, u8::MAX, quality)
                         .context("Unable to create rough bitmap buf")?,
                 );
                 let parameter_b_default = if occlusion.is_some() { u8::MAX } else { 0 };
@@ -694,11 +733,12 @@ impl MaterialAsset {
                         &parameter_b,
                         &project_dir,
                         parameter_b_default,
+                        quality,
                     )
                     .context("Unable to create height or occlusion bitmap buf")?,
                 );
                 let mut transmission_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&transmission, &project_dir, 0)
+                    Self::scalar_ref_into_gray_image(&transmission, &project_dir, 0, quality)
                         .context("Unable to create transmission bitmap buf")?,
                 );
 
@@ -712,6 +752,13 @@ impl MaterialAsset {
                     .max(rough_image.height())
                     .max(parameter_b_image.height())
                     .max(transmission_image.height());
+
+                if quality == MipQuality::High {
+                    for image in [&metal_image, &rough_image, &parameter_b_image, &transmission_image] {
+                        ensure!(image.dimensions() == (width, height) || image.dimensions() == (1, 1),
+                            "high packed parameter inputs must share native dimensions (or be 1x1 constants); resize is unsupported");
+                    }
+                }
 
                 if metal_image.width() != width || metal_image.height() != height {
                     let filter_ty = if metal_image.width() == 1 && metal_image.height() == 1 {
@@ -790,7 +837,11 @@ impl MaterialAsset {
                     // BC3 color endpoints couple RGB channels and visibly leak
                     // roughness into an independently authored height map.
                     let params = if compress_textures && !preserve_height {
-                        let compressed = BitmapAsset::compress(&params, compression);
+                        let compressed = if quality == MipQuality::High {
+                            BitmapAsset::compress_with_quality(&params, compression, quality, MipSemantic::Data)
+                        } else {
+                            BitmapAsset::compress(&params, compression)
+                        };
                         params.with_compressed(compressed)
                     } else {
                         params
@@ -842,12 +893,37 @@ impl MaterialAsset {
         })
     }
 
+    fn compress_constant(bitmap: Bitmap, quality: MipQuality) -> Bitmap {
+        if quality == MipQuality::High {
+            let compression = if bitmap.format().has_alpha() {
+                BitmapCompression::Bc3
+            } else {
+                BitmapCompression::Bc1Rgb
+            };
+            let compressed = BitmapAsset::compress_with_quality(
+                &bitmap,
+                compression,
+                quality,
+                MipSemantic::Color,
+            );
+            bitmap.with_compressed(compressed)
+        } else {
+            bitmap
+        }
+    }
+
     fn bake_normal_bitmap(
         bitmap: &mut BitmapAsset,
         writer: &Arc<Mutex<Writer>>,
         project_dir: impl AsRef<Path>,
         path: Option<impl AsRef<Path>>,
     ) -> anyhow::Result<Option<BitmapId>> {
+        // High BC5 reconstructs positive Z from RG; source B and average direction
+        // are not validity criteria (a cancelling vector field is valid).
+        if bitmap.mip_quality() == MipQuality::High {
+            return bitmap.bake_from_path(writer, project_dir, path).map(Some);
+        }
+
         let bitmap_buf = bitmap
             .as_bitmap_buf()
             .context("Unable to create normal bitmap buf")?;
@@ -906,10 +982,11 @@ impl MaterialAsset {
         scalar: &Option<ScalarRef>,
         project_dir: impl AsRef<Path>,
         default: u8,
+        quality: MipQuality,
     ) -> anyhow::Result<GrayImage> {
         let bitmap = match scalar {
             Some(ScalarRef::Asset(bitmap)) => bitmap
-                .as_bitmap_buf()
+                .scalar_pixels(quality)
                 .context("Unable to create bitmap buf from scalar bitmap asset")?,
             Some(ScalarRef::Path(src)) => {
                 if is_toml(src) {
@@ -922,7 +999,7 @@ impl MaterialAsset {
                     BitmapAsset::new(src)
                 }
             }
-            .as_bitmap_buf()
+            .scalar_pixels(quality)
             .context("Unable to create bitmap buf")?,
             &Some(ScalarRef::Value(val)) => Bitmap::new(
                 BitmapColor::Linear,
@@ -980,6 +1057,9 @@ impl Canonicalize for MaterialAsset {
 /// Holds a description of data used while baking materials. This is for caching.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct MaterialParams {
+    #[serde(default, rename = "mip-quality")]
+    pub mip_quality: MipQuality,
+
     #[serde(default, deserialize_with = "ScalarRef::de")]
     pub height: Option<ScalarRef>,
 
@@ -1167,9 +1247,190 @@ impl Canonicalize for ScalarRef {
 #[cfg(test)]
 mod test {
     use {
-        super::{MaterialAsset, ScalarRef},
+        super::*,
+        crate::{Pak as _, PakBuf, buf::writer::StoragePolicy},
         ordered_float::OrderedFloat,
     };
+
+    #[test]
+    fn high_material_propagates_final_policies_and_separates_shared_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        image::RgbImage::from_fn(7, 3, |x, y| {
+            image::Rgb([(x * 40) as u8, (y * 90) as u8, 200])
+        })
+        .save(root.join("source.png"))
+        .unwrap();
+        std::fs::write(
+            root.join("source.toml"),
+            "[bitmap]\nsrc = 'source.png'\ncolor = 'linear'\ncompression = 'bc5'\n",
+        )
+        .unwrap();
+        let rt = Runtime::new().unwrap();
+        let writer = Arc::new(Mutex::new(Writer::default()));
+        writer.lock().set_active_policy(StoragePolicy {
+            texture_compression: true,
+            ..Default::default()
+        });
+        let recipe = "color = { src = 'source.png' }\nnormal = 'source.toml'\nemissive = 'source.png'\nmetal = { src = 'source.png', swizzle = 'r' }\nrough = { src = 'source.png', swizzle = 'g' }\nocclusion = { src = 'source.png', swizzle = 'b' }\ntransmission = 0.25\n";
+        let mut legacy: MaterialAsset = toml::from_str(recipe).unwrap();
+        assert_eq!(legacy.mip_quality, MipQuality::Default);
+        legacy.canonicalize(root, root);
+        let mut high = legacy.clone();
+        high.mip_quality = MipQuality::High;
+        let a = legacy.as_material_info(&rt, &writer, root).unwrap();
+        let b = high.as_material_info(&rt, &writer, root).unwrap();
+        let mut inline = high.clone();
+        inline.normal = Some(NormalRef::Asset(
+            BitmapAsset::new(root.join("source.png"))
+                .with_color(BitmapColor::Linear)
+                .with_compression(BitmapCompression::Bc5),
+        ));
+        inline.emissive = Some(EmissiveRef::Asset(BitmapAsset::new(
+            root.join("source.png"),
+        )));
+        inline.color = Some(ColorRef::Path(root.join("source.png")));
+        let c = inline.as_material_info(&rt, &writer, root).unwrap();
+        assert_eq!(b.normal, c.normal);
+        assert_eq!(b.color, c.color);
+        assert_eq!(b.emissive, c.emissive);
+        assert_eq!(b.params, c.params);
+        assert_ne!(a.params, b.params);
+        assert_ne!(a.color, b.color);
+        assert_ne!(a.normal, b.normal);
+        assert_ne!(a.emissive, b.emissive);
+        let standalone = BitmapAsset::new(root.join("source.png"))
+            .with_color(BitmapColor::Linear)
+            .with_swizzle(BitmapSwizzle::RGB)
+            .with_compression(BitmapCompression::Bc5)
+            .with_mip_quality(MipQuality::High)
+            .bake(&writer, root)
+            .unwrap();
+        assert_ne!(Some(standalone), b.normal);
+        let dst = root.join("test.pak");
+        writer.lock().write(&dst).unwrap();
+        let mut pak = PakBuf::open(dst).unwrap();
+        for (legacy, high, semantic) in [
+            (a.color, b.color, MipSemantic::Color),
+            (a.emissive.unwrap(), b.emissive.unwrap(), MipSemantic::Color),
+            (a.normal.unwrap(), b.normal.unwrap(), MipSemantic::Normal),
+            (a.params.unwrap(), b.params.unwrap(), MipSemantic::Data),
+        ] {
+            let raw = pak.read_bitmap_id(high).unwrap();
+            assert_eq!(raw.pixels(), pak.read_bitmap_id(legacy).unwrap().pixels());
+            let compressed = pak.read_compressed_bitmap_id(high).unwrap().unwrap();
+            assert_eq!(
+                compressed
+                    .mips()
+                    .iter()
+                    .map(|mip| mip.extent())
+                    .collect::<Vec<_>>(),
+                [(7, 3), (3, 1), (1, 1)]
+            );
+            let expected = BitmapAsset::compress_with_quality(
+                &raw,
+                compressed.format(),
+                MipQuality::High,
+                semantic,
+            );
+            for (actual, expected) in compressed.mips().iter().zip(expected.mips()) {
+                assert_eq!(actual.bytes(), expected.bytes());
+            }
+            let legacy_raw = pak.read_bitmap_id(legacy).unwrap();
+            let legacy_compressed = pak.read_compressed_bitmap_id(legacy).unwrap().unwrap();
+            let expected = BitmapAsset::compress(&legacy_raw, legacy_compressed.format());
+            for (actual, expected) in legacy_compressed.mips().iter().zip(expected.mips()) {
+                assert_eq!(actual.bytes(), expected.bytes());
+            }
+            if semantic == MipSemantic::Data {
+                assert_eq!(&raw.pixels()[..4], &[0, 0, 200, 63]);
+                let mut decoded = [0; 4];
+                texpresso::Format::Bc3.decompress(
+                    compressed.mips().last().unwrap().bytes(),
+                    1,
+                    1,
+                    &mut decoded,
+                );
+                for (value, expected) in decoded.into_iter().zip([120_i16, 90, 200, 63]) {
+                    assert!((i16::from(value) - expected).abs() <= 8);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn high_material_limits_and_scalar_policy_are_explicit() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let rt = Runtime::new().unwrap();
+        assert!(toml::from_str::<MaterialAsset>("mip-quality = 'unknown'").is_err());
+        for (recipe, compress, message) in [
+            ("alpha-test = true", true, "alpha-test"),
+            ("height = 0.5", true, "height"),
+            ("rough = 0.5", false, "requires texture-compression"),
+            (
+                "rough = { src = 'missing.png', resize = 4 }",
+                true,
+                "retain native",
+            ),
+            (
+                "rough = { src = 'missing.png', mip-quality = 'high' }",
+                true,
+                "material root",
+            ),
+            (
+                "normal = { src = 'missing.png', compression = 'bc3' }",
+                true,
+                "require bc5",
+            ),
+        ] {
+            let writer = Arc::new(Mutex::new(Writer::default()));
+            writer.lock().set_active_policy(StoragePolicy {
+                texture_compression: compress,
+                ..Default::default()
+            });
+            let mut material: MaterialAsset =
+                toml::from_str(&format!("mip-quality = 'high'\n{recipe}")).unwrap();
+            let error = material.as_material_info(&rt, &writer, root).unwrap_err();
+            assert!(format!("{error:#}").contains(message), "{error:#}");
+        }
+        std::fs::write(
+            root.join("scalar.toml"),
+            "[bitmap]\nsrc = 'missing.png'\nmip-quality = 'high'\n",
+        )
+        .unwrap();
+        let scalar = Some(ScalarRef::Path(root.join("scalar.toml")));
+        assert!(
+            format!(
+                "{:#}",
+                MaterialAsset::scalar_ref_into_gray_image(&scalar, root, 0, MipQuality::High)
+                    .unwrap_err()
+            )
+            .contains("material root")
+        );
+        image::GrayImage::new(2, 1)
+            .save(root.join("small.png"))
+            .unwrap();
+        image::GrayImage::new(3, 1)
+            .save(root.join("large.png"))
+            .unwrap();
+        let writer = Arc::new(Mutex::new(Writer::default()));
+        writer.lock().set_active_policy(StoragePolicy {
+            texture_compression: true,
+            ..Default::default()
+        });
+        let mut material: MaterialAsset =
+            toml::from_str("mip-quality = 'high'\nmetal = 'small.png'\nrough = 'large.png'")
+                .unwrap();
+        material.canonicalize(root, root);
+        assert!(
+            format!(
+                "{:#}",
+                material.as_material_info(&rt, &writer, root).unwrap_err()
+            )
+            .contains("share native dimensions")
+        );
+    }
 
     #[test]
     fn alpha_test_defaults_off_and_can_be_enabled() {

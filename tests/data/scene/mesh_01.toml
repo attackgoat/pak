@@ -1,6 +1,6 @@
 [mesh]
-bake-tangent = true
-lod = false
+tangents = true
+inherit-lods = false
+lods = []
 optimize = false
-shadow = false
 src = 'cube.glb'

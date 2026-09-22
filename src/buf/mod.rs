@@ -12,7 +12,11 @@ mod mesh;
 mod scene;
 mod writer;
 
-pub use self::bitmap::decode_bc3_alpha_mip;
+pub use self::bitmap::{MipQuality, TEXTURE_MIP_PRODUCER, decode_bc3_alpha_mip};
+pub use self::mesh::lod::{LodRequest, LodSettings, ResolvedLodSettings};
+
+/// Include this producer identity, the content manifest and mesh recipes in bake cache keys.
+pub const MESH_LOD_PRODUCER: &str = "clustered-v2-layout-input";
 
 use {
     self::{
@@ -41,7 +45,7 @@ use {
         collections::BTreeSet,
         env::var,
         fmt::{Debug, Formatter},
-        fs::create_dir_all,
+        fs::{File, create_dir_all},
         num::FpCategory,
         path::{Path, PathBuf},
         sync::{
@@ -49,6 +53,7 @@ use {
             atomic::{AtomicBool, Ordering},
         },
     },
+    tempfile::NamedTempFile,
     tokio::runtime::Runtime,
 };
 
@@ -633,8 +638,19 @@ impl PakBuf {
             .into_content()
             .context("Unable to read asset file")?;
 
-        if let Some(compression) = content.compression()? {
-            writer.lock().with_compression_is(Some(compression));
+        {
+            let mut writer = writer.lock();
+            let mut layouts = BTreeSet::new();
+            for request in content.default_lod_requests() {
+                anyhow::ensure!(
+                    layouts.insert(request.layout),
+                    "duplicate default lod vertex layout request"
+                );
+            }
+            writer.default_lods = content.default_lod_requests().into();
+            content.lod.resolve(&LodSettings::default())?;
+            writer.lod = content.lod.clone();
+            writer.with_compression_is(content.compression()?);
         }
         let segment_names = content.segment_names()?;
         writer.lock().set_segments(segment_names.clone())?;
@@ -809,7 +825,56 @@ impl PakBuf {
             if let Some(baker) = baker.as_deref_mut() {
                 writer.bake_derived_assets(baker)?;
             }
-            writer.write(&dst).context("Unable to write pak file")?;
+            let parent = dst.parent().unwrap_or_else(|| Path::new("."));
+            // Writer replaces its destination, so retain only the temporary path here.
+            // Keep it beside the final archive so generation sidecars resolve identically.
+            let staged_pak = NamedTempFile::new_in(parent)
+                .context("creating staged pak file")?
+                .into_temp_path();
+            writer
+                .write(&staged_pak)
+                .context("Unable to write pak file")?;
+
+            let mut reports = Vec::with_capacity(2);
+            {
+                let mut pak =
+                    Self::open(&staged_pak).context("opening staged pak for lod reporting")?;
+                for (extension, diagnostics) in
+                    [("mesh-lods.csv", false), ("mesh-lod-diagnostics.csv", true)]
+                {
+                    let path = dst.with_extension(extension);
+                    anyhow::ensure!(
+                        !path.is_dir(),
+                        "mesh lod report destination is a directory: {}",
+                        path.display()
+                    );
+                    let report =
+                        NamedTempFile::new_in(parent).context("creating staged mesh lod report")?;
+                    if diagnostics {
+                        pak.write_mesh_lod_diagnostics(report.path())
+                    } else {
+                        pak.write_mesh_lod_report(report.path())
+                    }
+                    .with_context(|| format!("writing mesh lod report {}", path.display()))?;
+                    reports.push((report, path));
+                }
+            }
+
+            // Publish complete reports first; any report failure must leave the archive intact.
+            for (report, path) in reports {
+                report
+                    .persist(&path)
+                    .map_err(|error| error.error)
+                    .with_context(|| format!("publishing mesh lod report {}", path.display()))?;
+            }
+            staged_pak
+                .persist(&dst)
+                .map_err(|error| error.error)
+                .context("publishing pak file")?;
+
+            if let Ok(directory) = File::open(parent) {
+                let _ = directory.sync_all();
+            }
 
             Ok(())
         });

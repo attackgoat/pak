@@ -10,6 +10,7 @@ pub mod scene;
 pub mod buf;
 
 mod compression;
+mod mesh_lod_report;
 
 use {
     self::{
@@ -663,10 +664,11 @@ impl PakBuf {
         }
 
         let magic_bytes: [u8; 20] = decode(&mut stream, "Unable to read magic bytes")?;
-        if &magic_bytes != b"ATTACKGOAT-PAK-V1.8 " {
-            warn!("Unsupported magic bytes");
-
-            return Err(Error::from(ErrorKind::InvalidData));
+        if &magic_bytes != b"ATTACKGOAT-PAK-V1.10" {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "incompatible pak format; expected V1.10 layout-keyed geometry, rebake the archive",
+            ));
         }
 
         // Read the number of bytes we must 'skip' in order to read the main data
@@ -1420,7 +1422,7 @@ mod test {
     fn root_index_offset_cannot_precede_payload_prefix() {
         let mut encoded = Vec::new();
         bincode::serde::encode_into_std_write(
-            *b"ATTACKGOAT-PAK-V1.8 ",
+            *b"ATTACKGOAT-PAK-V1.10",
             &mut encoded,
             bincode::config::legacy(),
         )

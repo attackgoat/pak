@@ -1,11 +1,13 @@
+pub mod lod;
+
 use {
     super::{Canonicalize, Euler, Rotation, Writer, blob::BlobAsset, file_key, re_run_if_changed},
     crate::{
         MeshId,
         index::IndexBuffer,
-        mesh::{Joint, Mesh, Primitive, Skin, VertexType},
+        mesh::{Geometry, Joint, Mesh, Primitive, Skin, VertexType},
     },
-    anyhow::{Context, bail},
+    anyhow::{Context, bail, ensure},
     glam::{EulerRot, Mat4, Quat, Vec3, Vec4, vec3},
     gltf::{
         Buffer, Node,
@@ -45,9 +47,12 @@ fn extract_transform(node: &Node) -> Mat4 {
     Mat4::from_scale_rotation_translation(scale, rotation, translation)
 }
 
+#[cfg(test)]
+use crate::mesh::Lod;
+
 /// Holds a description of `.glb` or `.gltf` 3D meshes.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct MeshAsset {
     blob: Option<PathBuf>,
     pub data: Option<BTreeMap<String, super::scene::Data>>,
@@ -57,7 +62,10 @@ pub struct MeshAsset {
     flip_z: Option<bool>,
     ignore_skin: Option<bool>,
     ignore_texture1: Option<bool>,
-    lod: Option<bool>,
+    inherit_lods: Option<bool>,
+    #[serde(default)]
+    lod: lod::LodSettings,
+    lods: Option<Box<[lod::LodRequest]>>,
     lod_lock_border: Option<bool>,
     lod_target_error: Option<OrderedFloat<f32>>,
     max_index: Option<MaxIndex>,
@@ -78,7 +86,6 @@ pub struct MeshAsset {
     scale: Option<Scale>,
 
     scene_name: Option<String>,
-    shadow: Option<bool>,
     src: Option<PathBuf>,
     tangents: Option<bool>,
 }
@@ -97,7 +104,9 @@ impl MeshAsset {
             flip_z: None,
             ignore_skin: None,
             ignore_texture1: None,
-            lod: None,
+            inherit_lods: None,
+            lod: lod::LodSettings::default(),
+            lods: None,
             lod_lock_border: None,
             lod_target_error: None,
             max_index: None,
@@ -111,7 +120,6 @@ impl MeshAsset {
             rotation: None,
             scale: None,
             scene_name: None,
-            shadow: None,
             src: Some(src.as_ref().to_path_buf()),
             tangents: None,
         }
@@ -148,7 +156,14 @@ impl MeshAsset {
             info!("Baking mesh: {} (inline)", file_key(&project_dir, src));
         }
 
-        let mut mesh = self
+        // Resolve pack defaults only for import; Writer keys and policies use the raw recipe.
+        let mut effective = self.clone();
+        {
+            let writer = writer.lock();
+            effective.lods = Some(self.resolve_lod_requests(&writer.default_lods)?);
+            effective.lod.inherit(&writer.lod);
+        }
+        let mut mesh = effective
             .to_mesh(src)
             .map_err(|err| Error::new(ErrorKind::InvalidData, err))
             .context("Baking mesh data")?;
@@ -176,46 +191,54 @@ impl MeshAsset {
         Ok(id)
     }
 
-    fn calculate_lods(
+    #[cfg(test)]
+    fn calculate_lods(&self, source: Geometry) -> anyhow::Result<Box<[Lod]>> {
+        Ok(self.clustered_lods(source, &BTreeSet::new())?.0)
+    }
+
+    #[cfg(test)]
+    fn layout_lods(
         &self,
-        indices: &[u32],
-        vertex_buf: &[u8],
-        vertex_stride: usize,
-    ) -> anyhow::Result<Vec<Vec<u32>>> {
-        let mut res = vec![Vec::from(indices)];
-
-        if !self.lod() {
-            return Ok(res);
+        source: &Geometry,
+        layout: VertexType,
+    ) -> anyhow::Result<crate::mesh::LodSet> {
+        lod::LodRequest {
+            layout,
+            simplify: !layout.contains(VertexType::TEXTURE0),
         }
+        .process(source.project(layout)?, &self.resolved_lod_settings()?, &[])
+    }
 
-        let target_error = self.lod_target_error();
-        let target_ratio = 1.0 + target_error;
-        let min_triangles = self.min_lod_triangles();
-        let vertices = VertexDataAdapter::new(vertex_buf, vertex_stride, 0)
-            .context("creating vertex data adapter for LOD calculation")?;
-        let opts = if self.lod_lock_border() {
-            SimplifyOptions::LockBorder
-        } else {
-            SimplifyOptions::None
-        };
+    #[cfg(test)]
+    pub(super) fn generate_lods(&self, primitive: &mut Primitive) -> anyhow::Result<()> {
+        self.generate_lods_with_seams(primitive, &BTreeSet::new())
+            .map(|_| ())
+    }
 
-        while let Some(last) = res.last() {
-            let target_count = (last.len() / 3) >> 1;
-            if target_count < min_triangles {
-                break;
-            }
-
-            let lod = simplify(indices, &vertices, target_count, target_error, opts, None);
-            let lod_count = lod.len() / 3;
-            let lod_ratio = lod_count as f32 / target_count as f32;
-            if lod_ratio > target_ratio {
-                break;
-            }
-
-            res.push(lod);
+    fn generate_lods_with_seams(
+        &self,
+        primitive: &mut Primitive,
+        seams: &BTreeSet<lod::Position>,
+    ) -> anyhow::Result<()> {
+        let settings = self.resolved_lod_settings()?;
+        let locks = seams
+            .iter()
+            .map(|position| position.map(f32::from_bits))
+            .collect::<Vec<_>>();
+        let mut layouts = BTreeSet::new();
+        let mut sets = Vec::new();
+        for request in self.lod_requests() {
+            ensure!(
+                layouts.insert(request.layout),
+                "duplicate lod vertex layout request"
+            );
+            sets.push(request.process(
+                primitive.base().project(request.layout)?,
+                &settings,
+                &locks,
+            )?);
         }
-
-        Ok(res)
+        primitive.set_lods(sets.into_boxed_slice())
     }
 
     fn convert_triangle_fan_to_list(indices: &mut Vec<u32>) {
@@ -239,6 +262,10 @@ impl MeshAsset {
         indices: &mut Vec<u32>,
         restart_index: u32,
     ) -> anyhow::Result<()> {
+        ensure!(
+            indices.len() >= 3,
+            "triangle strip must have at least 3 indices"
+        );
         *indices =
             unstripify(indices, restart_index).context("unable to unstripify index buffer")?;
         Ok(())
@@ -249,9 +276,38 @@ impl MeshAsset {
         self.blob.as_deref()
     }
 
-    /// When `true` levels of detail will be generated for all meshes.
-    pub fn lod(&self) -> bool {
-        self.lod.unwrap_or_default()
+    /// Whether to include pack default LOD requests. Defaults to `true`.
+    pub fn inherit_lods(&self) -> bool {
+        self.inherit_lods.unwrap_or(true)
+    }
+
+    /// Local layout requests, merged with pack defaults when inheritance is enabled.
+    /// Local requests override matching default layouts; an empty list adds no overrides.
+    pub fn lod_requests(&self) -> &[lod::LodRequest] {
+        self.lods.as_deref().unwrap_or_default()
+    }
+
+    fn resolve_lod_requests(
+        &self,
+        defaults: &[lod::LodRequest],
+    ) -> anyhow::Result<Box<[lod::LodRequest]>> {
+        let mut requests = BTreeMap::new();
+        for request in self.lod_requests() {
+            ensure!(
+                requests.insert(request.layout, request.clone()).is_none(),
+                "duplicate lod vertex layout request"
+            );
+        }
+
+        if self.inherit_lods() {
+            for request in defaults {
+                requests
+                    .entry(request.layout)
+                    .or_insert_with(|| request.clone());
+            }
+        }
+
+        Ok(requests.into_values().collect())
     }
 
     /// When `true` levels of detail vertices that lie on the topological border of the mesh will be
@@ -263,26 +319,16 @@ impl MeshAsset {
         self.lod_lock_border.unwrap_or_default()
     }
 
-    /// The "fitting" value which levels of detail use to determine that further simplication will
-    /// not greatly change a mesh.
+    /// Relative meshoptimizer geometric error limit, independent of count-reduction acceptance.
     pub fn lod_target_error(&self) -> f32 {
         self.lod_target_error
             .unwrap_or(OrderedFloat(Self::DEFAULT_LOD_TARGET_ERROR))
             .0
     }
 
-    /// The highest index value allowed in baked mesh LODs.
+    /// The highest index value allowed in the source mesh (before LOD generation).
     pub fn max_index(&self) -> Option<u32> {
         self.max_index.map(MaxIndex::value)
-    }
-
-    /// The number of triangles below which further level of details are not calculated.
-    ///
-    /// Note: The last level of detail may have no less than half this number of triangles.
-    pub fn min_lod_triangles(&self) -> usize {
-        self.min_lod_triangles
-            .unwrap_or(Self::DEFAULT_LOD_MIN)
-            .clamp(1, usize::MAX)
     }
 
     /// When `true` (the default) normal values will be stored (or generated if needed).
@@ -325,6 +371,11 @@ impl MeshAsset {
         vertex_buf: &mut Vec<u8>,
         vertex_stride: usize,
     ) -> anyhow::Result<()> {
+        Geometry::validate_pair(vertex_buf, vertex_stride, indices)?;
+        ensure!(
+            self.overdraw_threshold().is_finite() && self.overdraw_threshold() >= 1.0,
+            "overdraw-threshold must be finite and at least one"
+        );
         // TODO: PR these functions
         // HACK: Need to have a version of these functions which specify stride
         mod hack {
@@ -426,6 +477,10 @@ impl MeshAsset {
         vertex_buf: &[u8],
         vertex_stride: usize,
     ) -> anyhow::Result<(Vec<u8>, usize)> {
+        ensure!(
+            vertex_stride != 0 && vertex_buf.len().is_multiple_of(vertex_stride),
+            "invalid compact vertex stride"
+        );
         let vertex_count = vertex_buf.len() / vertex_stride;
         let mut remap = vec![None; vertex_count];
         let mut compact = Vec::new();
@@ -460,6 +515,7 @@ impl MeshAsset {
         vertex_buf: &mut Vec<u8>,
         vertex_stride: usize,
     ) -> anyhow::Result<()> {
+        Geometry::validate_pair(vertex_buf, vertex_stride, indices)?;
         let Some(max_index) = self.max_index() else {
             return Ok(());
         };
@@ -484,6 +540,10 @@ impl MeshAsset {
         }
 
         let target_error = self.lod_target_error();
+        ensure!(
+            target_error.is_finite() && target_error >= 0.0,
+            "lod-target-error must be finite and nonnegative"
+        );
         let opts = if self.lod_lock_border() {
             SimplifyOptions::LockBorder
         } else {
@@ -822,13 +882,6 @@ impl MeshAsset {
             .unwrap_or(Vec3::ONE)
     }
 
-    /// When `true` position-only shadow meshes will be generated.
-    ///
-    /// Note: Skinned meshes will contain position, joints, and weights.
-    pub fn shadow(&self) -> bool {
-        self.shadow.unwrap_or_default()
-    }
-
     /// The mesh file source.
     pub fn src(&self) -> Option<&Path> {
         self.src.as_deref()
@@ -840,6 +893,7 @@ impl MeshAsset {
     }
 
     fn to_mesh(&self, src: impl AsRef<Path>) -> anyhow::Result<Mesh> {
+        let settings = self.resolved_lod_settings()?;
         let src = src.as_ref();
 
         // Load the mesh nodes from this GLTF file
@@ -884,62 +938,63 @@ impl MeshAsset {
             .mesh()
             .context("node has no mesh")?
             .primitives()
-            .filter_map(|primitive| match primitive.mode() {
-                Mode::TriangleFan | Mode::TriangleStrip | Mode::Triangles => {
-                    trace!(
-                        "Reading mesh \"{}\" (material index {})",
-                        node.name().unwrap_or_default(),
-                        if primitive.material().index().is_some() {
-                            format!("{}", primitive.material().index().unwrap_or_default())
-                        } else {
-                            "unset".to_string()
-                        }
-                    );
-
-                    // Read material and vertex data
-                    let material = primitive.material().index().unwrap_or_default();
-                    let (restart_index, mut vertices) = Self::read_vertices(
-                        primitive.reader(|buf| bufs.get(buf.index()).map(|data| data.0.as_slice())),
-                    );
-
-                    // Convert unsupported modes (meshopt requires triangles)
-                    match primitive.mode() {
-                        Mode::TriangleFan => {
-                            Self::convert_triangle_fan_to_list(&mut vertices.indices)
-                        }
-                        Mode::TriangleStrip => Self::convert_triangle_strip_to_list(
-                            &mut vertices.indices,
-                            restart_index,
-                        )
-                        .ok()?,
-                        _ => (),
-                    }
-
-                    if self.flip_x.unwrap_or_default() {
-                        for [x, _y, _z] in &mut vertices.positions {
-                            *x *= -1.0;
-                        }
-                    }
-
-                    if self.flip_y.unwrap_or_default() {
-                        for [_x, y, _z] in &mut vertices.positions {
-                            *y *= -1.0;
-                        }
-                    }
-
-                    if self.flip_z.unwrap_or_default() {
-                        for [_x, _y, z] in &mut vertices.positions {
-                            *z *= -1.0;
-                        }
-                    }
-
-                    vertices.transform(transform);
-
-                    Some((material, vertices))
-                }
-                _ => None,
+            .filter(|primitive| {
+                matches!(
+                    primitive.mode(),
+                    Mode::TriangleFan | Mode::TriangleStrip | Mode::Triangles
+                )
             })
-            .collect::<Vec<_>>();
+            .map(|primitive| {
+                trace!(
+                    "Reading mesh \"{}\" (material index {})",
+                    node.name().unwrap_or_default(),
+                    if primitive.material().index().is_some() {
+                        format!("{}", primitive.material().index().unwrap_or_default())
+                    } else {
+                        "unset".to_string()
+                    }
+                );
+
+                // Read material and vertex data
+                let material = primitive.material().index().unwrap_or_default();
+                let (restart_index, mut vertices) = Self::read_vertices(
+                    primitive.reader(|buf| bufs.get(buf.index()).map(|data| data.0.as_slice())),
+                );
+
+                // Convert unsupported modes (meshopt requires triangles)
+                match primitive.mode() {
+                    Mode::TriangleFan => Self::convert_triangle_fan_to_list(&mut vertices.indices),
+                    Mode::TriangleStrip => {
+                        Self::convert_triangle_strip_to_list(&mut vertices.indices, restart_index)?
+                    }
+                    _ => (),
+                }
+
+                vertices.validate()?;
+                if self.flip_x.unwrap_or_default() {
+                    for [x, _y, _z] in &mut vertices.positions {
+                        *x *= -1.0;
+                    }
+                }
+
+                if self.flip_y.unwrap_or_default() {
+                    for [_x, y, _z] in &mut vertices.positions {
+                        *y *= -1.0;
+                    }
+                }
+
+                if self.flip_z.unwrap_or_default() {
+                    for [_x, _y, z] in &mut vertices.positions {
+                        *z *= -1.0;
+                    }
+                }
+
+                vertices.transform(transform);
+
+                vertices.validate()?;
+                Ok((material, vertices, primitive.morph_targets().len() != 0))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         // Figure out which unique materials are used on these target mesh primitives and convert
         // those to a map of "Mesh Local" material index from "Gltf File" material index
@@ -947,7 +1002,12 @@ impl MeshAsset {
         let materials = parts
             .iter()
             .map(|(material, ..)| *material)
-            .collect::<BTreeSet<_>>()
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            materials.len() <= u8::MAX as usize + 1,
+            "mesh contains too many material slots"
+        );
+        let materials = materials
             .into_iter()
             .enumerate()
             .map(|(idx, material)| (material, idx as _))
@@ -959,12 +1019,11 @@ impl MeshAsset {
             if materials.len() == 1 { "" } else { "s" },
         );
 
-        let shadow = self.shadow();
-
         // Build a Mesh from the parts in this document
-        let mut primitives = Vec::with_capacity(parts.len() + (parts.len() * shadow as usize));
+        let mut primitives = Vec::with_capacity(parts.len());
+        let mut source_deformation = Vec::with_capacity(parts.len());
 
-        for (material, mut data) in parts {
+        for (material, mut data, deformed) in parts {
             let material = materials.get(&material).copied().unwrap_or_default();
 
             if skin.is_none() {
@@ -999,48 +1058,74 @@ impl MeshAsset {
                 data.generate_tangents();
             }
 
-            // Main mesh part
-            {
-                let (vertex, mut vertex_buf) = data.to_vertex_buf();
-                let vertex_stride = vertex.stride();
-
-                self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride)?;
-                self.reduce_mesh_to_max_index(&mut data.indices, &mut vertex_buf, vertex_stride)?;
-
-                let mut primitive = Primitive::new(material, &vertex_buf, vertex);
-
-                for lod_indices in self.calculate_lods(&data.indices, &vertex_buf, vertex_stride)? {
-                    primitive.push_lod(IndexBuffer::new(&lod_indices)?)
-                }
-
-                primitives.push(primitive);
-            }
-
-            // Optional shadow mesh part
-            if shadow {
-                let (vertex, mut vertex_buf) = data.to_shadow_buf();
-                let vertex_stride = vertex.stride();
-
-                self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride)?;
-                self.reduce_mesh_to_max_index(&mut data.indices, &mut vertex_buf, vertex_stride)?;
-
-                let mut primitive = Primitive::new(material, &vertex_buf, vertex);
-
-                for lod_indices in self.calculate_lods(&data.indices, &vertex_buf, vertex_stride)? {
-                    primitive.push_lod(IndexBuffer::new(&lod_indices)?);
-                }
-
-                primitives.push(primitive);
-            }
+            let (vertex_type, mut vertex_buf) = data.to_vertex_buf();
+            vertex_type.validate()?;
+            let vertex_stride = vertex_type.stride();
+            self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride)?;
+            self.reduce_mesh_to_max_index(&mut data.indices, &mut vertex_buf, vertex_stride)?;
+            let base = Geometry::new(&vertex_buf, vertex_type, IndexBuffer::new(&data.indices)?)?;
+            let primitive = Primitive::new(material, base)?;
+            source_deformation.push(skin.is_some() || node.skin().is_some() || deformed);
+            primitives.push(primitive);
         }
 
-        let mut mesh = Mesh::new(primitives, skin);
+        // Material/primitive seams are always protected, independently of external borders.
+        let mut owners = BTreeMap::new();
+        let mut seams = BTreeSet::new();
+        for (idx, primitive) in primitives
+            .iter()
+            .enumerate()
+            .filter(|_| !self.lod_requests().is_empty())
+        {
+            for vertex in primitive.base().indices().as_u32() {
+                let position = lod::position_key(primitive.base().position(vertex));
+                if owners
+                    .insert(position, idx)
+                    .is_some_and(|owner| owner != idx)
+                {
+                    seams.insert(position);
+                }
+            }
+        }
+        for primitive in &mut primitives {
+            self.generate_lods_with_seams(primitive, &seams)?;
+        }
+        let mut mesh = Mesh::new(primitives, skin)?;
         mesh.data = self
             .data
             .iter()
             .flat_map(|data| data.iter())
             .map(|(key, value)| (key.clone(), value.clone().into()))
             .collect();
+        ensure!(
+            mesh.data.iter().all(
+                |(key, _)| !key.starts_with("pak.mesh-lod.") && key != "pak.source-deformation"
+            ),
+            "mesh data uses reserved geometry namespace"
+        );
+        mesh.data.insert(
+            "pak.mesh-lod.settings",
+            crate::scene::DataData::String(toml::to_string(&settings)?),
+        );
+        mesh.data.insert(
+            "pak.mesh-lod.producer",
+            crate::scene::DataData::String(super::MESH_LOD_PRODUCER.to_owned()),
+        );
+        if mesh.primitives().is_empty() {
+            mesh.data.insert(
+                "pak.mesh-lod.empty-stop",
+                crate::scene::DataData::String("no-supported-triangle-primitives".to_owned()),
+            );
+        }
+        mesh.data.insert(
+            "pak.source-deformation",
+            crate::scene::DataData::Array(
+                source_deformation
+                    .into_iter()
+                    .map(crate::scene::DataData::Bool)
+                    .collect(),
+            ),
+        );
         Ok(mesh)
     }
 
@@ -1230,6 +1315,33 @@ struct VertexData {
 }
 
 impl VertexData {
+    fn validate(&self) -> anyhow::Result<()> {
+        ensure!(
+            !self.positions.is_empty() && self.positions.len() <= u32::MAX as usize,
+            "invalid mesh position count"
+        );
+        ensure!(
+            self.positions
+                .iter()
+                .flatten()
+                .all(|value| value.is_finite()),
+            "mesh positions must be finite"
+        );
+        ensure!(
+            self.indices.len() >= 3
+                && self.indices.len().is_multiple_of(3)
+                && self.indices.len() <= u32::MAX as usize,
+            "mesh indices must be triangles"
+        );
+        ensure!(
+            self.indices
+                .iter()
+                .all(|&index| (index as usize) < self.positions.len()),
+            "mesh index exceeds vertex count"
+        );
+        Ok(())
+    }
+
     fn generate_normals(&mut self) {
         self.normals.clear();
         self.normals
@@ -1401,39 +1513,6 @@ impl VertexData {
         (vertex_type, buf)
     }
 
-    fn to_shadow_buf(&self) -> (VertexType, Vec<u8>) {
-        let mut vertex_type = VertexType::POSITION;
-
-        if self.skin.is_some() {
-            vertex_type |= VertexType::JOINTS_WEIGHTS;
-        }
-
-        let vertex_stride = vertex_type.stride();
-        let buf_len = self.positions.len() * vertex_stride;
-        let mut buf = Vec::with_capacity(buf_len);
-
-        for idx in 0..self.positions.len() {
-            let position = self.positions[idx];
-            buf.extend_from_slice(&position[0].to_ne_bytes());
-            buf.extend_from_slice(&position[1].to_ne_bytes());
-            buf.extend_from_slice(&position[2].to_ne_bytes());
-
-            if let Some(skin) = self.skin.as_ref() {
-                let joints = skin.0[idx];
-                buf.extend_from_slice(&joints.to_ne_bytes());
-
-                let weights = skin.1[idx];
-                buf.extend_from_slice(&weights.to_ne_bytes());
-            }
-
-            assert_eq!(buf.len() % vertex_stride, 0);
-        }
-
-        assert_eq!(buf.len(), buf_len);
-
-        (vertex_type, buf)
-    }
-
     fn transform(&mut self, transform: Mat4) {
         let (_scale, rotation, _translation) = transform.to_scale_rotation_translation();
 
@@ -1478,18 +1557,55 @@ impl mikktspace::Geometry for VertexData {
 #[cfg(test)]
 mod test {
     use {
-        super::{MaxIndex, MeshAsset},
-        crate::mesh::Mesh,
-        std::path::Path,
+        super::{MaxIndex, MeshAsset, VertexData},
+        crate::{
+            index::IndexBuffer,
+            mesh::{
+                Geometry, Mesh, Primitive, VertexType,
+                test::{grid, triangles},
+            },
+        },
+        meshopt::{SimplifyOptions, VertexDataAdapter, simplify, simplify_scale},
+        std::{fs, path::Path},
     };
+
+    const LOD_REQUESTS: &str = "lods = [{layout='POSITION', simplify=true}, {layout='PACKED_NORMAL', simplify=true}, {layout='POSITION | TEXTURE0', simplify=false}, {layout='PACKED_NORMAL | TEXTURE0', simplify=false}]";
+
+    fn assert_compact(geometry: &Geometry) {
+        let mut referenced = geometry.indices().as_u32();
+        referenced.sort_unstable();
+        referenced.dedup();
+        assert_eq!(
+            referenced,
+            (0..geometry.vertex_count() as u32).collect::<Vec<_>>()
+        );
+    }
+
+    fn assert_full_detail_and_compact_lods(primitive: &Primitive) {
+        for set in primitive.lod_sets() {
+            assert_eq!(
+                triangles(
+                    set.levels()[0].geometry(),
+                    set.vertex_type().contains(VertexType::TEXTURE0)
+                ),
+                triangles(
+                    primitive.base(),
+                    set.vertex_type().contains(VertexType::TEXTURE0)
+                )
+            );
+            for lod in &set.levels()[1..] {
+                assert_compact(lod.geometry());
+            }
+        }
+    }
 
     fn max_abs_position(mesh: &Mesh) -> f32 {
         let mut max = 0.0f32;
 
         for primitive in mesh.primitives() {
-            let stride = primitive.vertex_type().stride();
+            let stride = primitive.base().vertex_type().stride();
 
-            for vertex in primitive.vertex_data().chunks_exact(stride) {
+            for vertex in primitive.base().vertex_data().chunks_exact(stride) {
                 let x = f32::from_ne_bytes(vertex[0..4].try_into().unwrap());
                 let y = f32::from_ne_bytes(vertex[4..8].try_into().unwrap());
                 let z = f32::from_ne_bytes(vertex[8..12].try_into().unwrap());
@@ -1499,6 +1615,869 @@ mod test {
         }
 
         max
+    }
+
+    #[test]
+    fn lod_requests_merge_defaults_by_layout_and_opt_out_explicitly() {
+        let defaults: MeshAsset = toml::from_str(
+            "lods = [{layout='POSITION', simplify=true}, {layout='PACKED_NORMAL', simplify=true}]",
+        )
+        .unwrap();
+        let defaults = defaults.lod_requests();
+        for recipe in ["", "lods = []", "inherit-lods = true\nlods = []"] {
+            let mesh: MeshAsset = toml::from_str(recipe).unwrap();
+            assert!(mesh.inherit_lods());
+            assert_eq!(&*mesh.resolve_lod_requests(defaults).unwrap(), defaults);
+            assert!(mesh.lod_requests().is_empty());
+        }
+
+        let mesh: MeshAsset = toml::from_str(
+            "lods = [{layout='POSITION', simplify=false}, {layout='TEXTURE0', simplify=false}]",
+        )
+        .unwrap();
+        let resolved = mesh.resolve_lod_requests(defaults).unwrap();
+        assert_eq!(resolved.len(), 3);
+        assert_eq!(resolved[0].layout, VertexType::POSITION);
+        assert!(!resolved[0].simplify);
+        assert_eq!(resolved[1].layout, VertexType::TEXTURE0);
+        assert!(!resolved[1].simplify);
+        assert_eq!(resolved[2], defaults[1]);
+        assert_eq!(mesh.lod_requests().len(), 2, "raw recipe must stay local");
+
+        for requests in [
+            "",
+            "lods = []",
+            "lods = [{layout='POSITION', simplify=false}]",
+        ] {
+            let mesh: MeshAsset =
+                toml::from_str(&format!("inherit-lods = false\n{requests}")).unwrap();
+            assert!(!mesh.inherit_lods());
+            assert_eq!(
+                &*mesh.resolve_lod_requests(defaults).unwrap(),
+                mesh.lod_requests()
+            );
+        }
+
+        for inherit in [false, true] {
+            let mesh: MeshAsset = toml::from_str(&format!(
+                "inherit-lods = {inherit}\nlods = [{{layout='POSITION', simplify=true}}, {{layout='POSITION', simplify=false}}]"
+            ))
+            .unwrap();
+            assert!(mesh.resolve_lod_requests(defaults).is_err());
+        }
+        assert!(toml::from_str::<MeshAsset>("inherit-lods = 'false'").is_err());
+    }
+
+    #[test]
+    fn native_lod_flags_default_off_and_old_recipe_flags_are_rejected() {
+        #[derive(serde::Deserialize)]
+        struct Recipe {
+            mesh: MeshAsset,
+        }
+        let recipe: Recipe =
+            toml::from_str(include_str!("../../tests/data/scene/mesh_01.toml")).unwrap();
+        assert!(recipe.mesh.lod_requests().is_empty());
+        let default: MeshAsset = toml::from_str("").unwrap();
+        assert!(default.lod_requests().is_empty());
+        let enabled: MeshAsset = toml::from_str(LOD_REQUESTS).unwrap();
+        assert_eq!(enabled.lod_requests().len(), 4);
+        for old in [
+            "lod = true",
+            "shadow = true",
+            "lod = false",
+            "shadow = false",
+            "guide-lods = true",
+            "shadow-lods = true",
+        ] {
+            assert!(toml::from_str::<MeshAsset>(old).is_err());
+        }
+    }
+
+    #[test]
+    fn triangle_strip_rejects_short_inputs_before_meshopt() {
+        for count in 0..3 {
+            let mut indices = (0..count).collect::<Vec<_>>();
+            let original = indices.clone();
+            let error =
+                MeshAsset::convert_triangle_strip_to_list(&mut indices, u32::MAX).unwrap_err();
+            assert!(error.to_string().contains("at least 3 indices"));
+            assert_eq!(indices, original);
+        }
+        let mut indices = vec![2, 4, 6];
+        MeshAsset::convert_triangle_strip_to_list(&mut indices, u32::MAX).unwrap();
+        assert_eq!(indices, [2, 4, 6]);
+    }
+
+    #[test]
+    fn clustered_lods_reduce_iteratively_with_accumulated_absolute_error() {
+        let source = grid(25, true);
+        for lock_border in [false, true] {
+            let asset: MeshAsset = toml::from_str(&format!(
+                "lod-target-error = 1.0\nmin-lod-triangles = 64\nlod-lock-border = {lock_border}"
+            ))
+            .unwrap();
+            let lods = asset.calculate_lods(source.clone()).unwrap();
+            assert!(lods.len() >= 3);
+            assert_eq!(lods[0].error(), 0.0);
+            let adapter =
+                VertexDataAdapter::new(source.vertex_data(), source.vertex_type().stride(), 0)
+                    .unwrap();
+            let scale = simplify_scale(&adapter);
+            let mut previous = source.indices().triangle_count();
+            let mut previous_error = 0.0;
+            assert!(lods[1].geometry().indices().triangle_count() > previous / 3);
+            for lod in &lods[1..] {
+                assert!(lod.error() >= previous_error);
+                assert!(lod.error() <= scale.next_up());
+                let count = lod.geometry().indices().triangle_count();
+                assert!(count < previous && count >= 64);
+                assert!(lod.error() > 0.0);
+                previous = count;
+                previous_error = lod.error();
+            }
+        }
+    }
+
+    #[test]
+    fn clustered_guide_supersedes_ordinary_prefix_with_deterministic_immutable_vertices() {
+        for lock_border in [false, true] {
+            let asset: MeshAsset = toml::from_str(&format!(
+                "min-lod-triangles = 8\nlod-lock-border = {lock_border}"
+            ))
+            .unwrap();
+            let guide = asset
+                .layout_lods(&grid(25, true), VertexType::PACKED_NORMAL)
+                .unwrap();
+            let source = guide.levels()[0].geometry();
+            // The clustered producer intentionally supersedes the old byte-exact ordinary prefix.
+            let enhanced = asset.calculate_lods(source.clone()).unwrap();
+            assert!(enhanced.len() >= 3);
+            for lod in &enhanced {
+                for vertex in lod.geometry().vertex_data().chunks_exact(16) {
+                    assert!(
+                        source
+                            .vertex_data()
+                            .chunks_exact(16)
+                            .any(|original| original == vertex)
+                    );
+                }
+            }
+            assert_eq!(enhanced, asset.calculate_lods(source.clone()).unwrap(),);
+        }
+    }
+
+    #[test]
+    fn packed_guide_reduces_hard_normal_splits_and_preserves_geometry_and_borders() {
+        let mut data = VertexData {
+            positions: vec![],
+            normals: vec![],
+            textures: (vec![], vec![]),
+            indices: vec![],
+            tangents: vec![],
+            skin: None,
+        };
+        // Subdivide an octahedron into a closed unit sphere, then split every face normal.
+        let mut faces = Vec::new();
+        for x in [-1.0, 1.0] {
+            for y in [-1.0, 1.0] {
+                for z in [-1.0, 1.0] {
+                    let mut face = [glam::Vec3::X * x, glam::Vec3::Y * y, glam::Vec3::Z * z];
+                    if x * y * z < 0.0 {
+                        face.swap(1, 2);
+                    }
+                    faces.push(face);
+                }
+            }
+        }
+        for _ in 0..3 {
+            faces = faces
+                .into_iter()
+                .flat_map(|[a, b, c]| {
+                    let ab = (a + b).normalize();
+                    let bc = (b + c).normalize();
+                    let ca = (c + a).normalize();
+                    [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]
+                })
+                .collect();
+        }
+        for [a, b, c] in faces {
+            let normal = (b - a).cross(c - a).normalize();
+            for position in [a, b, c] {
+                data.indices.push(data.positions.len() as u32);
+                data.positions.push(position.to_array());
+                data.normals.push(normal.to_array());
+                data.textures.0.push([position.x, position.y]);
+            }
+        }
+        let (vertex_type, vertices) = data.to_vertex_buf();
+        let base = Geometry::new(
+            &vertices,
+            vertex_type,
+            IndexBuffer::new(&data.indices).unwrap(),
+        )
+        .unwrap();
+        for lock_border in [false, true] {
+            let asset: MeshAsset = toml::from_str(&format!(
+                "{LOD_REQUESTS}\nmin-lod-triangles = 8\nlod-target-error = 0.02\nlod-lock-border = {lock_border}"
+            )).unwrap();
+            let mut primitive = Primitive::new(0, base.clone()).unwrap();
+            asset.generate_lods(&mut primitive).unwrap();
+            assert_eq!(primitive.base(), &base);
+            assert_full_detail_and_compact_lods(&primitive);
+            let guide = primitive
+                .lod_set(VertexType::PACKED_NORMAL)
+                .unwrap()
+                .levels();
+            let source = guide[0].geometry();
+            let adapter = VertexDataAdapter::new(source.vertex_data(), 16, 0).unwrap();
+            let old = simplify(
+                &source.indices().as_u32(),
+                &adapter,
+                24,
+                asset.lod_target_error(),
+                SimplifyOptions::None,
+                None,
+            );
+            assert_eq!(
+                old.len() / 3,
+                512,
+                "ordinary simplification stalls at hard seams"
+            );
+            let open = asset
+                .layout_lods(&grid(5, false), VertexType::PACKED_NORMAL)
+                .unwrap();
+            assert!(open.levels().len() > 1);
+            let border = (0..open.levels()[0].geometry().vertex_count() as u32)
+                .map(|idx| open.levels()[0].geometry().position(idx))
+                .filter(|p| p.x == 0.0 || p.x == 4.0 || p.y == 0.0 || p.y == 4.0)
+                .collect::<Vec<_>>();
+            for lod in &open.levels()[1..] {
+                let retained = border.iter().all(|position| {
+                    (0..lod.geometry().vertex_count() as u32)
+                        .any(|idx| lod.geometry().position(idx) == *position)
+                });
+                assert_eq!(
+                    retained, lock_border,
+                    "only locked borders must retain every vertex"
+                );
+            }
+            let reduced = guide.last().unwrap().geometry().indices().triangle_count();
+            assert!(
+                reduced <= 448,
+                "hard-split sphere reduced to {reduced} triangles"
+            );
+            let repeated = asset.layout_lods(&base, VertexType::PACKED_NORMAL).unwrap();
+            assert_eq!(
+                primitive.lod_set(VertexType::PACKED_NORMAL),
+                Some(&repeated)
+            );
+            for lod in &guide[1..] {
+                assert!(lod.error().is_finite() && lod.error() > 0.0);
+                assert!(
+                    lod.error() <= (asset.lod_target_error() * simplify_scale(&adapter)).next_up()
+                );
+                let geometry = lod.geometry();
+                for vertex in geometry.vertex_data().chunks_exact(16) {
+                    assert!(
+                        source
+                            .vertex_data()
+                            .chunks_exact(16)
+                            .any(|original| original == vertex)
+                    );
+                }
+                for triangle in geometry.indices().as_u32().chunks_exact(3) {
+                    let positions = triangle
+                        .iter()
+                        .map(|&idx| geometry.position(idx))
+                        .collect::<Vec<_>>();
+                    let face = (positions[1] - positions[0])
+                        .cross(positions[2] - positions[0])
+                        .normalize();
+                    for (corner, &idx) in triangle.iter().enumerate() {
+                        let position = positions[corner];
+                        let midpoint = (position + positions[(corner + 1) % 3]) * 0.5;
+                        // The source tessellation itself deviates from the ideal sphere.
+                        assert!(1.0 - midpoint.length() <= lod.error() as f64 + 0.02);
+                        assert!(1.0 - face.dot(position) <= lod.error() as f64 + 0.02);
+                        assert!((position.length() - 1.0).abs() < 1e-6);
+                        let offset = idx as usize * 16;
+                        let vertex = &geometry.vertex_data()[offset..offset + 16];
+                        let x =
+                            i16::from_ne_bytes(vertex[12..14].try_into().unwrap()) as f64 / 32767.0;
+                        let y =
+                            i16::from_ne_bytes(vertex[14..16].try_into().unwrap()) as f64 / 32767.0;
+                        let mut normal = glam::DVec3::new(x, y, 1.0 - x.abs() - y.abs());
+                        let t = (-normal.z).max(0.0);
+                        normal.x += if x >= 0.0 { -t } else { t };
+                        normal.y += if y >= 0.0 { -t } else { t };
+                        assert!(
+                            face.dot(normal.normalize()) > 0.95,
+                            "faceted shading must follow the surface: {}",
+                            face.dot(normal.normalize())
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lod_minimum_and_no_progress_terminate_independently_of_error() {
+        let floor: MeshAsset = toml::from_str("min-lod-triangles = 1000").unwrap();
+        assert_eq!(floor.calculate_lods(grid(3, false)).unwrap().len(), 1);
+        for error in [0.0, 1.0] {
+            let locked: MeshAsset = toml::from_str(&format!(
+                "min-lod-triangles = 1\nlod-lock-border = true\nlod-target-error = {error}"
+            ))
+            .unwrap();
+            assert_eq!(locked.calculate_lods(grid(2, false)).unwrap().len(), 1);
+        }
+        let floor: MeshAsset =
+            toml::from_str("min-lod-triangles = 65\nlod-target-error = 1.0").unwrap();
+        let lods = floor.calculate_lods(grid(17, false)).unwrap();
+        assert!(lods.len() > 1);
+        assert!(
+            lods.iter()
+                .all(|lod| lod.geometry().indices().triangle_count() >= 65)
+        );
+        for error in ["nan", "inf", "-1.0"] {
+            let invalid: MeshAsset =
+                toml::from_str(&format!("lod-target-error = {error}")).unwrap();
+            assert!(invalid.calculate_lods(grid(2, false)).is_err());
+        }
+    }
+
+    #[test]
+    fn accumulated_lod_error_rounds_outward_and_rejects_invalid_metrics() {
+        for (error, scale) in [(0.0, 7.0), (0.1, 3.1), (f32::from_bits(1), 0.5), (1.0, 0.0)] {
+            let absolute = super::lod::rounded_error(error as f64 * scale as f64).unwrap();
+            assert!(absolute.is_finite());
+            assert!(absolute as f64 >= error as f64 * scale as f64);
+            assert_eq!(absolute == 0.0, error == 0.0 || scale == 0.0);
+        }
+        for (error, scale) in [
+            (f32::NAN, 1.0),
+            (1.0, f32::INFINITY),
+            (-1.0, 1.0),
+            (f32::MAX, 2.0),
+        ] {
+            assert!(super::lod::rounded_error(error as f64 * scale as f64).is_err());
+        }
+    }
+
+    #[test]
+    fn purpose_welding_uses_final_canonical_pairs_and_preserves_opacity_seams() {
+        let asset: MeshAsset =
+            toml::from_str(&format!("{LOD_REQUESTS}\nmin-lod-triangles = 1")).unwrap();
+        let data = VertexData {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
+            normals: vec![
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
+            textures: (
+                vec![
+                    [0.0, 0.0],
+                    [1.0, 0.0],
+                    [0.0, 1.0],
+                    [0.25, 0.0],
+                    [1.0, 1.0],
+                    [0.0, 0.75],
+                ],
+                vec![],
+            ),
+            indices: vec![4, 5, 3, 2, 0, 1],
+            tangents: vec![],
+            skin: None,
+        };
+        let (vertex_type, mut vertices) = data.to_vertex_buf();
+        let original = Geometry::new(
+            &vertices,
+            vertex_type,
+            IndexBuffer::new(&data.indices).unwrap(),
+        )
+        .unwrap();
+        let mut indices = data.indices.clone();
+        asset
+            .optimize_mesh(&mut indices, &mut vertices, vertex_type.stride())
+            .unwrap();
+        let base =
+            Geometry::new(&vertices, vertex_type, IndexBuffer::new(&indices).unwrap()).unwrap();
+        assert_ne!(base.vertex_data(), original.vertex_data());
+        assert_eq!(triangles(&base, true), triangles(&original, true));
+        let mut primitive = Primitive::new(7, base.clone()).unwrap();
+        asset.generate_lods(&mut primitive).unwrap();
+        assert_eq!(primitive.base(), &base);
+        assert_eq!(primitive.material(), 7);
+        assert_full_detail_and_compact_lods(&primitive);
+        assert_eq!(
+            primitive
+                .lod_set(VertexType::PACKED_NORMAL)
+                .unwrap()
+                .levels()[0]
+                .geometry()
+                .vertex_count(),
+            6
+        );
+        assert_eq!(
+            primitive.lod_set(VertexType::POSITION).unwrap().levels()[0]
+                .geometry()
+                .vertex_count(),
+            6
+        );
+        for opaque_type in [VertexType::PACKED_NORMAL, VertexType::POSITION] {
+            let set = primitive.lod_set(opaque_type).unwrap();
+            let full = &set.levels()[0];
+            assert_eq!(triangles(full.geometry(), false), triangles(&base, false));
+            assert_eq!(full.geometry().vertex_type(), opaque_type);
+            assert_eq!(full.error(), 0.0);
+            let exact = &primitive
+                .lod_set(opaque_type | VertexType::TEXTURE0)
+                .unwrap()
+                .levels()[0];
+            assert_eq!(
+                exact.geometry().vertex_type(),
+                opaque_type | VertexType::TEXTURE0
+            );
+            assert_eq!(exact.geometry().vertex_count(), 6);
+            assert_eq!(triangles(exact.geometry(), true), triangles(&base, true));
+            assert!(!exact.patches().is_empty());
+            for lod in set.levels() {
+                assert!(!lod.patches().is_empty());
+            }
+        }
+        let encoded = bincode::serde::encode_to_vec(&primitive, bincode::config::legacy()).unwrap();
+        let (decoded, _): (Primitive, _) =
+            bincode::serde::decode_from_slice(&encoded, bincode::config::legacy()).unwrap();
+        assert_eq!(decoded, primitive);
+    }
+
+    #[test]
+    fn packed_guide_normals_decode_as_octahedral_snorm2x16() {
+        let asset: MeshAsset =
+            toml::from_str("lods = [{layout='PACKED_NORMAL', simplify=true}]").unwrap();
+        let mut data = VertexData {
+            positions: vec![],
+            normals: vec![],
+            textures: (vec![], vec![]),
+            indices: (0..9).collect(),
+            tangents: vec![],
+            skin: None,
+        };
+        for (index, normal) in [
+            glam::Vec3::X,
+            glam::Vec3::NEG_X,
+            glam::Vec3::Y,
+            glam::Vec3::NEG_Y,
+            glam::Vec3::Z,
+            glam::Vec3::NEG_Z,
+            glam::vec3(1.0, -2.0, 3.0),
+            glam::vec3(-1.0, 2.0, -3.0),
+            glam::Vec3::ONE,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            data.positions.push([index as f32, (index % 3) as f32, 0.0]);
+            data.normals.push(normal.normalize().to_array());
+        }
+        let (vertex_type, vertices) = data.to_vertex_buf();
+        let mut primitive = Primitive::new(
+            0,
+            Geometry::new(
+                &vertices,
+                vertex_type,
+                IndexBuffer::new(&data.indices).unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        asset.generate_lods(&mut primitive).unwrap();
+        let guide = primitive
+            .lod_set(VertexType::PACKED_NORMAL)
+            .unwrap()
+            .levels()[0]
+            .geometry();
+        assert_eq!(guide.vertex_type().stride(), 16);
+        assert!(
+            primitive
+                .lod_set(VertexType::PACKED_NORMAL | VertexType::TEXTURE0)
+                .is_none()
+        );
+        for vertex in guide.vertex_data().chunks_exact(16) {
+            let index = f32::from_ne_bytes(vertex[..4].try_into().unwrap()) as usize;
+            let x = i16::from_ne_bytes(vertex[12..14].try_into().unwrap()) as f64 / 32767.0;
+            let y = i16::from_ne_bytes(vertex[14..16].try_into().unwrap()) as f64 / 32767.0;
+            let mut normal = glam::DVec3::new(x, y, 1.0 - x.abs() - y.abs());
+            let t = (-normal.z).max(0.0);
+            normal.x += if x >= 0.0 { -t } else { t };
+            normal.y += if y >= 0.0 { -t } else { t };
+            assert!(
+                normal
+                    .normalize()
+                    .dot(glam::DVec3::from_array(data.normals[index].map(f64::from)).normalize())
+                    > 0.99999999
+            );
+        }
+    }
+
+    #[test]
+    fn missing_requested_attributes_fail_without_mutating_source_or_inventing_fallbacks() {
+        let asset: MeshAsset = toml::from_str(LOD_REQUESTS).unwrap();
+        let base = Geometry::new(
+            &[0; 60],
+            VertexType::JOINTS_WEIGHTS,
+            IndexBuffer::new(&[0, 1, 2]).unwrap(),
+        )
+        .unwrap();
+        let mut primitive = Primitive::new(2, base.clone()).unwrap();
+        assert!(asset.generate_lods(&mut primitive).is_err());
+        assert_eq!(primitive.base(), &base);
+        assert!(primitive.lod_sets().is_empty());
+        let base = Geometry::new(
+            &[0; 36],
+            VertexType::POSITION,
+            IndexBuffer::new(&[0, 1, 2]).unwrap(),
+        )
+        .unwrap();
+        let mut primitive = Primitive::new(2, base.clone()).unwrap();
+        assert!(asset.generate_lods(&mut primitive).is_err());
+        assert_eq!(primitive.base(), &base);
+        assert!(primitive.lod_sets().is_empty());
+
+        let source = grid(2, false);
+        let mut vertices = source.vertex_data().to_vec();
+        vertices[24..28].copy_from_slice(&f32::NAN.to_ne_bytes());
+        let base =
+            Geometry::new(&vertices, source.vertex_type(), source.indices().clone()).unwrap();
+        let mut primitive = Primitive::new(2, base.clone()).unwrap();
+        asset.generate_lods(&mut primitive).unwrap();
+        assert_eq!(primitive.base(), &base);
+        assert!(
+            primitive
+                .lod_set(VertexType::PACKED_NORMAL | VertexType::TEXTURE0)
+                .unwrap()
+                .levels()[0]
+                .geometry()
+                .texture0()
+                .unwrap()
+                .any(|uv| uv.into_iter().any(f32::is_nan))
+        );
+        vertices[12..16].copy_from_slice(&f32::NAN.to_ne_bytes());
+        let base =
+            Geometry::new(&vertices, source.vertex_type(), source.indices().clone()).unwrap();
+        let mut primitive = Primitive::new(2, base.clone()).unwrap();
+        assert!(asset.generate_lods(&mut primitive).is_err());
+        assert_eq!(primitive.base(), &base);
+        assert!(primitive.lod_sets().is_empty());
+    }
+
+    #[test]
+    fn enabling_native_alternatives_preserves_imported_ordered_base_bytes_and_materials() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/scene/cube.glb");
+        for optimization in [
+            "",
+            "optimize = false",
+            "optimize = false\noptimize-vertex-cache = true",
+        ] {
+            let disabled: MeshAsset = toml::from_str(optimization).unwrap();
+            let enabled: MeshAsset = toml::from_str(&format!(
+                "{optimization}\n{LOD_REQUESTS}\nmin-lod-triangles = 1"
+            ))
+            .unwrap();
+            let base = disabled.to_mesh(&src).unwrap();
+            let alternatives = enabled.to_mesh(&src).unwrap();
+            assert_eq!(base.primitives().len(), alternatives.primitives().len());
+            for (base, alternative) in base.primitives().iter().zip(alternatives.primitives()) {
+                assert_eq!(base.base(), alternative.base());
+                assert_eq!(base.material(), alternative.material());
+                assert_full_detail_and_compact_lods(alternative);
+            }
+        }
+    }
+
+    #[test]
+    fn alternatives_use_the_actually_reduced_max_index_canonical_pair() {
+        let source = grid(17, true);
+        for optimization in [
+            "",
+            "optimize = false",
+            "optimize = false\noptimize-vertex-cache = true",
+        ] {
+            let mut expected = None;
+            for enabled in [false, true] {
+                let requests = if enabled { LOD_REQUESTS } else { "lods = []" };
+                let asset: MeshAsset = toml::from_str(&format!("{optimization}\nmax-index = 127\nlod-target-error = 1.0\nmin-lod-triangles = 8\n{requests}")).unwrap();
+                let mut indices = source.indices().as_u32();
+                let mut vertices = source.vertex_data().to_vec();
+                let stride = source.vertex_type().stride();
+                asset
+                    .optimize_mesh(&mut indices, &mut vertices, stride)
+                    .unwrap();
+                assert!(indices.iter().any(|&index| index > 127));
+                asset
+                    .reduce_mesh_to_max_index(&mut indices, &mut vertices, stride)
+                    .unwrap();
+                assert!(indices.len() < source.indices().index_count());
+                assert!(indices.iter().all(|&index| index <= 127));
+                let base = Geometry::new(
+                    &vertices,
+                    source.vertex_type(),
+                    IndexBuffer::new(&indices).unwrap(),
+                )
+                .unwrap();
+                assert_compact(&base);
+                let mut primitive = Primitive::new(9, base.clone()).unwrap();
+                asset.generate_lods(&mut primitive).unwrap();
+                assert_eq!(primitive.base(), &base);
+                assert_eq!(primitive.material(), 9);
+                if let Some(expected) = expected {
+                    assert_eq!(primitive.base(), &expected);
+                }
+                expected = Some(base);
+                if enabled {
+                    assert!(
+                        primitive
+                            .lod_set(VertexType::PACKED_NORMAL)
+                            .unwrap()
+                            .levels()
+                            .len()
+                            > 1
+                    );
+                    assert!(
+                        primitive
+                            .lod_set(VertexType::POSITION)
+                            .unwrap()
+                            .levels()
+                            .len()
+                            > 1
+                    );
+                    assert_full_detail_and_compact_lods(&primitive);
+                } else {
+                    assert!(primitive.lod_sets().is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn imported_source_deformation_is_a_fact_not_a_lod_storage_veto() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = grid(2, false);
+        let mut data = source
+            .vertex_data()
+            .chunks_exact(4)
+            .flat_map(|value| f32::from_ne_bytes(value.try_into().unwrap()).to_le_bytes())
+            .collect::<Vec<_>>();
+        data.extend(
+            source
+                .indices()
+                .as_u32()
+                .into_iter()
+                .flat_map(u32::to_le_bytes),
+        );
+        data.extend([0; 16]); // four sets of u8 joint indices
+        for _ in 0..4 {
+            data.extend(
+                [1.0_f32, 0.0, 0.0, 0.0]
+                    .into_iter()
+                    .flat_map(f32::to_le_bytes),
+            );
+        }
+        data.extend(
+            glam::Mat4::IDENTITY
+                .to_cols_array()
+                .into_iter()
+                .flat_map(f32::to_le_bytes),
+        );
+        assert_eq!(data.len(), 296);
+        fs::write(directory.path().join("geometry.bin"), data).unwrap();
+        let path = directory.path().join("deformation.gltf");
+        fs::write(&path, r#"{
+            "asset": {"version": "2.0"},
+            "buffers": [{"uri": "geometry.bin", "byteLength": 296}],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": 128, "byteStride": 32, "target": 34962},
+                {"buffer": 0, "byteOffset": 128, "byteLength": 24, "target": 34963},
+                {"buffer": 0, "byteOffset": 152, "byteLength": 16, "target": 34962},
+                {"buffer": 0, "byteOffset": 168, "byteLength": 64, "target": 34962},
+                {"buffer": 0, "byteOffset": 232, "byteLength": 64}
+            ],
+            "accessors": [
+                {"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 4, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]},
+                {"bufferView": 0, "byteOffset": 12, "componentType": 5126, "count": 4, "type": "VEC3"},
+                {"bufferView": 0, "byteOffset": 24, "componentType": 5126, "count": 4, "type": "VEC2"},
+                {"bufferView": 1, "componentType": 5125, "count": 6, "type": "SCALAR"},
+                {"bufferView": 2, "componentType": 5121, "count": 4, "type": "VEC4"},
+                {"bufferView": 3, "componentType": 5126, "count": 4, "type": "VEC4"},
+                {"bufferView": 4, "componentType": 5126, "count": 1, "type": "MAT4"}
+            ],
+            "meshes": [
+                {"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2}, "indices": 3}]},
+                {"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2, "JOINTS_0": 4, "WEIGHTS_0": 5}, "indices": 3}]},
+                {"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2}, "indices": 3, "targets": [{"POSITION": 0}]}]}
+            ],
+            "nodes": [
+                {"name": "static", "mesh": 0},
+                {"name": "skinned", "mesh": 1, "skin": 0},
+                {"name": "morph", "mesh": 2},
+                {"name": "root"}
+            ],
+            "skins": [{"joints": [3], "inverseBindMatrices": 6}],
+            "scenes": [{"nodes": [0, 1, 2, 3]}],
+            "scene": 0
+        }"#).unwrap();
+        for name in ["static", "skinned", "morph"] {
+            for ignore_skin in [false, true] {
+                let disabled: MeshAsset = toml::from_str(&format!(
+                    "name = '{name}'\nignore-skin = {ignore_skin}\ntangents = false"
+                ))
+                .unwrap();
+                let base = disabled.to_mesh(&path).unwrap();
+                let mut enabled = disabled.clone();
+                enabled.lods = Some(
+                    toml::from_str::<MeshAsset>(LOD_REQUESTS)
+                        .unwrap()
+                        .lods
+                        .unwrap(),
+                );
+                let mesh = enabled.to_mesh(&path).unwrap();
+                assert_eq!(mesh.skin().is_some(), name == "skinned" && !ignore_skin);
+                assert_eq!(mesh.primitives().len(), 1);
+                let primitive = &mesh.primitives()[0];
+                assert_eq!(primitive.base(), base.primitives()[0].base());
+                assert_eq!(primitive.material(), base.primitives()[0].material());
+                assert_eq!(
+                    primitive
+                        .base()
+                        .vertex_type()
+                        .contains(VertexType::JOINTS_WEIGHTS),
+                    name == "skinned" && !ignore_skin
+                );
+                assert_eq!(primitive.lod_sets().len(), 4);
+                assert_eq!(
+                    mesh.data("pak.source-deformation")
+                        .unwrap()
+                        .as_iter()
+                        .unwrap()
+                        .next()
+                        .unwrap()
+                        .as_bool(),
+                    Some(name != "static")
+                );
+                if name == "static" {
+                    assert_full_detail_and_compact_lods(primitive);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mesh_ffi_input_validation_rejects_malformed_pairs() {
+        let asset = MeshAsset::new("unused.glb");
+        for (mut vertices, stride, mut indices) in [
+            (vec![0; 12], 12, vec![0, 1, 2]),
+            (vec![0; 36], 12, vec![0, 1]),
+            (vec![0; 13], 12, vec![0, 0, 0]),
+            (vec![0; 12], 0, vec![0, 0, 0]),
+            (f32::NAN.to_ne_bytes().repeat(3), 12, vec![0, 0, 0]),
+        ] {
+            assert!(
+                asset
+                    .optimize_mesh(&mut indices, &mut vertices, stride)
+                    .is_err()
+            );
+            assert!(
+                asset
+                    .reduce_mesh_to_max_index(&mut indices, &mut vertices, stride)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn imported_material_seams_survive_every_guide_and_shadow_level() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = grid(17, true);
+        let mut data = source
+            .vertex_data()
+            .chunks_exact(4)
+            .flat_map(|v| f32::from_ne_bytes(v.try_into().unwrap()).to_le_bytes())
+            .collect::<Vec<_>>();
+        let vertex_bytes = data.len();
+        let indices = source.indices().as_u32();
+        let left = indices
+            .chunks_exact(3)
+            .filter(|t| t.iter().all(|&idx| source.position(idx).x <= 8.0))
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        let right = indices
+            .chunks_exact(3)
+            .filter(|t| t.iter().any(|&idx| source.position(idx).x > 8.0))
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        data.extend(left.iter().chain(&right).flat_map(|idx| idx.to_le_bytes()));
+        std::fs::write(directory.path().join("geometry.bin"), &data).unwrap();
+        let path = directory.path().join("materials.gltf");
+        std::fs::write(&path, format!(r#"{{
+            "asset": {{"version": "2.0"}},
+            "buffers": [{{"uri": "geometry.bin", "byteLength": {total}}}],
+            "bufferViews": [
+                {{"buffer": 0, "byteLength": {vertex_bytes}, "byteStride": 32}},
+                {{"buffer": 0, "byteOffset": {vertex_bytes}, "byteLength": {index_bytes}}}
+            ],
+            "accessors": [
+                {{"bufferView": 0, "componentType": 5126, "count": 289, "type": "VEC3", "min": [0,0,0], "max": [16,16,11]}},
+                {{"bufferView": 0, "byteOffset": 12, "componentType": 5126, "count": 289, "type": "VEC3"}},
+                {{"bufferView": 0, "byteOffset": 24, "componentType": 5126, "count": 289, "type": "VEC2"}},
+                {{"bufferView": 1, "componentType": 5125, "count": {left_count}, "type": "SCALAR"}},
+                {{"bufferView": 1, "byteOffset": {left_bytes}, "componentType": 5125, "count": {right_count}, "type": "SCALAR"}}
+            ],
+            "materials": [{{}}, {{}}],
+            "meshes": [{{"primitives": [
+                {{"attributes": {{"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2}}, "indices": 3, "material": 0}},
+                {{"attributes": {{"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2}}, "indices": 4, "material": 1}}
+            ]}}],
+            "nodes": [{{"mesh": 0}}], "scenes": [{{"nodes": [0]}}], "scene": 0
+        }}"#, total = data.len(), index_bytes = (left.len() + right.len()) * 4, left_count = left.len(), left_bytes = left.len() * 4, right_count = right.len())).unwrap();
+        let asset: MeshAsset = toml::from_str(&format!("{LOD_REQUESTS}\ntangents = false\nmin-lod-triangles = 8\nlod-target-error = 0.1\nlod-lock-border = false")).unwrap();
+        let mesh = asset.to_mesh(path).unwrap();
+        assert_eq!(mesh.primitives().len(), 2);
+        for (idx, primitive) in mesh.primitives().iter().enumerate() {
+            assert_eq!(primitive.material(), idx as u8);
+            assert_full_detail_and_compact_lods(primitive);
+            for set in primitive
+                .lod_sets()
+                .iter()
+                .filter(|set| !set.vertex_type().contains(VertexType::TEXTURE0))
+            {
+                assert!(set.levels().len() > 1);
+                for lod in set.levels() {
+                    let seam = (0..lod.geometry().vertex_count() as u32)
+                        .map(|idx| lod.geometry().position(idx))
+                        .filter(|p| p.x == 8.0)
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        seam.len(),
+                        17,
+                        "shared material border must retain every position"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
