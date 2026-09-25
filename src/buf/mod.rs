@@ -80,6 +80,25 @@ pub trait DerivedAssetBaker {
         Ok(())
     }
 
+    /// Number of meshes to process together. The default keeps stateful bakers serial.
+    fn mesh_batch_size(&self) -> usize {
+        1
+    }
+
+    /// Augments a batch while preserving its mesh ID order. Independent bakers may override this.
+    fn bake_meshes(
+        &mut self,
+        first_index: usize,
+        meshes: &mut [crate::mesh::Mesh],
+    ) -> anyhow::Result<()> {
+        for (offset, mesh) in meshes.iter_mut().enumerate() {
+            self.bake_mesh(mesh).with_context(|| {
+                format!("baking mesh metadata for mesh {}", first_index + offset)
+            })?;
+        }
+        Ok(())
+    }
+
     fn bake(
         &mut self,
         candidate: &DerivedAssetBakeCandidate<'_>,

@@ -11,7 +11,7 @@ use {
         pak_hash_stream,
         scene::Scene,
     },
-    anyhow::{Context as _, bail},
+    anyhow::bail,
     parking_lot::Mutex,
     serde::{Serialize, de::DeserializeOwned},
     std::{
@@ -521,16 +521,23 @@ impl Writer {
             return Ok(());
         };
 
-        for idx in 0..self.data.meshes.len() {
-            let source = self.data.meshes[idx].data_range()?;
-            let mut mesh: Mesh = spool.read(&source)?;
+        let batch_size = baker.as_deref().map_or(1, |baker| baker.mesh_batch_size());
+        anyhow::ensure!(batch_size > 0, "mesh batch size must be positive");
+        for first_index in (0..self.data.meshes.len()).step_by(batch_size) {
+            let end = first_index
+                .saturating_add(batch_size)
+                .min(self.data.meshes.len());
+            let mut meshes = (first_index..end)
+                .map(|idx| spool.read::<Mesh>(&self.data.meshes[idx].data_range()?))
+                .collect::<Result<Vec<_>, _>>()?;
             if let Some(baker) = baker.as_deref_mut() {
-                baker
-                    .bake_mesh(&mut mesh)
-                    .with_context(|| format!("baking mesh metadata for mesh {idx}"))?;
+                baker.bake_meshes(first_index, &mut meshes)?;
             }
 
-            self.data.meshes[idx] = self.spool(&mesh, self.mesh_policies[idx])?;
+            for (offset, mesh) in meshes.iter().enumerate() {
+                let idx = first_index + offset;
+                self.data.meshes[idx] = self.spool(mesh, self.mesh_policies[idx])?;
+            }
         }
 
         Ok(())
@@ -543,22 +550,32 @@ impl Writer {
         self.finalize_meshes(Some(baker))?;
 
         let mut candidates = std::collections::BTreeSet::new();
+        // Keep only primitive material slots; decoded meshes can be large and refs repeat them.
+        let mut material_slots_by_mesh: Vec<Option<Box<[usize]>>> =
+            vec![None; self.data.meshes.len()];
         for scene in self.data.scenes.clone() {
             let scene: Scene = self.read_spooled(&scene)?;
             for reference in scene.refs() {
                 let Some(mesh_id) = reference.mesh() else {
                     continue;
                 };
-                let Some(mesh) = self.data.meshes.get(mesh_id.0).cloned() else {
+                let Some(material_slots) = material_slots_by_mesh.get_mut(mesh_id.0) else {
                     continue;
                 };
-                let mesh: Mesh = self.read_spooled(&mesh)?;
-                for (primitive_index, primitive) in mesh.primitives().iter().enumerate() {
-                    let Some(material) = reference
-                        .materials()
-                        .get(primitive.material() as usize)
-                        .copied()
-                    else {
+                if material_slots.is_none() {
+                    let mesh = self.data.meshes[mesh_id.0].clone();
+                    let mesh: Mesh = self.read_spooled(&mesh)?;
+                    *material_slots = Some(
+                        mesh.primitives()
+                            .iter()
+                            .map(|primitive| primitive.material() as usize)
+                            .collect(),
+                    );
+                }
+                for (primitive_index, &material_slot) in
+                    material_slots.as_deref().unwrap().iter().enumerate()
+                {
+                    let Some(material) = reference.materials().get(material_slot).copied() else {
                         continue;
                     };
                     candidates.insert((
@@ -573,6 +590,7 @@ impl Writer {
         }
 
         let mut outputs = Vec::new();
+        let mut cached_mesh: Option<(MeshId, Mesh)> = None;
         for (mesh_id, primitive_index, material_id) in candidates {
             let Some(material) = self.data.materials.get(material_id.0) else {
                 continue;
@@ -581,10 +599,13 @@ impl Writer {
                 continue;
             }
             let color = material.color;
-            let Some(mesh) = self.data.meshes.get(mesh_id.0).cloned() else {
-                continue;
-            };
-            let mesh: Mesh = self.read_spooled(&mesh)?;
+            if cached_mesh.as_ref().map(|(id, _)| *id) != Some(mesh_id) {
+                let Some(mesh) = self.data.meshes.get(mesh_id.0).cloned() else {
+                    continue;
+                };
+                cached_mesh = Some((mesh_id, self.read_spooled(&mesh)?));
+            }
+            let mesh = &cached_mesh.as_ref().unwrap().1;
             let Some(primitive) = mesh.primitives().get(primitive_index as usize) else {
                 continue;
             };
@@ -933,7 +954,7 @@ mod test {
             DerivedAssetBaker, blob::BlobAsset, mesh::MeshAsset,
         },
         crate::{
-            BlobId, MaterialInfo, MaterialParameterFlags, Pak as _, PakBuf,
+            BlobId, MaterialId, MaterialInfo, MaterialParameterFlags, Pak as _, PakBuf,
             bitmap::{
                 Bitmap, BitmapColor, BitmapCompression, BitmapFormat, CompressedBitmap,
                 CompressedMip,
@@ -1038,6 +1059,53 @@ mod test {
             let mesh: Mesh = writer.read_spooled(&source).unwrap();
             assert!(mesh.data("visited").unwrap().expect_bool());
             assert!(mesh.blob().is_none());
+        }
+    }
+
+    #[test]
+    fn mesh_batches_commit_in_id_order() {
+        struct Baker(Vec<(usize, usize)>);
+
+        impl DerivedAssetBaker for Baker {
+            fn mesh_batch_size(&self) -> usize {
+                2
+            }
+
+            fn bake_meshes(
+                &mut self,
+                first_index: usize,
+                meshes: &mut [Mesh],
+            ) -> anyhow::Result<()> {
+                self.0.push((first_index, meshes.len()));
+                for (offset, mesh) in meshes.iter_mut().enumerate() {
+                    mesh.data.insert(
+                        "mesh-index",
+                        crate::scene::DataData::Number((first_index + offset) as i32),
+                    );
+                }
+                Ok(())
+            }
+
+            fn bake(
+                &mut self,
+                _: &DerivedAssetBakeCandidate<'_>,
+            ) -> anyhow::Result<Box<[DerivedAssetBakeOutput]>> {
+                panic!("unexpected OMM candidate")
+            }
+        }
+
+        let mut writer = Writer::default();
+        for _ in 0..5 {
+            writer
+                .push_mesh(Mesh::new(Vec::new(), None).unwrap(), policy(None))
+                .unwrap();
+        }
+        let mut baker = Baker(Vec::new());
+        writer.bake_derived_assets(&mut baker).unwrap();
+        assert_eq!(baker.0, [(0, 2), (2, 2), (4, 1)]);
+        for (idx, source) in writer.data.meshes.clone().iter().enumerate() {
+            let mesh: Mesh = writer.read_spooled(source).unwrap();
+            assert_eq!(mesh.data("mesh-index").unwrap().expect_i32(), idx as i32);
         }
     }
 
@@ -1357,6 +1425,73 @@ mod test {
             }
             previous = Some(output);
         }
+    }
+
+    #[test]
+    fn repeated_mesh_preserves_material_bindings() {
+        struct Baker(Vec<MaterialId>);
+
+        impl DerivedAssetBaker for Baker {
+            fn bake(
+                &mut self,
+                candidate: &DerivedAssetBakeCandidate<'_>,
+            ) -> anyhow::Result<Box<[DerivedAssetBakeOutput]>> {
+                self.0.push(candidate.material);
+                Ok(Vec::new().into_boxed_slice())
+            }
+        }
+
+        let mut writer = Writer::default();
+        let color = writer
+            .push_bitmap(
+                Bitmap::new(BitmapColor::Srgb, BitmapFormat::Rgba, 1, 1, [0; 4]).with_compressed(
+                    CompressedBitmap::new(
+                        BitmapCompression::Bc3,
+                        vec![CompressedMip::new(1, 1, vec![0; 16])],
+                    ),
+                ),
+                policy(None),
+            )
+            .unwrap();
+        let material = MaterialInfo {
+            alpha_test: true,
+            color,
+            emissive: None,
+            normal: None,
+            params: None,
+            params_used: MaterialParameterFlags::empty(),
+            data: Default::default(),
+        };
+        let first = writer.push_material(material.clone());
+        let second = writer.push_material(material);
+        let mesh = writer
+            .push_mesh(
+                Mesh::new(
+                    vec![Primitive::new(0, crate::mesh::test::grid(17, true)).unwrap()],
+                    None,
+                )
+                .unwrap(),
+                policy(None),
+            )
+            .unwrap();
+        writer
+            .push_scene(
+                Scene::new(
+                    [],
+                    [first, second].map(|material| ReferenceData {
+                        materials: vec![material],
+                        mesh: Some(mesh),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap(),
+                policy(None),
+            )
+            .unwrap();
+
+        let mut baker = Baker(Vec::new());
+        writer.bake_derived_assets(&mut baker).unwrap();
+        assert_eq!(baker.0, [first, second]);
     }
 
     #[test]

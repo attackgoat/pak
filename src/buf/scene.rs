@@ -4,7 +4,7 @@ use {
         mesh::MeshAsset, parent,
     },
     crate::{
-        SceneId,
+        MaterialId, MeshId, SceneId,
         scene::{DataData, GeometryData, ReferenceData, Scene},
     },
     anyhow::Context,
@@ -17,7 +17,7 @@ use {
         de::{Error, MapAccess, Visitor, value::MapAccessDeserializer},
     },
     std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, HashMap},
         fmt::Formatter,
         marker::PhantomData,
         mem::size_of,
@@ -253,6 +253,9 @@ impl SceneAsset {
                 .collect::<Box<_>>();
 
             let mut references = Vec::with_capacity(self.refs().len());
+            // Reuse dependencies within this scene without changing their first-use ID order.
+            let mut material_ids: HashMap<&AssetRef<MaterialAsset>, MaterialId> = HashMap::new();
+            let mut mesh_ids: HashMap<&AssetRef<MeshAsset>, MeshId> = HashMap::new();
             for reference in self.refs() {
                 // all tags must be lower case (no localized text!)
                 let mut tags = vec![];
@@ -269,42 +272,54 @@ impl SceneAsset {
                     .collect();
                 let mut materials = Vec::with_capacity(reference.materials().len());
                 for material in reference.materials() {
-                    let (src, mut material) = match material {
-                        AssetRef::Asset(material) => (None, material.clone()),
-                        AssetRef::Path(src) if is_toml(src) => {
-                            let mut material = Asset::read(src)
-                                .context("Reading material asset")?
-                                .into_material()
-                                .with_context(|| format!("Not a material: {}", src.display()))?;
-                            material.canonicalize(&project_dir, parent(src));
-                            (Some(src), material)
-                        }
-                        AssetRef::Path(src) => (None, MaterialAsset::new(src)),
-                    };
-                    materials.push(
-                        material
+                    let id = if let Some(&id) = material_ids.get(material) {
+                        id
+                    } else {
+                        let (src, mut asset) = match material {
+                            AssetRef::Asset(asset) => (None, asset.clone()),
+                            AssetRef::Path(src) if is_toml(src) => {
+                                let mut asset = Asset::read(src)
+                                    .context("Reading material asset")?
+                                    .into_material()
+                                    .with_context(|| {
+                                        format!("Not a material: {}", src.display())
+                                    })?;
+                                asset.canonicalize(&project_dir, parent(src));
+                                (Some(src), asset)
+                            }
+                            AssetRef::Path(src) => (None, MaterialAsset::new(src)),
+                        };
+                        let id = asset
                             .bake(rt, writer, &project_dir, src)
-                            .context("Baking scene material")?,
-                    );
+                            .context("Baking scene material")?;
+                        material_ids.insert(material, id);
+                        id
+                    };
+                    materials.push(id);
                 }
 
                 let mesh = if let Some(mesh) = reference.mesh() {
-                    let (src, mesh) = match mesh {
-                        AssetRef::Asset(mesh) => (None, mesh.clone()),
-                        AssetRef::Path(src) if is_toml(src) => {
-                            let mut mesh = Asset::read(src)
-                                .context("Reading mesh asset")?
-                                .into_mesh()
-                                .with_context(|| format!("Not a mesh: {}", src.display()))?;
-                            mesh.canonicalize(&project_dir, parent(src));
-                            (Some(src), mesh)
-                        }
-                        AssetRef::Path(src) => (None, MeshAsset::new(src)),
-                    };
-                    Some(
-                        mesh.bake(writer, &project_dir, src)
-                            .context("Baking scene mesh")?,
-                    )
+                    if let Some(&id) = mesh_ids.get(mesh) {
+                        Some(id)
+                    } else {
+                        let (src, asset) = match mesh {
+                            AssetRef::Asset(asset) => (None, asset.clone()),
+                            AssetRef::Path(src) if is_toml(src) => {
+                                let mut asset = Asset::read(src)
+                                    .context("Reading mesh asset")?
+                                    .into_mesh()
+                                    .with_context(|| format!("Not a mesh: {}", src.display()))?;
+                                asset.canonicalize(&project_dir, parent(src));
+                                (Some(src), asset)
+                            }
+                            AssetRef::Path(src) => (None, MeshAsset::new(src)),
+                        };
+                        let id = asset
+                            .bake(writer, &project_dir, src)
+                            .context("Baking scene mesh")?;
+                        mesh_ids.insert(mesh, id);
+                        Some(id)
+                    }
                 } else {
                     None
                 };
