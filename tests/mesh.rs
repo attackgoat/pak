@@ -66,7 +66,7 @@ fn fixture(root: &Path) {
         )).unwrap();
     }
     fs::write(root.join("pak.toml"),
-        "[[content.group]]\nname = 'meshes'\nsegment = 'geometry'\ncompression = 'snap'\nassets = ['a.toml', 'b.toml', 'c.toml']\n"
+        "[[content.group]]\nname = 'meshes'\ncompression = 'snap'\nassets = ['a.toml', 'b.toml', 'c.toml']\n"
     ).unwrap();
 }
 
@@ -231,11 +231,13 @@ fn authored_tangents_without_uv0_bake_and_round_trip() {
 fn previous_mesh_format_is_rejected_before_header_decode() {
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("old.pak");
-    fs::write(&output, b"ATTACKGOAT-PAK-V1.9 ").unwrap();
-    let error = PakBuf::open(output).err().unwrap();
-    assert_eq!(error.kind(), ErrorKind::InvalidData);
-    assert!(error.to_string().contains("V1.10"));
-    assert!(error.to_string().contains("rebake"));
+    for header in [b"ATTACKGOAT-PAK-V1.9 ", b"ATTACKGOAT-PAK-V1.10"] {
+        fs::write(&output, header).unwrap();
+        let error = PakBuf::open(&output).err().unwrap();
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+        assert!(error.to_string().contains("V1.11"));
+        assert!(error.to_string().contains("rebake"));
+    }
 }
 
 #[test]
@@ -328,7 +330,7 @@ fn pack_lod_defaults_cover_direct_keyed_and_inline_imports_with_explicit_overrid
             .unwrap_or_default();
         let manifest = root.join("pak.toml");
         fs::write(&manifest, format!(
-            "[content]\n{fields}\n[content.lod]\nmin-triangles = 23\ngroup-size = 8\nnormal-weight = 0.25\n[[content.group]]\nsegment = 'scene'\ncompression = 'snap'\nassets = ['a-scene.toml']\n\n[[content.group]]\nsegment = 'meshes'\ncompression = 'none'\nassets = ['cube.glb', 'z-*.toml']\n"
+            "[content]\n{fields}\n[content.lod]\nmin-triangles = 23\ngroup-size = 8\nnormal-weight = 0.25\n[[content.group]]\nname = 'scene'\ncompression = 'snap'\nassets = ['a-scene.toml']\n\n[[content.group]]\nname = 'meshes'\ncompression = 'none'\nassets = ['cube.glb', 'z-*.toml']\n"
         )).unwrap();
         let output = root.join("meshes.pak");
         PakBuf::bake_with_dir_without_cargo_watches(&manifest, &output, root).unwrap();

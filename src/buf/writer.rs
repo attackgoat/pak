@@ -39,10 +39,20 @@ pub(super) struct StoragePolicy {
     pub(super) texture_compression: bool,
 }
 
+impl StoragePolicy {
+    fn has_same_encoding(self, other: Self) -> bool {
+        self.compression == other.compression
+            && self.texture_compression == other.texture_compression
+    }
+}
+
 #[derive(Default)]
 pub struct Writer {
     pub(super) lod: super::mesh::lod::LodSettings,
     pub(super) default_lods: Box<[super::mesh::lod::LodRequest]>,
+    pub(super) default_source_lods: bool,
+    pub(super) mesh_lod_requests: Option<super::MeshLodRequests>,
+    pub(super) mesh_sources: super::mesh_source::MeshSourceCache,
     header_compression: Option<Compression>,
     active_policy: StoragePolicy,
     direct_policies: HashMap<Asset, StoragePolicy>,
@@ -274,6 +284,8 @@ impl Writer {
     }
 
     pub fn push_mesh(&mut self, mesh: Mesh, policy: StoragePolicy) -> Result<MeshId, Error> {
+        mesh.validate()
+            .map_err(|error| Error::new(ErrorKind::InvalidData, error))?;
         let id = MeshId(self.data.meshes.len());
         // Keep unfinished meshes out of archive payloads until the metadata hook has run.
         std::mem::swap(&mut self.spool, &mut self.mesh_spool);
@@ -348,13 +360,15 @@ impl Writer {
         asset: Asset,
         policy: StoragePolicy,
     ) -> anyhow::Result<()> {
-        if let Some(existing) = self.direct_policies.insert(asset.clone(), policy)
-            && existing != policy
-        {
-            bail!(
-                "asset {asset:?} is directly declared with conflicting storage policies: {existing:?} and {policy:?}"
-            );
+        if let Some(existing) = self.direct_policies.get(&asset) {
+            if !existing.has_same_encoding(policy) {
+                bail!(
+                    "asset {asset:?} is directly declared with conflicting storage policies: {existing:?} and {policy:?}"
+                );
+            }
+            return Ok(());
         }
+        self.direct_policies.insert(asset, policy);
         Ok(())
     }
 
@@ -393,7 +407,8 @@ impl Writer {
         let Some(entry) = self.ctx.get(asset).copied() else {
             return Ok(None);
         };
-        if entry.policy != requested {
+        // Debug segment placement must not duplicate shared assets or create policy conflicts.
+        if !entry.policy.has_same_encoding(requested) {
             bail!(
                 "asset {asset:?} was requested with conflicting inherited storage policies: {:?} and {:?}",
                 entry.policy,
@@ -535,6 +550,7 @@ impl Writer {
             }
 
             for (offset, mesh) in meshes.iter().enumerate() {
+                mesh.validate()?;
                 let idx = first_index + offset;
                 self.data.meshes[idx] = self.spool(mesh, self.mesh_policies[idx])?;
             }
@@ -811,7 +827,7 @@ impl Writer {
         data: &mut Data,
     ) -> Result<(), Error> {
         let mut magic_bytes = [0u8; 20];
-        magic_bytes.copy_from_slice(b"ATTACKGOAT-PAK-V1.10");
+        magic_bytes.copy_from_slice(b"ATTACKGOAT-PAK-V1.11");
 
         // Write a known value so we can identify this file
         bincode::serde::encode_into_std_write(magic_bytes, &mut writer, bincode::config::legacy())
@@ -1144,6 +1160,68 @@ mod test {
     }
 
     #[test]
+    fn direct_assets_keep_the_first_debug_segment() {
+        let mut writer = Writer::default();
+        let asset = asset();
+        let first = StoragePolicy {
+            segment: 1,
+            ..policy(None)
+        };
+        let second = StoragePolicy {
+            segment: 2,
+            ..first
+        };
+        writer.register_direct_policy(asset.clone(), first).unwrap();
+        writer
+            .register_direct_policy(asset.clone(), second)
+            .unwrap();
+        assert_eq!(writer.policy_for(&asset), first);
+        for conflicting in [
+            StoragePolicy {
+                compression: Some(Compression::Snap),
+                ..second
+            },
+            StoragePolicy {
+                texture_compression: true,
+                ..second
+            },
+        ] {
+            assert!(
+                writer
+                    .register_direct_policy(asset.clone(), conflicting)
+                    .is_err()
+            );
+            assert_eq!(writer.policy_for(&asset), first);
+        }
+    }
+
+    #[test]
+    fn shared_dependencies_reuse_the_first_debug_segment() {
+        let mut writer = Writer::default();
+        writer
+            .set_segments(vec!["first".to_owned(), "second".to_owned()])
+            .unwrap();
+        let asset = asset();
+        let first = StoragePolicy {
+            segment: 1,
+            ..policy(None)
+        };
+        writer.set_active_policy(first);
+        let id = writer.push_blob(vec![1], first).unwrap();
+        writer.commit_asset(asset.clone(), id, None).unwrap();
+        writer.set_active_policy(StoragePolicy {
+            segment: 2,
+            ..first
+        });
+        assert_eq!(
+            writer.asset_id(&asset, Some("shared")).unwrap(),
+            Some(id.into())
+        );
+        assert_eq!(writer.ctx[&asset].policy, first);
+        assert_eq!(writer.data.blobs.len(), 1);
+    }
+
+    #[test]
     fn conflicting_inherited_dependency_policies_error() {
         let mut writer = Writer::default();
         let asset = asset();
@@ -1409,7 +1487,7 @@ mod test {
             let destination = directory.path().join(format!("native-{alternatives}.pak"));
             writer.write(&destination).unwrap();
             let bytes = fs::read(&destination).unwrap();
-            assert_eq!(&bytes[..20], b"ATTACKGOAT-PAK-V1.10");
+            assert_eq!(&bytes[..20], b"ATTACKGOAT-PAK-V1.11");
             let mut pak = PakBuf::open(destination).unwrap();
             let decoded = pak.read_mesh_id(mesh).unwrap();
             assert_eq!(decoded.primitives(), &[expected]);

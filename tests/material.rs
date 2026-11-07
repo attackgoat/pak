@@ -122,9 +122,9 @@ fn high_color_references_keep_shared_bitmap_identity_and_direct_policy() -> Resu
                 &manifest,
                 format!(
                     "[content]\ntexture-compression = true\n\
-                     [[content.group]]\nassets = ['{bitmap_key}.toml']\nsegment = 'shared'\n\
-                     [[content.group]]\nassets = ['material-a.toml']\nsegment = 'a'\n\
-                     [[content.group]]\nassets = ['material-b.toml']\nsegment = 'b'\n"
+                     [[content.group]]\nname = 'shared'\nassets = ['{bitmap_key}.toml']\n\
+                     [[content.group]]\nname = 'a'\nassets = ['material-a.toml']\n\
+                     [[content.group]]\nname = 'b'\nassets = ['material-b.toml']\n"
                 ),
             )?;
             let output = root.join("materials.pak");

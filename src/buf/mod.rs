@@ -9,14 +9,17 @@ mod blob;
 mod content;
 mod material;
 mod mesh;
+mod mesh_source;
 mod scene;
 mod writer;
 
 pub use self::bitmap::{MipQuality, TEXTURE_MIP_PRODUCER, decode_bc3_alpha_mip};
-pub use self::mesh::lod::{LodRequest, LodSettings, ResolvedLodSettings};
+pub use self::mesh::lod::{
+    LodFinalizeSettings, LodGroupRequest, LodRequest, LodSettings, LodSource, ResolvedLodSettings,
+};
 
 /// Include this producer identity, the content manifest and mesh recipes in bake cache keys.
-pub const MESH_LOD_PRODUCER: &str = "clustered-v2-layout-input";
+pub const MESH_LOD_PRODUCER: &str = "clustered-v7-surface-correspondence";
 
 use {
     self::{
@@ -73,6 +76,13 @@ pub struct DerivedAssetBakeOutput {
 }
 
 pub trait DerivedAssetBaker {
+    /// Supplies application requests before import captures appearance references and applies
+    /// index limits. The callback receives resolved settings and metadata and may run concurrently.
+    /// Authored layout requests take precedence over these additional requests.
+    fn mesh_lod_requests(&self) -> Option<MeshLodRequests> {
+        None
+    }
+
     /// Augments each unique final mesh, including meshes without scene references or OMM
     /// candidates. Authored metadata and the associated blob are already available.
     /// Called once after geometry processing and before final archive serialization.
@@ -105,6 +115,16 @@ pub trait DerivedAssetBaker {
     ) -> anyhow::Result<Box<[DerivedAssetBakeOutput]>>;
 }
 
+/// Effective recipe facts available before source geometry is imported.
+pub struct MeshLodImport<'a> {
+    pub data: &'a crate::scene::DataMap,
+    pub normals: bool,
+    pub settings: &'a ResolvedLodSettings,
+}
+
+/// Additional neutral layouts requested before import.
+pub type MeshLodRequests = fn(MeshLodImport<'_>) -> anyhow::Result<Box<[LodRequest]>>;
+
 /// Given some parent directory and a filename, returns just the portion after the directory.
 fn file_key(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> String {
     let res_dir = dir.as_ref();
@@ -131,6 +151,11 @@ fn file_key(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> String {
 
 fn is_cargo_build() -> bool {
     var("CARGO").is_ok()
+}
+
+fn is_debug_bake(profile: Option<&str>) -> bool {
+    // Build dependencies can disable debug assertions even when the target uses the dev profile.
+    profile.map_or(cfg!(debug_assertions), |profile| profile == "debug")
 }
 
 /// Returns `true` when a given path has the `.toml` file extension.
@@ -667,17 +692,16 @@ impl PakBuf {
                 );
             }
             writer.default_lods = content.default_lod_requests().into();
+            writer.default_source_lods = content.default_source_lods();
+            writer.mesh_lod_requests = baker.as_ref().and_then(|baker| baker.mesh_lod_requests());
             content.lod.resolve(&LodSettings::default())?;
             writer.lod = content.lod.clone();
             writer.with_compression_is(content.compression()?);
         }
-        let segment_names = content.segment_names()?;
-        writer.lock().set_segments(segment_names.clone())?;
-        let segment_ids = segment_names
-            .into_iter()
-            .enumerate()
-            .map(|(index, name)| (name, index as u16 + 1))
-            .collect::<std::collections::BTreeMap<_, _>>();
+        let debug_bake = is_debug_bake(var("PROFILE").ok().as_deref());
+        if debug_bake {
+            writer.lock().set_segments(content.debug_segment_names())?;
+        }
 
         let mut planned = Vec::new();
         for selected in content.selected_assets(&src_dir)? {
@@ -716,11 +740,12 @@ impl PakBuf {
                 asset => asset,
             };
             let policy = StoragePolicy {
-                segment: selected
-                    .segment
-                    .as_ref()
-                    .map(|name| segment_ids[name])
-                    .unwrap_or(0),
+                segment: if debug_bake {
+                    // set_segments checked that every enabled group fits in a segment ID.
+                    selected.group as u16 + 1
+                } else {
+                    0
+                },
                 compression: selected.compression,
                 texture_compression: selected.texture_compression,
             };
@@ -981,7 +1006,18 @@ impl<'de> Deserialize<'de> for Rotation {
 
 #[cfg(test)]
 mod tests {
-    use {super::file_key, std::path::Path};
+    use {
+        super::{file_key, is_debug_bake},
+        std::path::Path,
+    };
+
+    #[test]
+    fn cargo_profile_controls_debug_baking_before_dependency_debug_assertions() {
+        assert!(is_debug_bake(Some("debug")));
+        assert!(!is_debug_bake(Some("release")));
+        assert!(!is_debug_bake(Some("distribution")));
+        assert_eq!(is_debug_bake(None), cfg!(debug_assertions));
+    }
 
     #[test]
     fn file_keys_use_forward_slashes_on_every_platform() {

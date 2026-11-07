@@ -26,7 +26,7 @@ fn fixture(root: &Path) {
         "[scene]\n[[scene.ref]]\nmesh = { src = 'cube.glb', offset = [2.0, 0.0, 0.0] }\n",
     )
     .unwrap();
-    fs::write(root.join("pak.toml"), "[content]\ndefault-lods = [{layout='POSITION', simplify=true}, {layout='PACKED_NORMAL', simplify=true}, {layout='PACKED_NORMAL | TEXTURE0', simplify=false}]\n[content.lod]\nmin-triangles = 1\ntarget-error = 0.1\n[[content.group]]\nassets = ['a,*toml', 'off.toml', 'scene.toml']\nsegment = 'geometry'\ncompression = 'snap'\n").unwrap();
+    fs::write(root.join("pak.toml"), "[content]\ndefault-lods = [{layout='POSITION', simplify=true}, {layout='PACKED_NORMAL', simplify=true}, {layout='PACKED_NORMAL | TEXTURE0', simplify=false}]\n[content.lod]\nmin-triangles = 1\ntarget-error = 0.1\n[[content.group]]\nname = 'geometry'\nassets = ['a,*toml', 'off.toml', 'scene.toml']\ncompression = 'snap'\n").unwrap();
 }
 
 #[test]

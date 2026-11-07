@@ -1,3 +1,10 @@
+mod authored;
+mod grouped;
+mod surface;
+mod voxel;
+
+pub use grouped::{LodFinalizeSettings, LodGroupRequest, LodSource};
+
 use {
     super::MeshAsset,
     crate::{
@@ -42,6 +49,10 @@ macro_rules! settings {
 }
 
 settings! {
+    join: bool = false,
+    voxelize: bool = false,
+    voxel_size: OrderedFloat<f32> = OrderedFloat(0.0),
+    voxel_max_cells: usize = 262_144,
     min_triangles: usize = MeshAsset::DEFAULT_LOD_MIN,
     target_ratio: OrderedFloat<f32> = OrderedFloat(0.5),
     target_error: OrderedFloat<f32> = OrderedFloat(MeshAsset::DEFAULT_LOD_TARGET_ERROR),
@@ -54,6 +65,7 @@ settings! {
     proximity_weight: OrderedFloat<f32> = OrderedFloat(1.0),
     alignment_weight: OrderedFloat<f32> = OrderedFloat(0.0),
     normal_weight: OrderedFloat<f32> = OrderedFloat(0.5),
+    texture_weight: OrderedFloat<f32> = OrderedFloat(1.0),
     permissive_retry: bool = true,
     lock_border: bool = false,
     min_reduction: OrderedFloat<f32> = OrderedFloat(0.01),
@@ -63,6 +75,16 @@ settings! {
 
 impl ResolvedLodSettings {
     fn validate(&self) -> anyhow::Result<()> {
+        ensure!(
+            self.voxel_size.0.is_finite()
+                && self.voxel_size.0 >= 0.0
+                && (!self.voxelize || self.voxel_size.0 > 0.0),
+            "voxel-size must be finite and positive when voxelize is enabled"
+        );
+        ensure!(
+            (1..=16_777_216).contains(&self.voxel_max_cells),
+            "voxel-max-cells must be 1..16777216"
+        );
         ensure!(self.min_triangles > 0, "lod min-triangles must be positive");
         ensure!(
             (3..=256).contains(&self.cluster_vertices),
@@ -88,6 +110,7 @@ impl ResolvedLodSettings {
             ("proximity-weight", self.proximity_weight.0),
             ("alignment-weight", self.alignment_weight.0),
             ("normal-weight", self.normal_weight.0),
+            ("texture-weight", self.texture_weight.0),
         ] {
             ensure!(
                 value.is_finite() && value >= 0.0,
@@ -140,6 +163,10 @@ impl LodRequest {
             "lod request and input layouts differ"
         );
         settings.validate()?;
+        ensure!(
+            !self.simplify || (!settings.join && !settings.voxelize),
+            "join/voxelize require LodGroupRequest"
+        );
         let mut locks = BTreeSet::new();
         for position in locked_positions {
             let position = DVec3::from_array(position.map(f64::from));
@@ -148,18 +175,22 @@ impl LodRequest {
         }
         let (levels, stop, metric) = if self.simplify {
             ensure!(
-                matches!(
-                    self.layout,
-                    VertexType::POSITION | VertexType::PACKED_NORMAL
-                ),
-                "reduction unsupported for requested vertex layout"
+                !self.layout.contains(VertexType::JOINTS_WEIGHTS),
+                "reduction unsupported for joint-weighted vertex layout"
             );
-            let metric =
-                if self.layout == VertexType::PACKED_NORMAL && settings.normal_weight.0 > 0.0 {
-                    LodMetric::AttributeWeightedAbsolute
-                } else {
-                    LodMetric::GeometricAbsolute
-                };
+            let weighted = (settings.normal_weight.0 > 0.0
+                && [VertexType::NORMAL, VertexType::PACKED_NORMAL]
+                    .into_iter()
+                    .any(|flag| self.layout.contains(flag)))
+                || (settings.texture_weight.0 > 0.0
+                    && [VertexType::TEXTURE0, VertexType::TEXTURE1]
+                        .into_iter()
+                        .any(|flag| self.layout.contains(flag)));
+            let metric = if weighted {
+                LodMetric::AttributeWeightedAbsolute
+            } else {
+                LodMetric::GeometricAbsolute
+            };
             let (levels, stop) = clustered_lods(source, &locks, settings)?;
             (levels, stop, metric)
         } else {
@@ -422,6 +453,74 @@ impl MeshAsset {
     }
 }
 
+fn simplification_attributes(
+    source: &Geometry,
+    settings: &ResolvedLodSettings,
+) -> anyhow::Result<(Vec<f32>, Vec<f32>)> {
+    let layout = source.vertex_type();
+    let mut weights = Vec::new();
+    if layout.contains(VertexType::NORMAL) || layout.contains(VertexType::PACKED_NORMAL) {
+        weights.extend([settings.normal_weight.0; 3]);
+    }
+    for flag in [VertexType::TEXTURE0, VertexType::TEXTURE1] {
+        if layout.contains(flag) {
+            weights.extend([settings.texture_weight.0; 2]);
+        }
+    }
+    // Retained vertices keep their complete source bytes, including tangent frames.
+    // Normals and both UV channels guide collapses; no attributes are interpolated.
+    let count = source
+        .vertex_count()
+        .checked_mul(weights.len())
+        .context("lod attribute count overflow")?;
+    let mut attributes = Vec::with_capacity(count);
+    for vertex in source.vertex_data().chunks_exact(layout.stride()) {
+        let mut offset = 12;
+        if layout.contains(VertexType::NORMAL) {
+            attributes.extend(
+                vertex[offset..offset + 12]
+                    .chunks_exact(4)
+                    .map(|value| f32::from_ne_bytes(value.try_into().unwrap())),
+            );
+            offset += 12;
+        } else if layout.contains(VertexType::PACKED_NORMAL) {
+            let x =
+                i16::from_ne_bytes(vertex[offset..offset + 2].try_into().unwrap()) as f32 / 32767.0;
+            let y = i16::from_ne_bytes(vertex[offset + 2..offset + 4].try_into().unwrap()) as f32
+                / 32767.0;
+            let mut normal = vec3(x, y, 1.0 - x.abs() - y.abs());
+            let t = (-normal.z).max(0.0);
+            normal.x += if x >= 0.0 { -t } else { t };
+            normal.y += if y >= 0.0 { -t } else { t };
+            attributes.extend(normal.normalize().to_array());
+            offset += 4;
+        }
+        for flag in [VertexType::TEXTURE0, VertexType::TEXTURE1] {
+            if layout.contains(flag) {
+                attributes.extend(
+                    vertex[offset..offset + 8]
+                        .chunks_exact(4)
+                        .map(|value| f32::from_ne_bytes(value.try_into().unwrap())),
+                );
+                offset += 8;
+            }
+        }
+        if layout.contains(VertexType::TANGENT) {
+            ensure!(
+                vertex[offset..offset + 16]
+                    .chunks_exact(4)
+                    .all(|value| f32::from_ne_bytes(value.try_into().unwrap()).is_finite()),
+                "lod tangent must be finite"
+            );
+        }
+    }
+    ensure!(
+        attributes.iter().all(|value| value.is_finite()),
+        "lod normal and texture attributes must be finite"
+    );
+    Ok((attributes, weights))
+}
+
 fn clustered_lods(
     source: Geometry,
     seams: &BTreeSet<Position>,
@@ -452,27 +551,7 @@ fn clustered_lods(
     let positions = (0..source.vertex_count() as u32)
         .map(|idx| position_key(source.position(idx)))
         .collect::<Vec<_>>();
-    let normals = if source.vertex_type() == VertexType::PACKED_NORMAL {
-        vertex_buf
-            .chunks_exact(stride)
-            .flat_map(|vertex| {
-                let x = i16::from_ne_bytes(vertex[12..14].try_into().unwrap()) as f32 / 32767.0;
-                let y = i16::from_ne_bytes(vertex[14..16].try_into().unwrap()) as f32 / 32767.0;
-                let mut normal = vec3(x, y, 1.0 - x.abs() - y.abs());
-                let t = (-normal.z).max(0.0);
-                normal.x += if x >= 0.0 { -t } else { t };
-                normal.y += if y >= 0.0 { -t } else { t };
-                normal.normalize().to_array()
-            })
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    let weights: &[f32] = if normals.is_empty() {
-        &[]
-    } else {
-        &[settings.normal_weight.0; 3]
-    };
+    let (attributes, weights) = simplification_attributes(&source, settings)?;
     // Ignore vertices outside each group's index subset, including unused normal variants.
     let mut opts = SimplifyOptions::Sparse | SimplifyOptions::ErrorAbsolute;
     if settings.lock_border {
@@ -527,9 +606,9 @@ fn clustered_lods(
                         let reduced = simplify_with_attributes_and_locks(
                             &indices,
                             &vertices,
-                            &normals,
-                            weights,
-                            if normals.is_empty() { 0 } else { 12 },
+                            &attributes,
+                            &weights,
+                            weights.len() * std::mem::size_of::<f32>(),
                             &locks,
                             target * 3,
                             limit,
@@ -673,6 +752,8 @@ mod test {
             "min-reduction = nan",
             "target-error = inf",
             "normal-weight = -1.0",
+            "texture-weight = -1.0",
+            "texture-weight = nan",
             "proximity-weight = nan",
             "alignment-weight = -0.1",
             "spatial-split-factor = -1.0",
@@ -795,6 +876,124 @@ mod test {
     }
 
     #[test]
+    fn full_layout_reduction_retains_source_attributes_and_absolute_errors() {
+        let grid = grid(17, true);
+        let mut vertices = Vec::new();
+        for vertex in grid.vertex_data().chunks_exact(grid.vertex_type().stride()) {
+            vertices.extend_from_slice(vertex);
+            for value in [0.25_f32, 0.75, 1.0, 0.0, 0.0, -1.0] {
+                vertices.extend_from_slice(&value.to_ne_bytes());
+            }
+        }
+        let layout = grid.vertex_type() | VertexType::TEXTURE1 | VertexType::TANGENT;
+        let source = Geometry::new(&vertices, layout, grid.indices().clone()).unwrap();
+        let settings: LodSettings = toml::from_str(
+            "min-triangles=8\ntarget-error=0.1\nlock-border=true\ntexture-weight=0.25",
+        )
+        .unwrap();
+        let settings = settings.resolve(&LodSettings::default()).unwrap();
+        let (attributes, weights) = simplification_attributes(&source, &settings).unwrap();
+        assert_eq!(weights, [0.5, 0.5, 0.5, 0.25, 0.25, 0.25, 0.25]);
+        assert_eq!(attributes.len(), source.vertex_count() * weights.len());
+        assert_eq!(&attributes[5..7], [0.25, 0.75]);
+        let request = LodRequest {
+            layout,
+            simplify: true,
+        };
+        let set = request.process(source.clone(), &settings, &[]).unwrap();
+        assert_eq!(set.metric(), LodMetric::AttributeWeightedAbsolute);
+        let first = set.levels()[0].geometry();
+        assert_eq!(first.vertex_type(), source.vertex_type());
+        assert_eq!(first.vertex_data(), source.vertex_data());
+        assert_eq!(
+            crate::mesh::test::triangles(first, true),
+            crate::mesh::test::triangles(&source, true)
+        );
+        assert!(set.levels().len() > 1);
+        let source_records = source
+            .vertex_data()
+            .chunks_exact(layout.stride())
+            .collect::<BTreeSet<_>>();
+        let adapter = VertexDataAdapter::new(source.vertex_data(), layout.stride(), 0).unwrap();
+        let budget = settings.target_error.0 * simplify_scale(&adapter);
+        for level in &set.levels()[1..] {
+            assert_eq!(level.geometry().vertex_type(), layout);
+            assert!(
+                level.geometry().indices().triangle_count() < source.indices().triangle_count()
+            );
+            assert!(level.error().is_finite() && level.error() <= budget);
+            assert!(
+                level
+                    .geometry()
+                    .vertex_data()
+                    .chunks_exact(layout.stride())
+                    .all(|vertex| source_records.contains(vertex))
+            );
+        }
+        assert_eq!(request.process(source, &settings, &[]).unwrap(), set);
+    }
+
+    #[test]
+    fn full_layout_reduction_rejects_nonfinite_attributes_before_native_calls() {
+        let grid = grid(9, false);
+        let mut vertices = Vec::new();
+        for vertex in grid.vertex_data().chunks_exact(grid.vertex_type().stride()) {
+            vertices.extend_from_slice(vertex);
+            for value in [0.25_f32, 0.75, 1.0, 0.0, 0.0, 1.0] {
+                vertices.extend_from_slice(&value.to_ne_bytes());
+            }
+        }
+        let layout = grid.vertex_type() | VertexType::TEXTURE1 | VertexType::TANGENT;
+        let settings = LodSettings::default()
+            .resolve(&LodSettings::default())
+            .unwrap();
+        for offset in [12, 24, 32, 40] {
+            for value in [f32::NAN, f32::INFINITY] {
+                let mut invalid = vertices.clone();
+                invalid[offset..offset + 4].copy_from_slice(&value.to_ne_bytes());
+                let source = Geometry::new(&invalid, layout, grid.indices().clone()).unwrap();
+                assert!(
+                    LodRequest {
+                        layout,
+                        simplify: true
+                    }
+                    .process(source, &settings, &[])
+                    .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn joint_weighted_reduction_remains_unsupported() {
+        let source = Geometry::new(
+            &[0; 60],
+            VertexType::JOINTS_WEIGHTS,
+            IndexBuffer::new(&[0, 1, 2]).unwrap(),
+        )
+        .unwrap();
+        let settings = LodSettings::default()
+            .resolve(&LodSettings::default())
+            .unwrap();
+        assert!(
+            LodRequest {
+                layout: VertexType::JOINTS_WEIGHTS,
+                simplify: true
+            }
+            .process(source.clone(), &settings, &[])
+            .is_err()
+        );
+        assert!(
+            LodRequest {
+                layout: VertexType::JOINTS_WEIGHTS,
+                simplify: false
+            }
+            .process(source, &settings, &[])
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn exhausted_budget_and_material_seams_never_discard_geometry() {
         let source = grid(9, true);
         let zero: MeshAsset =
@@ -861,6 +1060,7 @@ mod test {
         let source = grid(9, true);
         let asset: MeshAsset = toml::from_str("min-lod-triangles = 8\nlod-target-error = 1.0\n[lod]\ncluster-vertices = 256\ncluster-triangles = 512\ngroup-size = 1\npermissive-retry = false").unwrap();
         let settings = asset.resolved_lod_settings().unwrap();
+        let (attributes, weights) = simplification_attributes(&source, &settings).unwrap();
         let (lods, _) = asset
             .clustered_lods(source.clone(), &BTreeSet::new())
             .unwrap();
@@ -885,9 +1085,9 @@ mod test {
             let reduced = simplify_with_attributes_and_locks(
                 indices,
                 &adapter,
-                &[],
-                &[],
-                0,
+                &attributes,
+                &weights,
+                weights.len() * std::mem::size_of::<f32>(),
                 &locks,
                 (indices.len() / 3 / 2).max(8) * 3,
                 limit,

@@ -1,3 +1,10 @@
+mod group;
+
+pub use group::{
+    GroupSnapshot, LodGroup, LodGroupMember, LodPartition, LodPreparation, PrimitiveId,
+    SnapshotDiagnostics,
+};
+
 use {
     super::{Mat4, index::IndexBuffer},
     crate::{
@@ -275,7 +282,7 @@ pub struct Lod {
 
 impl Lod {
     /// Partitions a completed static alternative without duplicating vertices.
-    /// The error is the producing simplifier's absolute mesh-local metric, not a
+    /// The error is the producer's absolute mesh-local metric, not a
     /// certified surface/coverage bound or a prefix-max selection envelope.
     pub fn new(mut geometry: Geometry, error: f32) -> anyhow::Result<Self> {
         ensure!(
@@ -428,6 +435,10 @@ pub enum LodMetric {
     SourceOnly,
     GeometricAbsolute,
     AttributeWeightedAbsolute,
+    /// Bidirectional sampled geometric deviation plus any accumulated simplifier error.
+    SampledGeometricAbsolute,
+    /// Sampled preparation deviation plus normal-weighted simplifier error.
+    SampledAttributeWeightedAbsolute,
 }
 
 /// Optional generic producer facts. A caller's purpose or profile name does not belong here.
@@ -515,6 +526,7 @@ pub struct Mesh {
     pub data: DataMap,
     primitives: Vec<Primitive>,
     skin: Option<Skin>,
+    lod_groups: Box<[LodGroup]>,
 }
 
 impl Mesh {
@@ -524,6 +536,7 @@ impl Mesh {
             data: DataMap::default(),
             primitives,
             skin,
+            lod_groups: Box::new([]),
         };
         res.validate()?;
         Ok(res)
@@ -545,6 +558,78 @@ impl Mesh {
         &mut self.primitives
     }
 
+    /// Complete alternatives whose material partitions must be selected together.
+    pub fn lod_groups(&self) -> &[LodGroup] {
+        &self.lod_groups
+    }
+
+    /// Encloses canonical geometry and every finalized alternative in mesh-local space.
+    /// Returns `None` for a mesh with no primitives. Fit consumer bounds after LOD generation.
+    pub fn bounds(&self) -> Option<Bounds> {
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        let mut include = |bounds: Bounds| {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(bounds.min[axis]);
+                max[axis] = max[axis].max(bounds.max[axis]);
+            }
+        };
+        for primitive in &self.primitives {
+            for index in primitive.base().indices().as_u32() {
+                let position = primitive
+                    .base()
+                    .position(index)
+                    .to_array()
+                    .map(|v| v as f32);
+                include(Bounds {
+                    min: position,
+                    max: position,
+                });
+            }
+            for set in primitive.lod_sets() {
+                for lod in set.levels() {
+                    for patch in lod.patches() {
+                        include(patch.bounds());
+                    }
+                }
+            }
+        }
+        for group in &self.lod_groups {
+            for snapshot in group.snapshots() {
+                include(snapshot.bounds());
+            }
+        }
+        (!self.primitives.is_empty()).then_some(Bounds { min, max })
+    }
+
+    /// Replaces grouped alternatives after validating source association and exclusive ownership.
+    pub fn set_lod_groups(&mut self, groups: Box<[LodGroup]>) -> anyhow::Result<()> {
+        self.validate_lod_groups(&groups)?;
+        self.lod_groups = groups;
+        Ok(())
+    }
+
+    fn validate_lod_groups(&self, groups: &[LodGroup]) -> anyhow::Result<()> {
+        let mut owners = std::collections::BTreeSet::new();
+        for group in groups {
+            ensure!(self.skin.is_none(), "grouped lods require static geometry");
+            group.validate_source(&self.primitives)?;
+            for member in group.members() {
+                ensure!(
+                    owners.insert((group.vertex_type(), member.primitive())),
+                    "duplicate grouped lod member for layout"
+                );
+                ensure!(
+                    self.primitives[member.primitive().index()]
+                        .lod_set(group.vertex_type())
+                        .is_none(),
+                    "grouped and primitive lod layouts overlap"
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn set_blob(&mut self, id: BlobId) {
         self.blob = Some(id);
     }
@@ -553,10 +638,11 @@ impl Mesh {
         self.skin.as_ref()
     }
 
-    fn validate(&self) -> anyhow::Result<()> {
+    pub(crate) fn validate(&self) -> anyhow::Result<()> {
         for primitive in &self.primitives {
             primitive.validate()?;
         }
+        self.validate_lod_groups(&self.lod_groups)?;
         Ok(())
     }
 }
@@ -569,6 +655,7 @@ impl<'de> Deserialize<'de> for Mesh {
             data: DataMap,
             primitives: Vec<Primitive>,
             skin: Option<Skin>,
+            lod_groups: Box<[LodGroup]>,
         }
         let data = MeshData::deserialize(deserializer)?;
         let res = Self {
@@ -576,6 +663,7 @@ impl<'de> Deserialize<'de> for Mesh {
             data: data.data,
             primitives: data.primitives,
             skin: data.skin,
+            lod_groups: data.lod_groups,
         };
         res.validate().map_err(D::Error::custom)?;
         Ok(res)
@@ -1182,6 +1270,7 @@ pub(crate) mod test {
             blob: None,
             data: Default::default(),
             primitives: vec![primitive.clone()],
+            lod_groups: Box::new([]),
             skin: Some(Skin {
                 joints: Box::new([]),
             }),

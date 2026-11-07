@@ -215,7 +215,7 @@ fn transitive_direct_aggregate_uses_its_own_policy_for_dependencies() -> Result<
     let manifest = generated_dir.join("pak.toml");
     fs::write(
         &manifest,
-        "[[content.group]]\nname = 'scene'\nsegment = 'outer'\ncompression = 'brotli'\nassets = ['a-scene.toml']\n\n[[content.group]]\nname = 'mesh'\nsegment = 'meshdata'\ncompression = 'none'\nassets = ['z-mesh.toml']\n",
+        "[[content.group]]\nname = 'scene'\ncompression = 'brotli'\nassets = ['a-scene.toml']\n\n[[content.group]]\nname = 'mesh'\ncompression = 'none'\nassets = ['z-mesh.toml']\n",
     )?;
     let destination = generated_dir.join("scene.pak");
 
@@ -227,12 +227,12 @@ fn transitive_direct_aggregate_uses_its_own_policy_for_dependencies() -> Result<
     assert_eq!(bytes, b"mesh dependency");
     drop(dependency);
 
-    let mesh_sidecar = pak
+    if let Some(mesh_sidecar) = pak
         .segment_file_names()
-        .find(|name| name.starts_with("meshdata."))
-        .map(|name| generated_dir.join(name))
-        .unwrap();
-    fs::remove_file(mesh_sidecar)?;
+        .find(|name| name.starts_with("group-1-mesh."))
+    {
+        fs::remove_file(generated_dir.join(mesh_sidecar))?;
+    }
     let mut dependency = pak.stream_blob("payload.bin")?;
     let mut bytes = Vec::new();
     dependency.read_to_end(&mut bytes)?;

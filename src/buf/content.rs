@@ -8,7 +8,7 @@ use {
     glob::glob,
     serde::Deserialize,
     std::{
-        collections::{BTreeMap, BTreeSet},
+        collections::BTreeMap,
         path::{Path, PathBuf},
     },
 };
@@ -24,6 +24,9 @@ pub struct Content {
 
     #[serde(default, rename = "default-lods")]
     default_lods: Box<[super::mesh::lod::LodRequest]>,
+
+    #[serde(default, rename = "default-source-lods")]
+    default_source_lods: bool,
 
     #[serde(default, rename = "texture-compression")]
     texture_compression: bool,
@@ -50,6 +53,11 @@ impl Content {
         &self.default_lods
     }
 
+    /// Complete source-layout chains inherited by meshes unless LOD inheritance is disabled.
+    pub fn default_source_lods(&self) -> bool {
+        self.default_source_lods
+    }
+
     /// An iterator of grouped content file descriptions.
     #[allow(unused)]
     pub fn groups(&self) -> impl Iterator<Item = &Group> {
@@ -72,18 +80,12 @@ impl Content {
         asset_root: impl AsRef<Path>,
     ) -> anyhow::Result<Vec<SelectedAsset>> {
         let asset_root = asset_root.as_ref();
-        self.segment_names()?;
         let inherited = self.compression()?;
         let mut selected: BTreeMap<PathBuf, SelectedAsset> = BTreeMap::new();
 
-        for (group_index, group) in self
-            .groups()
-            .enumerate()
-            .filter(|(_, group)| group.enabled())
-        {
+        for (group_index, group) in self.groups().filter(|group| group.enabled()).enumerate() {
             let compression = group.compression(inherited)?;
             let texture_compression = group.texture_compression(self.texture_compression);
-            let segment = group.segment().map(str::to_owned);
             let group_name = group
                 .name()
                 .map(str::to_owned)
@@ -111,7 +113,6 @@ impl Content {
                 if let Some(existing) = selected.get_mut(&path) {
                     if existing.compression != compression
                         || existing.texture_compression != texture_compression
-                        || existing.segment != segment
                     {
                         anyhow::bail!(
                             "asset {} is selected by groups with conflicting storage policies: {} and {}",
@@ -128,7 +129,7 @@ impl Content {
                             path,
                             compression,
                             texture_compression,
-                            segment: segment.clone(),
+                            group: group_index,
                             groups: vec![group_name.clone()],
                         },
                     );
@@ -165,19 +166,21 @@ impl Content {
         self.buffer_size.is_some() || self.quality.is_some() || self.window_size.is_some()
     }
 
-    pub(crate) fn segment_names(&self) -> anyhow::Result<Vec<String>> {
-        let mut names = BTreeSet::new();
-        for group in self.groups().filter(|group| group.enabled()) {
-            if let Some(name) = group.segment() {
-                if !valid_segment_name(name) {
-                    anyhow::bail!(
-                        "invalid segment name {name:?}; use 1-64 lowercase ASCII letters, digits, '-' or '_'"
-                    );
+    pub(super) fn debug_segment_names(&self) -> Vec<String> {
+        self.groups()
+            .filter(|group| group.enabled())
+            .enumerate()
+            .map(|(index, group)| {
+                // The index keeps duplicate, unnamed and arbitrary display names unambiguous.
+                let mut name = format!("group-{index}");
+                if let Some(label) = group.name().filter(|label| valid_segment_name(label)) {
+                    name.push('-');
+                    name.push_str(label);
+                    name.truncate(64);
                 }
-                names.insert(name.to_owned());
-            }
-        }
-        Ok(names.into_iter().collect())
+                name
+            })
+            .collect()
     }
 }
 
@@ -196,10 +199,9 @@ pub enum CompressionType {
 
 /// Holds a description of asset files.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Group {
     name: Option<String>,
-
-    segment: Option<String>,
 
     compression: Option<CompressionType>,
 
@@ -293,10 +295,6 @@ impl Group {
         self.name.as_deref()
     }
 
-    pub fn segment(&self) -> Option<&str> {
-        self.segment.as_deref()
-    }
-
     /// Individual asset file specification globs to exclude from baking.
     ///
     /// May be a filename, might be folder/**/other.jpeg
@@ -311,7 +309,7 @@ pub(crate) struct SelectedAsset {
     pub(crate) path: PathBuf,
     pub(crate) compression: Option<Compression>,
     pub(crate) texture_compression: bool,
-    pub(crate) segment: Option<String>,
+    pub(crate) group: usize,
     pub(crate) groups: Vec<String>,
 }
 
@@ -388,6 +386,7 @@ mod test {
         let selected = content.selected_assets(&root).unwrap();
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].compression, Some(Compression::Snap));
+        assert_eq!(selected[0].group, 0);
         assert_eq!(selected[0].groups, ["first", "second"]);
         fs::remove_dir_all(root).unwrap();
     }
@@ -495,34 +494,25 @@ mod test {
     }
 
     #[test]
-    fn segment_names_are_strict_sorted_and_deduplicated() {
+    fn debug_segment_names_are_safe_unique_and_skip_disabled_groups() {
         let content = toml::from_str::<Content>(
-            "[[group]]\nsegment = 'z_data'\n\n[[group]]\nsegment = 'a-data'\n\n[[group]]\nsegment = 'z_data'",
+            "[[group]]\nname = 'media'\n\n[[group]]\nenabled = false\n\n[[group]]\nname = 'media'\n\n[[group]]\n\n[[group]]\nname = '../arbitrary display name'",
         )
         .unwrap();
-        assert_eq!(content.segment_names().unwrap(), ["a-data", "z_data"]);
-
-        for name in ["", ".", "..", "a/b", "a\\b", "white space", "café"] {
-            let content =
-                toml::from_str::<Content>(&format!("[[group]]\nsegment = {name:?}")).unwrap();
-            assert!(
-                content.segment_names().is_err(),
-                "accepted unsafe name {name:?}"
-            );
-        }
+        assert_eq!(
+            content.debug_segment_names(),
+            ["group-0-media", "group-1-media", "group-2", "group-3"]
+        );
+        let content =
+            toml::from_str::<Content>(&format!("[[group]]\nname = {:?}", "a".repeat(64))).unwrap();
+        let name = content.debug_segment_names().pop().unwrap();
+        assert_eq!(name.len(), 64);
+        assert!(crate::valid_segment_name(&name));
     }
 
     #[test]
-    fn overlapping_path_with_conflicting_segments_errors() {
-        let root = asset_root();
-        fs::write(root.join("asset.bin"), []).unwrap();
-        let content = toml::from_str::<Content>(
-            "[[group]]\nname = 'one'\nsegment = 'one'\nassets = ['asset.bin']\n\n[[group]]\nname = 'two'\nsegment = 'two'\nassets = ['*.bin']",
-        )
-        .unwrap();
-
-        let error = content.selected_assets(&root).unwrap_err().to_string();
-        assert!(error.contains("conflicting storage policies"));
-        fs::remove_dir_all(root).unwrap();
+    fn segment_is_not_a_content_setting() {
+        let error = toml::from_str::<Content>("[[group]]\nsegment = 'media'").unwrap_err();
+        assert!(error.to_string().contains("unknown field `segment`"));
     }
 }

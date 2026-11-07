@@ -664,10 +664,10 @@ impl PakBuf {
         }
 
         let magic_bytes: [u8; 20] = decode(&mut stream, "Unable to read magic bytes")?;
-        if &magic_bytes != b"ATTACKGOAT-PAK-V1.10" {
+        if &magic_bytes != b"ATTACKGOAT-PAK-V1.11" {
             return Err(Error::new(
                 ErrorKind::InvalidData,
-                "incompatible pak format; expected V1.10 layout-keyed geometry, rebake the archive",
+                "incompatible pak format; expected V1.11 grouped geometry, rebake the archive",
             ));
         }
 
@@ -1422,7 +1422,7 @@ mod test {
     fn root_index_offset_cannot_precede_payload_prefix() {
         let mut encoded = Vec::new();
         bincode::serde::encode_into_std_write(
-            *b"ATTACKGOAT-PAK-V1.10",
+            *b"ATTACKGOAT-PAK-V1.11",
             &mut encoded,
             bincode::config::legacy(),
         )

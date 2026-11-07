@@ -1,7 +1,10 @@
 pub mod lod;
 
 use {
-    super::{Canonicalize, Euler, Rotation, Writer, blob::BlobAsset, file_key, re_run_if_changed},
+    super::{
+        Canonicalize, Euler, Rotation, Writer, blob::BlobAsset, file_key, mesh_source::MeshSource,
+        re_run_if_changed,
+    },
     crate::{
         MeshId,
         index::IndexBuffer,
@@ -12,7 +15,6 @@ use {
     gltf::{
         Buffer, Node,
         buffer::Data,
-        import,
         mesh::{Mode, Reader, util::ReadIndices},
     },
     log::{info, trace, warn},
@@ -54,6 +56,7 @@ use crate::mesh::Lod;
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct MeshAsset {
+    authored_lods: Option<Box<[String]>>,
     blob: Option<PathBuf>,
     pub data: Option<BTreeMap<String, super::scene::Data>>,
     euler: Option<Euler>,
@@ -86,6 +89,7 @@ pub struct MeshAsset {
     scale: Option<Scale>,
 
     scene_name: Option<String>,
+    source_lods: Option<bool>,
     src: Option<PathBuf>,
     tangents: Option<bool>,
 }
@@ -96,6 +100,7 @@ impl MeshAsset {
 
     pub fn new(src: impl AsRef<Path>) -> Self {
         Self {
+            authored_lods: None,
             blob: None,
             data: None,
             euler: None,
@@ -120,6 +125,7 @@ impl MeshAsset {
             rotation: None,
             scale: None,
             scene_name: None,
+            source_lods: None,
             src: Some(src.as_ref().to_path_buf()),
             tangents: None,
         }
@@ -161,10 +167,38 @@ impl MeshAsset {
         {
             let writer = writer.lock();
             effective.lods = Some(self.resolve_lod_requests(&writer.default_lods)?);
+            effective.source_lods = Some(
+                self.source_lods
+                    .unwrap_or(self.inherit_lods() && writer.default_source_lods),
+            );
             effective.lod.inherit(&writer.lod);
         }
-        let mut mesh = effective
-            .to_mesh(src)
+        let requests = writer.lock().mesh_lod_requests;
+        if let Some(requests) = requests {
+            let mut layouts = effective
+                .lod_requests()
+                .iter()
+                .map(|request| (request.layout, request.clone()))
+                .collect::<BTreeMap<_, _>>();
+            let settings = effective.resolved_lod_settings()?;
+            let data = effective
+                .data
+                .iter()
+                .flat_map(|data| data.iter())
+                .map(|(key, value)| (key.clone(), value.clone().into()))
+                .collect();
+            for request in requests(super::MeshLodImport {
+                data: &data,
+                normals: effective.normals(),
+                settings: &settings,
+            })? {
+                layouts.entry(request.layout).or_insert(request);
+            }
+            effective.lods = Some(layouts.into_values().collect());
+        }
+        let source = writer.lock().mesh_sources.load(src);
+        let mut mesh = source
+            .and_then(|source| effective.to_mesh_with_source(src, &source))
             .map_err(|err| Error::new(ErrorKind::InvalidData, err))
             .context("Baking mesh data")?;
 
@@ -285,6 +319,12 @@ impl MeshAsset {
     /// Local requests override matching default layouts; an empty list adds no overrides.
     pub fn lod_requests(&self) -> &[lod::LodRequest] {
         self.lods.as_deref().unwrap_or_default()
+    }
+
+    /// Requests independently selectable chains in each static primitive's complete layout.
+    /// Resolved pack defaults respect `inherit-lods`; an explicit local value takes precedence.
+    pub fn source_lods(&self) -> bool {
+        self.source_lods.unwrap_or(false)
     }
 
     fn resolve_lod_requests(
@@ -892,13 +932,17 @@ impl MeshAsset {
         self.tangents.unwrap_or(true)
     }
 
+    #[cfg(test)]
     fn to_mesh(&self, src: impl AsRef<Path>) -> anyhow::Result<Mesh> {
-        let settings = self.resolved_lod_settings()?;
         let src = src.as_ref();
+        self.to_mesh_with_source(src, &MeshSource::load(src)?)
+    }
 
-        // Load the mesh nodes from this GLTF file
-        let (doc, bufs, _) =
-            import(src).with_context(|| format!("Importing mesh source: {}", src.display()))?;
+    fn to_mesh_with_source(&self, src: &Path, source: &MeshSource) -> anyhow::Result<Mesh> {
+        let MeshSource {
+            document: doc,
+            buffers: bufs,
+        } = source;
         let scene = self
             .scene_name
             .as_deref()
@@ -924,6 +968,24 @@ impl MeshAsset {
             .and_then(|name| mesh_nodes.find(|node| node.name() == Some(name)))
             .or_else(|| mesh_nodes.next())
             .ok_or(anyhow::Error::msg("No mesh found"))?;
+        if self.authored_lods.is_some() {
+            Self::validate_authored_skin(node, bufs)?;
+        }
+        let mut mesh = self.to_mesh_node(src, node, bufs)?;
+        if self.authored_lods.is_some() {
+            self.import_authored_lods(
+                &mut mesh,
+                src,
+                node,
+                &doc.nodes().collect::<Vec<_>>(),
+                bufs,
+            )?;
+        }
+        Ok(mesh)
+    }
+
+    fn to_mesh_node(&self, src: &Path, node: &Node<'_>, bufs: &[Data]) -> anyhow::Result<Mesh> {
+        let settings = self.resolved_lod_settings()?;
         let allow_skin = !self.ignore_skin.unwrap_or_default();
         let mesh_transform =
             Mat4::from_scale_rotation_translation(self.scale(), self.rotation(), self.offset());
@@ -1022,6 +1084,7 @@ impl MeshAsset {
         // Build a Mesh from the parts in this document
         let mut primitives = Vec::with_capacity(parts.len());
         let mut source_deformation = Vec::with_capacity(parts.len());
+        let mut lod_references = Vec::with_capacity(parts.len());
 
         for (material, mut data, deformed) in parts {
             let material = materials.get(&material).copied().unwrap_or_default();
@@ -1062,6 +1125,17 @@ impl MeshAsset {
             vertex_type.validate()?;
             let vertex_stride = vertex_type.stride();
             self.optimize_mesh(&mut data.indices, &mut vertex_buf, vertex_stride)?;
+            lod_references.push(
+                if (settings.join || settings.voxelize) && self.max_index().is_some() {
+                    Some(Geometry::new(
+                        &vertex_buf,
+                        vertex_type,
+                        IndexBuffer::new(&data.indices)?,
+                    )?)
+                } else {
+                    None
+                },
+            );
             self.reduce_mesh_to_max_index(&mut data.indices, &mut vertex_buf, vertex_stride)?;
             let base = Geometry::new(&vertex_buf, vertex_type, IndexBuffer::new(&data.indices)?)?;
             let primitive = Primitive::new(material, base)?;
@@ -1069,13 +1143,14 @@ impl MeshAsset {
             primitives.push(primitive);
         }
 
-        // Material/primitive seams are always protected, independently of external borders.
+        // Primitive-local requests protect every material seam. Grouped requests retain
+        // only seams shared with excluded members, independently of external borders.
         let mut owners = BTreeMap::new();
         let mut seams = BTreeSet::new();
         for (idx, primitive) in primitives
             .iter()
             .enumerate()
-            .filter(|_| !self.lod_requests().is_empty())
+            .filter(|_| self.source_lods() || !self.lod_requests().is_empty())
         {
             for vertex in primitive.base().indices().as_u32() {
                 let position = lod::position_key(primitive.base().position(vertex));
@@ -1087,10 +1162,23 @@ impl MeshAsset {
                 }
             }
         }
-        for primitive in &mut primitives {
-            self.generate_lods_with_seams(primitive, &seams)?;
-        }
-        let mut mesh = Mesh::new(primitives, skin)?;
+        let mut mesh = if settings.join || settings.voxelize {
+            let mut mesh = Mesh::new(primitives, skin)?;
+            self.generate_grouped_lods(
+                &mut mesh,
+                &lod_references,
+                &source_deformation,
+                &settings,
+                &seams,
+            )?;
+            mesh
+        } else {
+            for primitive in &mut primitives {
+                self.generate_lods_with_seams(primitive, &seams)?;
+            }
+            Mesh::new(primitives, skin)?
+        };
+        self.generate_source_lods(&mut mesh, &source_deformation, &settings, &seams)?;
         mesh.data = self
             .data
             .iter()
@@ -1127,6 +1215,167 @@ impl MeshAsset {
             ),
         );
         Ok(mesh)
+    }
+
+    fn generate_source_lods(
+        &self,
+        mesh: &mut Mesh,
+        deformation: &[bool],
+        settings: &lod::ResolvedLodSettings,
+        seams: &BTreeSet<lod::Position>,
+    ) -> anyhow::Result<()> {
+        if !self.source_lods() || self.authored_lods.is_some() {
+            return Ok(());
+        }
+
+        // Source-layout chains preserve primitive/material boundaries. Grouped layout
+        // requests remain separate operations and keep their authored join/voxel policy.
+        let mut settings = settings.clone();
+        settings.join = false;
+        settings.voxelize = false;
+        let locks = seams
+            .iter()
+            .map(|position| position.map(f32::from_bits))
+            .collect::<Vec<_>>();
+        let mut grouped_source_layouts = vec![false; mesh.primitives().len()];
+        for group in mesh.lod_groups() {
+            for member in group.members() {
+                let index = member.primitive().index();
+                if mesh.primitives()[index].base().vertex_type() == group.vertex_type() {
+                    grouped_source_layouts[index] = true;
+                }
+            }
+        }
+        for (idx, primitive) in mesh.primitives_mut().iter_mut().enumerate() {
+            let layout = primitive.base().vertex_type();
+            if deformation[idx]
+                || layout.contains(VertexType::JOINTS_WEIGHTS)
+                || primitive.lod_set(layout).is_some()
+                || grouped_source_layouts[idx]
+            {
+                continue;
+            }
+
+            let set = lod::LodRequest {
+                layout,
+                simplify: true,
+            }
+            .process(primitive.base().clone(), &settings, &locks)
+            .with_context(|| format!("generating source-layout lods for primitive {idx}"))?;
+            let mut sets = primitive.lod_sets().to_vec();
+            sets.push(set);
+            primitive.set_lods(sets.into_boxed_slice())?;
+        }
+        Ok(())
+    }
+
+    fn generate_grouped_lods(
+        &self,
+        mesh: &mut Mesh,
+        references: &[Option<Geometry>],
+        deformation: &[bool],
+        settings: &lod::ResolvedLodSettings,
+        seams: &BTreeSet<lod::Position>,
+    ) -> anyhow::Result<()> {
+        use crate::mesh::{LodProvenance, PrimitiveId};
+        let finalize = lod::LodFinalizeSettings {
+            optimize: self.optimize(),
+            optimize_vertex_cache: self.optimize_vertex_cache(),
+            overdraw_threshold: self.overdraw_threshold(),
+            max_index: self.max_index(),
+        };
+        let mut groups = Vec::new();
+        for request in self.lod_requests() {
+            let mut eligible = Vec::new();
+            for (idx, primitive) in mesh.primitives_mut().iter_mut().enumerate() {
+                let deformed = deformation[idx]
+                    || primitive
+                        .base()
+                        .vertex_type()
+                        .contains(VertexType::JOINTS_WEIGHTS);
+                if request.simplify && !deformed {
+                    eligible.push(idx);
+                } else {
+                    let mut sets = primitive.lod_sets().to_vec();
+                    let mut set = lod::LodRequest {
+                        layout: request.layout,
+                        simplify: false,
+                    }
+                    .process(
+                        primitive.base().project(request.layout)?,
+                        settings,
+                        &[],
+                    )?;
+                    if deformed && request.simplify {
+                        set = set.with_provenance(LodProvenance {
+                            producer: super::MESH_LOD_PRODUCER.to_owned(),
+                            settings: toml::to_string(settings)?,
+                            stop_reason: "unsupported-deformation".into(),
+                        });
+                    }
+                    sets.push(set);
+                    primitive.set_lods(sets.into_boxed_slice())?;
+                }
+            }
+            let batches = if settings.join {
+                vec![eligible]
+            } else {
+                eligible.into_iter().map(|idx| vec![idx]).collect()
+            };
+            for members in batches.into_iter().filter(|m| !m.is_empty()) {
+                let member_set = members.iter().copied().collect::<BTreeSet<_>>();
+                let mut outside = BTreeSet::new();
+                if members.len() != mesh.primitives().len() {
+                    for (_, primitive) in mesh
+                        .primitives()
+                        .iter()
+                        .enumerate()
+                        .filter(|(idx, _)| !member_set.contains(idx))
+                    {
+                        for vertex in primitive.base().indices().as_u32() {
+                            let p = lod::position_key(primitive.base().position(vertex));
+                            if seams.contains(&p) {
+                                outside.insert(p);
+                            }
+                        }
+                    }
+                }
+                let inside = members
+                    .iter()
+                    .flat_map(|&idx| {
+                        let base = mesh.primitives()[idx].base();
+                        base.indices()
+                            .as_u32()
+                            .into_iter()
+                            .map(|vertex| lod::position_key(base.position(vertex)))
+                    })
+                    .collect::<BTreeSet<_>>();
+                outside.retain(|position| inside.contains(position));
+                let locks = outside
+                    .into_iter()
+                    .map(|p| p.map(f32::from_bits))
+                    .collect::<Vec<_>>();
+                let sources = members
+                    .iter()
+                    .map(|&idx| {
+                        Ok(lod::LodSource {
+                            primitive: PrimitiveId(u32::try_from(idx)?),
+                            material: mesh.primitives()[idx].material(),
+                            geometry: mesh.primitives()[idx].base(),
+                            reference: references[idx].as_ref(),
+                        })
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                groups.push(
+                    lod::LodGroupRequest {
+                        layout: request.layout,
+                        simplify: true,
+                    }
+                    .process(&sources, settings, &locks, &finalize)?,
+                );
+            }
+        }
+        mesh.set_lod_groups(groups.into_boxed_slice())
     }
 
     fn re_run_if_changed(&self) {
@@ -2378,6 +2627,26 @@ mod test {
                 );
                 if name == "static" {
                     assert_full_detail_and_compact_lods(primitive);
+                }
+                enabled.lod.join = Some(true);
+                let grouped = enabled.to_mesh(&path).unwrap();
+                assert_eq!(grouped.primitives()[0].base(), primitive.base());
+                if name == "static" {
+                    assert_eq!(grouped.lod_groups().len(), 2);
+                } else {
+                    assert!(grouped.lod_groups().is_empty());
+                    for set in grouped.primitives()[0].lod_sets() {
+                        assert_eq!(set.levels().len(), 1);
+                        if matches!(
+                            set.vertex_type(),
+                            VertexType::POSITION | VertexType::PACKED_NORMAL
+                        ) {
+                            assert_eq!(
+                                set.provenance().unwrap().stop_reason,
+                                "unsupported-deformation"
+                            );
+                        }
+                    }
                 }
             }
         }

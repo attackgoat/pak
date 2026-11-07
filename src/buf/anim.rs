@@ -1,16 +1,13 @@
 use {
-    super::{Asset, Canonicalize, Writer, file_key},
+    super::{Asset, Canonicalize, Writer, file_key, mesh_source::MeshSource},
     crate::{
         AnimationId,
         anim::{Animation, Channel, Outputs},
     },
     anyhow::Context as _,
-    gltf::{
-        animation::{
-            Interpolation as GltfInterpolation,
-            util::{ReadOutputs, Rotations},
-        },
-        import,
+    gltf::animation::{
+        Interpolation as GltfInterpolation,
+        util::{ReadOutputs, Rotations},
     },
     log::{Level::Debug, debug, info, log_enabled, warn},
     parking_lot::Mutex,
@@ -58,7 +55,10 @@ impl AnimationAsset {
         info!("Baking animation: {}", key);
 
         let name = self.name();
-        let (doc, bufs, _) = import(src).context("Importing animation source")?;
+        let MeshSource {
+            document: doc,
+            buffers: bufs,
+        } = MeshSource::load(src).context("Importing animation source")?;
 
         let available_anim_names = doc
             .animations()

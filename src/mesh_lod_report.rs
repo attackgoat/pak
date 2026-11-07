@@ -88,6 +88,21 @@ impl PakBuf {
             "resolved-settings",
             "stop-reason",
         ]);
+        header.extend([
+            "group",
+            "snapshot-triangles",
+            "snapshot-error",
+            "preparation-error",
+            "voxel-cells",
+            "working-triangles",
+            "mixed-material-triangles",
+            "ambiguous-samples",
+            "max-projection-distance",
+            "source-identity",
+            "reference-identity",
+            "transferred-corners",
+            "uv-chart-conflicts",
+        ]);
         row(
             &mut writer,
             &header.into_iter().map(str::to_owned).collect::<Vec<_>>(),
@@ -131,6 +146,7 @@ impl PakBuf {
                             .unwrap_or("")
                             .to_owned(),
                     ]);
+                    cells.extend(vec![String::new(); 13]);
                     row(&mut writer, &cells)?;
                 }
                 for (idx, primitive) in mesh.primitives().iter().enumerate() {
@@ -172,6 +188,7 @@ impl PakBuf {
                         }
                         cells.push(if level == 0 { "full-detail" } else { "reduced" }.to_owned());
                         cells.extend(provenance_cells(provenance));
+                        cells.extend(vec![String::new(); 13]);
                         row(&mut writer, &cells)?;
                         Ok(())
                     };
@@ -193,6 +210,81 @@ impl PakBuf {
                                     set.provenance(),
                                 )?;
                             }
+                        }
+                    }
+                }
+                for (group_idx, group) in mesh.lod_groups().iter().enumerate() {
+                    for (ordinal, snapshot) in group.snapshots().iter().enumerate() {
+                        for member in group.members() {
+                            let base = mesh.primitives()[member.primitive().index()].base();
+                            let lod = snapshot.partition(member.primitive());
+                            let geometry = lod.map(Lod::geometry);
+                            let mut cells = vec![
+                                key.clone(),
+                                id.to_string(),
+                                member.primitive().0.to_string(),
+                                member.material().to_string(),
+                                group.vertex_type().bits().to_string(),
+                                format!("{:?}", group.metric()),
+                                ordinal.to_string(),
+                            ];
+                            if !diagnostics {
+                                let count = geometry.map_or(0, |g| g.indices().triangle_count());
+                                cells.extend([
+                                    base.indices().triangle_count().to_string(),
+                                    base.vertex_count().to_string(),
+                                    count.to_string(),
+                                    geometry.map_or(0, Geometry::vertex_count).to_string(),
+                                    lod.map_or(0, |l| l.patches().len()).to_string(),
+                                    geometry
+                                        .map_or(0, |g| {
+                                            g.vertex_data().len()
+                                                + g.indices().index_count()
+                                                    * g.indices().index_type().stride()
+                                        })
+                                        .to_string(),
+                                    (1.0 - count as f64 / base.indices().triangle_count() as f64)
+                                        .to_string(),
+                                    snapshot.error().to_string(),
+                                    group.selection_error(ordinal).unwrap().to_string(),
+                                ]);
+                            }
+                            cells.push(
+                                if lod.is_none() {
+                                    "omitted"
+                                } else if ordinal != 0 {
+                                    "reduced"
+                                } else if group.snapshots().len() == 1 {
+                                    "source-only"
+                                } else {
+                                    "full-detail"
+                                }
+                                .into(),
+                            );
+                            cells.extend(provenance_cells(Some(group.provenance())));
+                            let facts = snapshot.diagnostics();
+                            cells.extend([
+                                group_idx.to_string(),
+                                snapshot.triangle_count().to_string(),
+                                snapshot.error().to_string(),
+                                group
+                                    .preparation()
+                                    .map_or(String::new(), |p| p.error.to_string()),
+                                group
+                                    .preparation()
+                                    .map_or(String::new(), |p| p.voxel_cells.to_string()),
+                                group
+                                    .preparation()
+                                    .map_or(String::new(), |p| p.working_triangles.to_string()),
+                                facts.mixed_material_triangles.to_string(),
+                                facts.ambiguous_samples.to_string(),
+                                facts.max_projection_distance.to_string(),
+                                format!("{:016x}", member.source_identity()),
+                                format!("{:016x}", member.reference_identity()),
+                                facts.transferred_corners.to_string(),
+                                facts.uv_chart_conflicts.to_string(),
+                            ]);
+                            row(&mut writer, &cells)?;
                         }
                     }
                 }
