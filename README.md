@@ -10,6 +10,8 @@ and its referenced segments together; segment placement is internal, not a manif
 During Cargo build scripts the baker uses the target's `PROFILE`; standalone baking falls back to
 the baker's debug assertions.
 
+See the [changelog](CHANGELOG.md) for archive compatibility and upgrade instructions.
+
 A `.pak` file is written at build time and streamed in at runtime. Each asset package is "baked" from a configuration source file. _Example:_
 
 _Rust code_

@@ -231,7 +231,11 @@ fn authored_tangents_without_uv0_bake_and_round_trip() {
 fn previous_mesh_format_is_rejected_before_header_decode() {
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("old.pak");
-    for header in [b"ATTACKGOAT-PAK-V1.9 ", b"ATTACKGOAT-PAK-V1.10"] {
+    for header in [
+        b"ATTACKGOAT-PAK-V1.0 ",
+        b"ATTACKGOAT-PAK-V1.9 ",
+        b"ATTACKGOAT-PAK-V1.10",
+    ] {
         fs::write(&output, header).unwrap();
         let error = PakBuf::open(&output).err().unwrap();
         assert_eq!(error.kind(), ErrorKind::InvalidData);
