@@ -4,7 +4,7 @@ use {
         mesh::MeshAsset, parent,
     },
     crate::{
-        SceneId,
+        MaterialId, MeshId, SceneId,
         scene::{DataData, GeometryData, ReferenceData, Scene},
     },
     anyhow::Context,
@@ -17,7 +17,7 @@ use {
         de::{Error, MapAccess, Visitor, value::MapAccessDeserializer},
     },
     std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, HashMap},
         fmt::Formatter,
         marker::PhantomData,
         mem::size_of,
@@ -206,55 +206,57 @@ impl SceneAsset {
     ) -> anyhow::Result<SceneId> {
         // Early-out if we have already baked this scene
         let asset = self.clone().into();
-        if let Some(h) = writer.lock().ctx.get(&asset) {
+        let key = file_key(&project_dir, &path);
+        if let Some(h) = writer.lock().asset_id(&asset, Some(&key))? {
             return h.as_scene().context("asset context returned non-scene id");
         }
 
-        let key = file_key(&project_dir, &path);
-
         info!("Baking scene: {}", key);
 
-        let geometries = self
-            .geometries()
-            .iter()
-            .map(|geometry| {
-                let data = geometry
-                    .data()
-                    .map(|(key, value)| (key.clone(), value.clone().into()))
-                    .collect();
+        let scene = Writer::with_asset_policy(writer, &asset, || {
+            let geometries = self
+                .geometries()
+                .iter()
+                .map(|geometry| {
+                    let data = geometry
+                        .data()
+                        .map(|(key, value)| (key.clone(), value.clone().into()))
+                        .collect();
 
-                // all tags must be lower case (no localized text!)
-                let mut tags = vec![];
-                for tag in geometry.tags() {
-                    let baked = tag.as_str().trim().to_lowercase();
-                    if let Err(idx) = tags.binary_search(&baked) {
-                        tags.insert(idx, baked);
+                    // all tags must be lower case (no localized text!)
+                    let mut tags = vec![];
+                    for tag in geometry.tags() {
+                        let baked = tag.as_str().trim().to_lowercase();
+                        if let Err(idx) = tags.binary_search(&baked) {
+                            tags.insert(idx, baked);
+                        }
                     }
-                }
 
-                let mut vertices = Vec::with_capacity(geometry.vertices.len() * size_of::<f32>());
-                geometry
-                    .vertices
-                    .iter()
-                    .map(|vertex| vertex.0.to_ne_bytes())
-                    .for_each(|vertex| vertices.extend_from_slice(&vertex));
+                    let mut vertices =
+                        Vec::with_capacity(geometry.vertices.len() * size_of::<f32>());
+                    geometry
+                        .vertices
+                        .iter()
+                        .map(|vertex| vertex.0.to_ne_bytes())
+                        .for_each(|vertex| vertices.extend_from_slice(&vertex));
 
-                GeometryData {
-                    data,
-                    id: geometry.id().map(|id| id.to_owned()),
-                    indices: geometry.indices.to_vec(),
-                    vertices,
-                    rotation: geometry.rotation().into(),
-                    tags,
-                    translation: geometry.translation().into(),
-                }
-            })
-            .collect::<Box<_>>();
+                    GeometryData {
+                        data,
+                        id: geometry.id().map(|id| id.to_owned()),
+                        indices: geometry.indices.to_vec(),
+                        vertices,
+                        rotation: geometry.rotation().into(),
+                        tags,
+                        translation: geometry.translation().into(),
+                    }
+                })
+                .collect::<Box<_>>();
 
-        let references = self
-            .refs()
-            .iter()
-            .map(|reference| {
+            let mut references = Vec::with_capacity(self.refs().len());
+            // Reuse dependencies within this scene without changing their first-use ID order.
+            let mut material_ids: HashMap<&AssetRef<MaterialAsset>, MaterialId> = HashMap::new();
+            let mut mesh_ids: HashMap<&AssetRef<MeshAsset>, MeshId> = HashMap::new();
+            for reference in self.refs() {
                 // all tags must be lower case (no localized text!)
                 let mut tags = vec![];
                 for tag in reference.tags() {
@@ -268,70 +270,61 @@ impl SceneAsset {
                     .data()
                     .map(|(key, value)| (key.clone(), value.clone().into()))
                     .collect();
-
-                let materials = reference
-                    .materials()
-                    .iter()
-                    .map(|material| match material {
-                        AssetRef::Asset(material) => {
-                            // Material asset specified inline
-                            let material = material.clone();
-                            (None, material)
-                        }
-                        AssetRef::Path(src) => {
-                            if is_toml(src) {
-                                let asset = Asset::read(src)
-                                    .context("Reading material asset")
-                                    .expect("Unable to read material asset");
-
-                                // Asset file reference
-                                let mut material = asset.into_material().unwrap_or_else(|| {
-                                    panic!("Not a material: {}", src.display());
-                                });
-                                let src_dir = parent(src);
-                                material.canonicalize(&project_dir, &src_dir);
-                                (Some(src), material)
-                            } else {
-                                // Material color file reference
-                                (None, MaterialAsset::new(src))
+                let mut materials = Vec::with_capacity(reference.materials().len());
+                for material in reference.materials() {
+                    let id = if let Some(&id) = material_ids.get(material) {
+                        id
+                    } else {
+                        let (src, mut asset) = match material {
+                            AssetRef::Asset(asset) => (None, asset.clone()),
+                            AssetRef::Path(src) if is_toml(src) => {
+                                let mut asset = Asset::read(src)
+                                    .context("Reading material asset")?
+                                    .into_material()
+                                    .with_context(|| {
+                                        format!("Not a material: {}", src.display())
+                                    })?;
+                                asset.canonicalize(&project_dir, parent(src));
+                                (Some(src), asset)
                             }
-                        }
-                    })
-                    .map(|(src, mut material)| {
-                        material
+                            AssetRef::Path(src) => (None, MaterialAsset::new(src)),
+                        };
+                        let id = asset
                             .bake(rt, writer, &project_dir, src)
-                            .expect("material")
-                    })
-                    .collect();
+                            .context("Baking scene material")?;
+                        material_ids.insert(material, id);
+                        id
+                    };
+                    materials.push(id);
+                }
 
-                let mesh = reference
-                    .mesh()
-                    .map(|mesh| match mesh {
-                        AssetRef::Asset(mesh) => {
-                            // Mesh asset specified inline
-                            let mesh = mesh.clone();
-                            (None, mesh)
-                        }
-                        AssetRef::Path(src) => {
-                            if is_toml(src) {
-                                // Asset file reference
-                                let mut mesh = Asset::read(src)
-                                    .context("Reading mesh asset")
-                                    .expect("Unable to read mesh asset")
+                let mesh = if let Some(mesh) = reference.mesh() {
+                    if let Some(&id) = mesh_ids.get(mesh) {
+                        Some(id)
+                    } else {
+                        let (src, asset) = match mesh {
+                            AssetRef::Asset(asset) => (None, asset.clone()),
+                            AssetRef::Path(src) if is_toml(src) => {
+                                let mut asset = Asset::read(src)
+                                    .context("Reading mesh asset")?
                                     .into_mesh()
-                                    .expect("Not a mesh");
-                                let src_dir = parent(src);
-                                mesh.canonicalize(&project_dir, &src_dir);
-                                (Some(src), mesh)
-                            } else {
-                                // Mesh file reference
-                                (None, MeshAsset::new(src))
+                                    .with_context(|| format!("Not a mesh: {}", src.display()))?;
+                                asset.canonicalize(&project_dir, parent(src));
+                                (Some(src), asset)
                             }
-                        }
-                    })
-                    .map(|(src, mesh)| mesh.bake(writer, &project_dir, src).expect("bake mesh"));
+                            AssetRef::Path(src) => (None, MeshAsset::new(src)),
+                        };
+                        let id = asset
+                            .bake(writer, &project_dir, src)
+                            .context("Baking scene mesh")?;
+                        mesh_ids.insert(mesh, id);
+                        Some(id)
+                    }
+                } else {
+                    None
+                };
 
-                ReferenceData {
+                references.push(ReferenceData {
                     data,
                     id: reference.id().map(str::to_owned),
                     materials,
@@ -339,19 +332,21 @@ impl SceneAsset {
                     rotation: reference.rotation().into(),
                     tags,
                     translation: reference.translation().into(),
-                }
-            })
-            .collect::<Box<_>>();
+                });
+            }
+            let references = references.into_boxed_slice();
 
-        let scene = Scene::new(geometries, references)?;
+            Scene::new(geometries, references).map_err(Into::into)
+        })?;
 
         let mut writer = writer.lock();
-        if let Some(h) = writer.ctx.get(&asset) {
+        if let Some(h) = writer.asset_id(&asset, Some(&key))? {
             return h.as_scene().context("asset context returned non-scene id");
         }
 
-        let id = writer.push_scene(scene, key);
-        writer.ctx.insert(asset, id.into());
+        let policy = writer.policy_for(&asset);
+        let id = writer.push_scene(scene, policy)?;
+        writer.commit_asset(asset, id, Some(key))?;
 
         Ok(id)
     }

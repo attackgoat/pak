@@ -279,4 +279,37 @@ mod test {
 
         assert!(result.is_err());
     }
+
+    #[test]
+    fn index_buffer_rejects_empty_and_non_triangle_counts_in_both_paths() {
+        for indices in [vec![], vec![0, 1], vec![0, 1, 2, 3]] {
+            assert!(IndexBuffer::new(&indices).is_err());
+            let invalid = IndexBuffer {
+                buf: indices.iter().map(|&index| index as u8).collect(),
+                ty: IndexType::U8,
+            };
+            let encoded =
+                bincode::serde::encode_to_vec(invalid, bincode::config::legacy()).unwrap();
+            assert!(
+                bincode::serde::decode_from_slice::<IndexBuffer, _>(
+                    &encoded,
+                    bincode::config::legacy()
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn index_buffer_round_trips_each_native_width() {
+        for indices in [[0, 1, 255], [0, 1, 65535], [0, 1, u32::MAX]] {
+            let original = IndexBuffer::new(&indices).unwrap();
+            let encoded =
+                bincode::serde::encode_to_vec(&original, bincode::config::legacy()).unwrap();
+            let (decoded, len): (IndexBuffer, _) =
+                bincode::serde::decode_from_slice(&encoded, bincode::config::legacy()).unwrap();
+            assert_eq!(decoded, original);
+            assert_eq!(len, encoded.len());
+        }
+    }
 }

@@ -5,7 +5,7 @@ use {
 };
 
 #[cfg(feature = "bake")]
-use std::fs;
+use std::{fs, io::Read};
 
 const EPSILON: f32 = 0.0001;
 
@@ -21,6 +21,8 @@ fn deserialize_scene_materials() -> Result<(), Error> {
     {
         let pak_src = TESTS_DATA_DIR.join("scene/pak.toml");
         PakBuf::bake(&pak_src, &pak_dst).unwrap();
+        fs::remove_file(pak_dst.with_extension("mesh-lods.csv"))?;
+        fs::remove_file(pak_dst.with_extension("mesh-lod-diagnostics.csv"))?;
     }
 
     let mut pak = PakBuf::open(&pak_dst)?;
@@ -132,5 +134,110 @@ fn bake_with_generated_content_file() -> Result<(), Error> {
     let mut pak = PakBuf::open(&pak_dst)?;
     pak.read_scene("scene/scene")?;
 
+    Ok(())
+}
+
+#[cfg(feature = "bake")]
+#[test]
+fn repeated_scene_dependencies_preserve_aliases_and_ids() -> Result<(), Error> {
+    let temp = tempfile::tempdir()?;
+    let dir = temp.path();
+    fs::copy(TESTS_DATA_DIR.join("scene/cube.glb"), dir.join("cube.glb"))?;
+    let material = "[material]\ncolor = '#ffffff'\n";
+    fs::write(dir.join("material-a.toml"), material)?;
+    fs::write(dir.join("material-b.toml"), material)?;
+    fs::write(
+        dir.join("mesh.toml"),
+        "[mesh]\nsrc = 'cube.glb'\ninherit-lods = false\nlods = []\noptimize = false\n",
+    )?;
+
+    let inline_mesh = "{ src = 'cube.glb', inherit-lods = false, lods = [], optimize = false }";
+    let mut scene = String::from("[scene]\n");
+    for index in 0..32 {
+        let material = if index == 1 {
+            "material-b.toml"
+        } else {
+            "material-a.toml"
+        };
+        let mesh = if index == 2 {
+            "'mesh.toml'"
+        } else {
+            inline_mesh
+        };
+        scene.push_str(&format!(
+            "\n[[scene.ref]]\nmaterials = ['{material}']\nmesh = {mesh}\n"
+        ));
+    }
+    fs::write(dir.join("scene.toml"), scene)?;
+    fs::write(
+        dir.join("pak.toml"),
+        "[[content.group]]\nassets = ['scene.toml']\n",
+    )?;
+
+    let destination = dir.join("scene.pak");
+    PakBuf::bake(dir.join("pak.toml"), &destination).unwrap();
+    let mut pak = PakBuf::open(destination)?;
+    let scene = pak.read_scene("scene")?;
+    let references = scene.refs().collect::<Vec<_>>();
+    assert_eq!(references.len(), 32);
+    for reference in &references {
+        assert_eq!(reference.materials(), references[0].materials());
+        assert_eq!(reference.mesh(), references[0].mesh());
+    }
+    assert_eq!(pak.material_id("material-a"), pak.material_id("material-b"));
+    assert_eq!(pak.mesh_id("mesh"), references[0].mesh());
+    assert_eq!(pak.material_count(), 1);
+    assert_eq!(pak.mesh_count(), 1);
+
+    drop(pak);
+    Ok(())
+}
+
+#[cfg(feature = "bake")]
+#[test]
+fn transitive_direct_aggregate_uses_its_own_policy_for_dependencies() -> Result<(), Error> {
+    let generated_dir =
+        std::env::temp_dir().join(format!("pak-direct-aggregate-{}", std::process::id()));
+    fs::create_dir_all(&generated_dir)?;
+    fs::copy(
+        TESTS_DATA_DIR.join("scene/cube.glb"),
+        generated_dir.join("cube.glb"),
+    )?;
+    fs::write(generated_dir.join("payload.bin"), b"mesh dependency")?;
+    fs::write(
+        generated_dir.join("z-mesh.toml"),
+        "[mesh]\nsrc = 'cube.glb'\nblob = 'payload.bin'\ninherit-lods = false\nlods = []\noptimize = false\n",
+    )?;
+    fs::write(
+        generated_dir.join("a-scene.toml"),
+        "[scene]\n\n[[scene.ref]]\nmesh = 'z-mesh.toml'\n",
+    )?;
+    let manifest = generated_dir.join("pak.toml");
+    fs::write(
+        &manifest,
+        "[[content.group]]\nname = 'scene'\ncompression = 'brotli'\nassets = ['a-scene.toml']\n\n[[content.group]]\nname = 'mesh'\ncompression = 'none'\nassets = ['z-mesh.toml']\n",
+    )?;
+    let destination = generated_dir.join("scene.pak");
+
+    PakBuf::bake(&manifest, &destination).unwrap();
+    let pak = PakBuf::open(&destination)?;
+    let mut dependency = pak.stream_blob("payload.bin")?;
+    let mut bytes = Vec::new();
+    dependency.read_to_end(&mut bytes)?;
+    assert_eq!(bytes, b"mesh dependency");
+    drop(dependency);
+
+    if let Some(mesh_sidecar) = pak
+        .segment_file_names()
+        .find(|name| name.starts_with("group-1-mesh."))
+    {
+        fs::remove_file(generated_dir.join(mesh_sidecar))?;
+    }
+    let mut dependency = pak.stream_blob("payload.bin")?;
+    let mut bytes = Vec::new();
+    dependency.read_to_end(&mut bytes)?;
+    assert_eq!(bytes, b"mesh dependency");
+
+    fs::remove_dir_all(generated_dir)?;
     Ok(())
 }

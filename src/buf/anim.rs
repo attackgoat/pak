@@ -1,16 +1,13 @@
 use {
-    super::{Asset, Canonicalize, Writer, file_key},
+    super::{Asset, Canonicalize, Writer, file_key, mesh_source::MeshSource},
     crate::{
         AnimationId,
         anim::{Animation, Channel, Outputs},
     },
     anyhow::Context as _,
-    gltf::{
-        animation::{
-            Interpolation as GltfInterpolation,
-            util::{ReadOutputs, Rotations},
-        },
-        import,
+    gltf::animation::{
+        Interpolation as GltfInterpolation,
+        util::{ReadOutputs, Rotations},
     },
     log::{Level::Debug, debug, info, log_enabled, warn},
     parking_lot::Mutex,
@@ -47,18 +44,21 @@ impl AnimationAsset {
             .ok_or(anyhow::Error::msg("unspecified animation source"))?;
 
         let asset = self.clone().into();
+        let key = file_key(&project_dir, &path);
 
-        if let Some(h) = writer.lock().ctx.get(&asset) {
+        if let Some(h) = writer.lock().asset_id(&asset, Some(&key))? {
             return h
                 .as_animation()
                 .context("asset context returned non-animation id");
         }
 
-        let key = file_key(&project_dir, &path);
         info!("Baking animation: {}", key);
 
         let name = self.name();
-        let (doc, bufs, _) = import(src).context("Importing animation source")?;
+        let MeshSource {
+            document: doc,
+            buffers: bufs,
+        } = MeshSource::load(src).context("Importing animation source")?;
 
         let available_anim_names = doc
             .animations()
@@ -199,14 +199,15 @@ impl AnimationAsset {
         }
 
         let mut writer = writer.lock();
-        if let Some(id) = writer.ctx.get(&asset) {
+        if let Some(id) = writer.asset_id(&asset, Some(&key))? {
             return id
                 .as_animation()
                 .context("asset context returned non-animation id");
         }
 
-        let id = writer.push_animation(Animation::new(channels), Some(key));
-        writer.ctx.insert(asset, id.into());
+        let policy = writer.policy_for(&asset);
+        let id = writer.push_animation(Animation::new(channels), policy)?;
+        writer.commit_asset(asset, id, Some(key))?;
 
         Ok(id)
     }

@@ -9,8 +9,17 @@ mod blob;
 mod content;
 mod material;
 mod mesh;
+mod mesh_source;
 mod scene;
 mod writer;
+
+pub use self::bitmap::{MipQuality, TEXTURE_MIP_PRODUCER, decode_bc3_alpha_mip};
+pub use self::mesh::lod::{
+    LodFinalizeSettings, LodGroupRequest, LodRequest, LodSettings, LodSource, ResolvedLodSettings,
+};
+
+/// Include this producer identity, the content manifest and mesh recipes in bake cache keys.
+pub const MESH_LOD_PRODUCER: &str = "clustered-v7-surface-correspondence";
 
 use {
     self::{
@@ -20,9 +29,13 @@ use {
         material::{ColorRef, EmissiveRef, MaterialAsset, NormalRef, ScalarRef},
         mesh::MeshAsset,
         scene::AssetRef,
-        writer::Writer,
+        writer::{StoragePolicy, Writer},
     },
-    crate::PakBuf,
+    crate::{
+        MaterialId, MeshId, PakBuf,
+        bitmap::CompressedBitmap,
+        opacity_micromap::{OpacityMicromap, OpacityMicromapRecipe},
+    },
     anyhow::Context,
     log::info,
     ordered_float::OrderedFloat,
@@ -35,7 +48,7 @@ use {
         collections::BTreeSet,
         env::var,
         fmt::{Debug, Formatter},
-        fs::create_dir_all,
+        fs::{File, create_dir_all},
         num::FpCategory,
         path::{Path, PathBuf},
         sync::{
@@ -43,8 +56,74 @@ use {
             atomic::{AtomicBool, Ordering},
         },
     },
+    tempfile::NamedTempFile,
     tokio::runtime::Runtime,
 };
+
+pub struct DerivedAssetBakeCandidate<'a> {
+    pub alpha_bitmap: &'a CompressedBitmap,
+    pub indices: Box<[u32]>,
+    pub material: MaterialId,
+    pub mesh: MeshId,
+    pub primitive: u32,
+    pub texture0: Box<[[f32; 2]]>,
+}
+
+pub struct DerivedAssetBakeOutput {
+    pub payload: OpacityMicromap,
+    pub recipe: OpacityMicromapRecipe,
+    pub source_mip: u32,
+}
+
+pub trait DerivedAssetBaker {
+    /// Supplies application requests before import captures appearance references and applies
+    /// index limits. The callback receives resolved settings and metadata and may run concurrently.
+    /// Authored layout requests take precedence over these additional requests.
+    fn mesh_lod_requests(&self) -> Option<MeshLodRequests> {
+        None
+    }
+
+    /// Augments each unique final mesh, including meshes without scene references or OMM
+    /// candidates. Authored metadata and the associated blob are already available.
+    /// Called once after geometry processing and before final archive serialization.
+    fn bake_mesh(&mut self, _mesh: &mut crate::mesh::Mesh) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Number of meshes to process together. The default keeps stateful bakers serial.
+    fn mesh_batch_size(&self) -> usize {
+        1
+    }
+
+    /// Augments a batch while preserving its mesh ID order. Independent bakers may override this.
+    fn bake_meshes(
+        &mut self,
+        first_index: usize,
+        meshes: &mut [crate::mesh::Mesh],
+    ) -> anyhow::Result<()> {
+        for (offset, mesh) in meshes.iter_mut().enumerate() {
+            self.bake_mesh(mesh).with_context(|| {
+                format!("baking mesh metadata for mesh {}", first_index + offset)
+            })?;
+        }
+        Ok(())
+    }
+
+    fn bake(
+        &mut self,
+        candidate: &DerivedAssetBakeCandidate<'_>,
+    ) -> anyhow::Result<Box<[DerivedAssetBakeOutput]>>;
+}
+
+/// Effective recipe facts available before source geometry is imported.
+pub struct MeshLodImport<'a> {
+    pub data: &'a crate::scene::DataMap,
+    pub normals: bool,
+    pub settings: &'a ResolvedLodSettings,
+}
+
+/// Additional neutral layouts requested before import.
+pub type MeshLodRequests = fn(MeshLodImport<'_>) -> anyhow::Result<Box<[LodRequest]>>;
 
 /// Given some parent directory and a filename, returns just the portion after the directory.
 fn file_key(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> String {
@@ -67,20 +146,16 @@ fn file_key(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> String {
     }
 
     let key = key.into_iter().rev().collect::<String>();
-
-    // Strip off the toml extension as needed
-    let mut key = PathBuf::from(key);
-    if is_toml(&key)
-        && let Some(stem) = key.file_stem().map(ToOwned::to_owned)
-    {
-        key.set_file_name(stem);
-    }
-
-    key.to_str().unwrap_or_default().to_owned()
+    key.strip_suffix(".toml").unwrap_or(&key).to_owned()
 }
 
 fn is_cargo_build() -> bool {
     var("CARGO").is_ok()
+}
+
+fn is_debug_bake(profile: Option<&str>) -> bool {
+    // Build dependencies can disable debug assertions even when the target uses the dev profile.
+    profile.map_or(cfg!(debug_assertions), |profile| profile == "debug")
 }
 
 /// Returns `true` when a given path has the `.toml` file extension.
@@ -395,6 +470,10 @@ impl PakBuf {
                 None => (),
             }
 
+            if let Some(occlusion) = &material.occlusion {
+                handle_scalar_ref(res, project_dir, occlusion)?;
+            }
+
             if let Some(rough) = &material.rough {
                 handle_scalar_ref(res, project_dir, rough)?;
             }
@@ -407,7 +486,7 @@ impl PakBuf {
         }
 
         fn handle_mesh(res: &mut BTreeSet<PathBuf>, mesh: &MeshAsset) {
-            if let Some(data) = mesh.data() {
+            if let Some(data) = mesh.blob() {
                 res.insert(data.to_path_buf());
             }
 
@@ -548,7 +627,7 @@ impl PakBuf {
         dst: impl AsRef<Path>,
         dir: impl AsRef<Path>,
     ) -> anyhow::Result<()> {
-        Self::bake_with_dir_impl(src, dst, dir, true)
+        Self::bake_with_dir_impl(src, dst, dir, true, None)
     }
 
     /// Bakes content into a `.pak` file using `dir` as the asset root without emitting Cargo
@@ -560,7 +639,26 @@ impl PakBuf {
         dst: impl AsRef<Path>,
         dir: impl AsRef<Path>,
     ) -> anyhow::Result<()> {
-        Self::bake_with_dir_impl(src, dst, dir, false)
+        Self::bake_with_dir_impl(src, dst, dir, false, None)
+    }
+
+    pub fn bake_with_dir_and_derived_assets(
+        src: impl AsRef<Path>,
+        dst: impl AsRef<Path>,
+        dir: impl AsRef<Path>,
+        baker: &mut dyn DerivedAssetBaker,
+    ) -> anyhow::Result<()> {
+        Self::bake_with_dir_impl(src, dst, dir, true, Some(baker))
+    }
+
+    /// Bakes content with derived assets without emitting Cargo change watches.
+    pub fn bake_with_dir_and_derived_assets_without_cargo_watches(
+        src: impl AsRef<Path>,
+        dst: impl AsRef<Path>,
+        dir: impl AsRef<Path>,
+        baker: &mut dyn DerivedAssetBaker,
+    ) -> anyhow::Result<()> {
+        Self::bake_with_dir_impl(src, dst, dir, false, Some(baker))
     }
 
     fn bake_with_dir_impl(
@@ -568,6 +666,7 @@ impl PakBuf {
         dst: impl AsRef<Path>,
         dir: impl AsRef<Path>,
         cargo_watches: bool,
+        mut baker: Option<&mut dyn DerivedAssetBaker>,
     ) -> anyhow::Result<()> {
         let _cargo_watches = CargoWatchesGuard::set(cargo_watches);
 
@@ -583,165 +682,169 @@ impl PakBuf {
             .into_content()
             .context("Unable to read asset file")?;
 
-        if let Some(compression) = content.compression() {
-            writer.lock().with_compression_is(Some(compression));
+        {
+            let mut writer = writer.lock();
+            let mut layouts = BTreeSet::new();
+            for request in content.default_lod_requests() {
+                anyhow::ensure!(
+                    layouts.insert(request.layout),
+                    "duplicate default lod vertex layout request"
+                );
+            }
+            writer.default_lods = content.default_lod_requests().into();
+            writer.default_source_lods = content.default_source_lods();
+            writer.mesh_lod_requests = baker.as_ref().and_then(|baker| baker.mesh_lod_requests());
+            content.lod.resolve(&LodSettings::default())?;
+            writer.lod = content.lod.clone();
+            writer.with_compression_is(content.compression()?);
+        }
+        let debug_bake = is_debug_bake(var("PROFILE").ok().as_deref());
+        if debug_bake {
+            writer.lock().set_segments(content.debug_segment_names())?;
         }
 
-        // Process each file we find as a separate runtime task
-        for asset_path in content.selected_asset_paths(&src_dir)? {
+        let mut planned = Vec::new();
+        for selected in content.selected_assets(&src_dir)? {
+            let asset_path = &selected.path;
+            let asset_parent = parent(asset_path);
+            let extension = asset_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(str::to_ascii_lowercase);
+            let mut asset = match extension.as_deref() {
+                Some("glb" | "gltf") => Asset::Mesh(MeshAsset::new(asset_path)),
+                Some(
+                    "jpg" | "jpeg" | "png" | "bmp" | "tga" | "dds" | "webp" | "gif" | "ico"
+                    | "tiff",
+                ) => Asset::Bitmap(BitmapAsset::new(asset_path)),
+                Some("toml") => Asset::read(asset_path)?,
+                _ => Asset::Blob(BlobAsset::new(asset_path)),
+            };
+            if extension.as_deref() == Some("toml") {
+                match &mut asset {
+                    Asset::Animation(asset) => asset.canonicalize(&src_dir, &asset_parent),
+                    Asset::Bitmap(asset) => asset.canonicalize(&src_dir, &asset_parent),
+                    Asset::BitmapFont(asset) | Asset::Blob(asset) => {
+                        asset.canonicalize(&src_dir, &asset_parent)
+                    }
+                    Asset::Material(asset) => asset.canonicalize(&src_dir, &asset_parent),
+                    Asset::Mesh(asset) => asset.canonicalize(&src_dir, &asset_parent),
+                    Asset::Scene(asset) => asset.canonicalize(&src_dir, &asset_parent),
+                    _ => anyhow::bail!("content groups may only select bakeable assets"),
+                }
+            }
+            asset = match asset {
+                Asset::Bitmap(bitmap) => Asset::Bitmap(
+                    bitmap.with_default_color_compression_if(selected.texture_compression),
+                ),
+                asset => asset,
+            };
+            let policy = StoragePolicy {
+                segment: if debug_bake {
+                    // set_segments checked that every enabled group fits in a segment ID.
+                    selected.group as u16 + 1
+                } else {
+                    0
+                },
+                compression: selected.compression,
+                texture_compression: selected.texture_compression,
+            };
+            planned.push((selected.path, policy, asset));
+        }
+
+        // Register every direct declaration before baking so direct policy always wins over an
+        // inherited dependency policy, regardless of which top-level asset references it first.
+        {
+            let mut writer = writer.lock();
+            for (_, policy, asset) in &planned {
+                writer.register_direct_policy(asset.clone(), *policy)?;
+            }
+        }
+
+        // Process each file we find as a separate runtime task.
+        for (asset_path, policy, asset) in planned {
             info!("processing {}", asset_path.display());
 
             re_run_if_changed(&asset_path);
+            writer.lock().set_active_policy(policy);
 
-            match asset_path
-                .extension()
-                .map(|ext| ext.to_string_lossy().into_owned())
-                .unwrap_or_default()
-                .to_lowercase()
-                .as_str()
-            {
-                "glb" | "gltf" => {
-                    // Note that direct references like this build a mesh, not an animation
-                    // To build an animation you must specify a .toml file
+            match asset {
+                Asset::Animation(anim) => {
                     let writer = Arc::clone(&writer);
                     let src_dir = src_dir.clone();
                     let asset_path = asset_path.clone();
                     tasks.push(rt.spawn_blocking(move || {
-                        MeshAsset::new(&asset_path)
-                            .bake(&writer, &src_dir, Some(&asset_path))
+                        anim.bake(&writer, src_dir, &asset_path)
                             .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
                         Ok(())
                     }));
                 }
-                "jpg" | "jpeg" | "png" | "bmp" | "tga" | "dds" | "webp" | "gif" | "ico"
-                | "tiff" => {
+                Asset::Bitmap(mut bitmap) => {
                     let writer = Arc::clone(&writer);
                     let src_dir = src_dir.clone();
                     let asset_path = asset_path.clone();
                     tasks.push(rt.spawn_blocking(move || {
-                        BitmapAsset::new(&asset_path)
+                        bitmap
                             .bake_from_path(&writer, src_dir, Some(&asset_path))
                             .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
                         Ok(())
                     }));
                 }
-                "toml" => {
-                    let asset = Asset::read(&asset_path)?;
-                    let asset_parent = parent(&asset_path);
-
-                    match asset {
-                        Asset::Animation(mut anim) => {
-                            let writer = Arc::clone(&writer);
-                            let src_dir = src_dir.clone();
-                            let asset_path = asset_path.clone();
-                            let asset_parent = asset_parent.clone();
-                            tasks.push(rt.spawn_blocking(move || {
-                                anim.canonicalize(&src_dir, &asset_parent);
-                                anim.bake(&writer, src_dir, &asset_path).context(
-                                    asset_path.as_os_str().to_string_lossy().into_owned(),
-                                )?;
-                                Ok(())
-                            }));
-                        }
-                        Asset::Bitmap(mut bitmap) => {
-                            let writer = Arc::clone(&writer);
-                            let src_dir = src_dir.clone();
-                            let asset_path = asset_path.clone();
-                            let asset_parent = asset_parent.clone();
-                            tasks.push(rt.spawn_blocking(move || {
-                                bitmap.canonicalize(&src_dir, &asset_parent);
-                                bitmap
-                                    .bake_from_path(&writer, src_dir, Some(&asset_path))
-                                    .context(
-                                        asset_path.as_os_str().to_string_lossy().into_owned(),
-                                    )?;
-                                Ok(())
-                            }));
-                        }
-                        Asset::BitmapFont(mut blob) => {
-                            let writer = Arc::clone(&writer);
-                            let src_dir = src_dir.clone();
-                            let asset_path = asset_path.clone();
-                            let asset_parent = asset_parent.clone();
-                            tasks.push(rt.spawn_blocking(move || {
-                                blob.canonicalize(&src_dir, &asset_parent);
-                                blob.bake_bitmap_font(&writer, src_dir, &asset_path)
-                                    .context(
-                                        asset_path.as_os_str().to_string_lossy().into_owned(),
-                                    )?;
-                                Ok(())
-                            }));
-                        }
-                        Asset::Blob(mut blob) => {
-                            let writer = Arc::clone(&writer);
-                            let src_dir = src_dir.clone();
-                            let asset_path = asset_path.clone();
-                            let asset_parent = asset_parent.clone();
-                            tasks.push(rt.spawn_blocking(move || {
-                                blob.canonicalize(&src_dir, &asset_parent);
-                                blob.bake_from_path(&writer, src_dir, &asset_path).context(
-                                    asset_path.as_os_str().to_string_lossy().into_owned(),
-                                )?;
-                                Ok(())
-                            }));
-                        }
-                        Asset::Material(mut material) => {
-                            let writer = Arc::clone(&writer);
-                            let src_dir = src_dir.clone();
-                            let asset_path = asset_path.clone();
-                            let asset_parent = asset_parent.clone();
-                            let rt2 = rt.clone();
-                            tasks.push(rt.spawn_blocking(move || {
-                                material.canonicalize(&src_dir, &asset_parent);
-                                material
-                                    .bake(&rt2, &writer, src_dir, Some(&asset_path))
-                                    .context(
-                                        asset_path.as_os_str().to_string_lossy().into_owned(),
-                                    )?;
-                                Ok(())
-                            }));
-                        }
-                        Asset::Mesh(mut mesh) => {
-                            let writer = Arc::clone(&writer);
-                            let src_dir = src_dir.clone();
-                            let asset_path = asset_path.clone();
-                            let asset_parent = asset_parent.clone();
-                            tasks.push(rt.spawn_blocking(move || {
-                                mesh.canonicalize(&src_dir, &asset_parent);
-                                mesh.bake(&writer, &src_dir, Some(&asset_path)).context(
-                                    asset_path.as_os_str().to_string_lossy().into_owned(),
-                                )?;
-                                Ok(())
-                            }));
-                        }
-                        Asset::Scene(mut scene) => {
-                            let writer = Arc::clone(&writer);
-                            let src_dir = src_dir.clone();
-                            let asset_path = asset_path.clone();
-                            let asset_parent = asset_parent.clone();
-                            let rt2 = rt.clone();
-                            tasks.push(rt.spawn_blocking(move || {
-                                scene.canonicalize(&src_dir, &asset_parent);
-                                scene.bake(&rt2, &writer, &src_dir, &asset_path).context(
-                                    asset_path.as_os_str().to_string_lossy().into_owned(),
-                                )?;
-                                Ok(())
-                            }));
-                        }
-                        _ => anyhow::bail!("unhandled asset type"),
-                    }
-                }
-                _ => {
+                Asset::BitmapFont(blob) => {
                     let writer = Arc::clone(&writer);
                     let src_dir = src_dir.clone();
                     let asset_path = asset_path.clone();
                     tasks.push(rt.spawn_blocking(move || {
-                        let blob = BlobAsset::new(&asset_path);
-                        blob.bake(&writer, &src_dir)
+                        blob.bake_bitmap_font(&writer, src_dir, &asset_path)
                             .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
                         Ok(())
                     }));
                 }
+                Asset::Blob(blob) => {
+                    let writer = Arc::clone(&writer);
+                    let src_dir = src_dir.clone();
+                    let asset_path = asset_path.clone();
+                    tasks.push(rt.spawn_blocking(move || {
+                        blob.bake_from_path(&writer, &src_dir, &asset_path)
+                            .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
+                        Ok(())
+                    }));
+                }
+                Asset::Material(mut material) => {
+                    let writer = Arc::clone(&writer);
+                    let src_dir = src_dir.clone();
+                    let asset_path = asset_path.clone();
+                    let rt2 = rt.clone();
+                    tasks.push(rt.spawn_blocking(move || {
+                        material
+                            .bake(&rt2, &writer, src_dir, Some(&asset_path))
+                            .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
+                        Ok(())
+                    }));
+                }
+                Asset::Mesh(mesh) => {
+                    let writer = Arc::clone(&writer);
+                    let src_dir = src_dir.clone();
+                    let asset_path = asset_path.clone();
+                    tasks.push(rt.spawn_blocking(move || {
+                        mesh.bake(&writer, &src_dir, Some(&asset_path))
+                            .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
+                        Ok(())
+                    }));
+                }
+                Asset::Scene(scene) => {
+                    let writer = Arc::clone(&writer);
+                    let src_dir = src_dir.clone();
+                    let asset_path = asset_path.clone();
+                    let rt2 = rt.clone();
+                    tasks.push(rt.spawn_blocking(move || {
+                        scene
+                            .bake(&rt2, &writer, &src_dir, &asset_path)
+                            .context(asset_path.as_os_str().to_string_lossy().into_owned())?;
+                        Ok(())
+                    }));
+                }
+                _ => unreachable!("planning rejects non-bakeable assets"),
             }
 
             // IDs are assigned when an asset commits to Writer. Await each top-level asset before
@@ -760,10 +863,62 @@ impl PakBuf {
                 create_dir_all(parent).context("Unable to create directory")?;
             }
 
+            let mut writer = Arc::try_unwrap(writer)
+                .map_err(|_| anyhow::anyhow!("pak writer still has active users"))?
+                .into_inner();
+            if let Some(baker) = baker.as_deref_mut() {
+                writer.bake_derived_assets(baker)?;
+            }
+            let parent = dst.parent().unwrap_or_else(|| Path::new("."));
+            // Writer replaces its destination, so retain only the temporary path here.
+            // Keep it beside the final archive so generation sidecars resolve identically.
+            let staged_pak = NamedTempFile::new_in(parent)
+                .context("creating staged pak file")?
+                .into_temp_path();
             writer
-                .lock()
-                .write(&dst)
+                .write(&staged_pak)
                 .context("Unable to write pak file")?;
+
+            let mut reports = Vec::with_capacity(2);
+            {
+                let mut pak =
+                    Self::open(&staged_pak).context("opening staged pak for lod reporting")?;
+                for (extension, diagnostics) in
+                    [("mesh-lods.csv", false), ("mesh-lod-diagnostics.csv", true)]
+                {
+                    let path = dst.with_extension(extension);
+                    anyhow::ensure!(
+                        !path.is_dir(),
+                        "mesh lod report destination is a directory: {}",
+                        path.display()
+                    );
+                    let report =
+                        NamedTempFile::new_in(parent).context("creating staged mesh lod report")?;
+                    if diagnostics {
+                        pak.write_mesh_lod_diagnostics(report.path())
+                    } else {
+                        pak.write_mesh_lod_report(report.path())
+                    }
+                    .with_context(|| format!("writing mesh lod report {}", path.display()))?;
+                    reports.push((report, path));
+                }
+            }
+
+            // Publish complete reports first; any report failure must leave the archive intact.
+            for (report, path) in reports {
+                report
+                    .persist(&path)
+                    .map_err(|error| error.error)
+                    .with_context(|| format!("publishing mesh lod report {}", path.display()))?;
+            }
+            staged_pak
+                .persist(&dst)
+                .map_err(|error| error.error)
+                .context("publishing pak file")?;
+
+            if let Ok(directory) = File::open(parent) {
+                let _ = directory.sync_all();
+            }
 
             Ok(())
         });
@@ -846,5 +1001,32 @@ impl<'de> Deserialize<'de> for Rotation {
         D: Deserializer<'de>,
     {
         Rotation::de(deserializer)?.ok_or_else(|| D::Error::custom("expected rotation"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::{file_key, is_debug_bake},
+        std::path::Path,
+    };
+
+    #[test]
+    fn cargo_profile_controls_debug_baking_before_dependency_debug_assertions() {
+        assert!(is_debug_bake(Some("debug")));
+        assert!(!is_debug_bake(Some("release")));
+        assert!(!is_debug_bake(Some("distribution")));
+        assert_eq!(is_debug_bake(None), cfg!(debug_assertions));
+    }
+
+    #[test]
+    fn file_keys_use_forward_slashes_on_every_platform() {
+        let root = Path::new("project").join("art");
+        let asset = root
+            .join("kaykit")
+            .join("adventurer")
+            .join("barbarian.toml");
+
+        assert_eq!(file_key(root, asset), "kaykit/adventurer/barbarian");
     }
 }

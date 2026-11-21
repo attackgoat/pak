@@ -152,3 +152,32 @@ fn repeated_bakes_assign_stable_blob_ids() -> Result<(), Error> {
     fs::remove_dir_all(generated_dir)?;
     Ok(())
 }
+
+#[cfg(feature = "bake")]
+#[test]
+fn per_payload_codecs_round_trip() -> Result<(), Error> {
+    let generated_dir =
+        std::env::temp_dir().join(format!("pak-payload-codecs-{}", std::process::id()));
+    fs::create_dir_all(&generated_dir)?;
+    fs::write(generated_dir.join("none.bin"), b"uncompressed payload")?;
+    fs::write(generated_dir.join("snap.bin"), b"snap payload".repeat(64))?;
+    fs::write(
+        generated_dir.join("brotli.bin"),
+        b"brotli payload".repeat(64),
+    )?;
+    let manifest = generated_dir.join("pak.toml");
+    fs::write(
+        &manifest,
+        "[content]\ncompression = 'snap'\n\n[[content.group]]\nname = 'none'\ncompression = 'none'\nassets = ['none.bin']\n\n[[content.group]]\nname = 'snap'\nassets = ['snap.bin']\n\n[[content.group]]\nname = 'brotli'\ncompression = 'brotli'\nquality = 4\nassets = ['brotli.bin']\n",
+    )?;
+    let destination = generated_dir.join("payloads.pak");
+
+    PakBuf::bake(&manifest, &destination).unwrap();
+    let mut pak = PakBuf::open(&destination)?;
+    assert_eq!(pak.read_blob("none.bin")?, b"uncompressed payload");
+    assert_eq!(pak.read_blob("snap.bin")?, b"snap payload".repeat(64));
+    assert_eq!(pak.read_blob("brotli.bin")?, b"brotli payload".repeat(64));
+
+    fs::remove_dir_all(generated_dir)?;
+    Ok(())
+}

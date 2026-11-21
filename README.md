@@ -3,8 +3,12 @@
 [![Crates.io](https://img.shields.io/crates/v/pak.svg)](https://crates.io/crates/pak)
 [![Docs.rs](https://docs.rs/pak/badge.svg)](https://docs.rs/pak)
 
-Bundles many assets into a single file with compression, string tables, and other game-related
-special handling functions.
+Bundles assets with compression, string tables, and other game-related special handling functions.
+Release baking produces a self-contained `.pak`. Debug baking stores content-group payloads in
+generation-named `.pakseg` files beside the root so unchanged groups can be reused. Keep the root
+and its referenced segments together; segment placement is internal, not a manifest setting.
+During Cargo build scripts the baker uses the target's `PROFILE`; standalone baking falls back to
+the baker's debug assertions.
 
 A `.pak` file is written at build time and streamed in at runtime. Each asset package is "baked" from a configuration source file. _Example:_
 
@@ -36,6 +40,7 @@ _`game_art.toml`:_
 ```toml
 [content]
 compression = 'snap'
+default-lods = [{ layout = 'POSITION', simplify = true }]
 
 [[content.group]]
 assets = [
@@ -55,9 +60,15 @@ All fields are optional.
 Item | Description
 ---- | -----------
 compression | `'snap'`, `'brotli'`, or unspecified (_no compression_).
+default-lods | (_array_, default `[]`) Default layout requests inherited by meshes, each containing `layout` and `simplify`.
+default-source-lods | (_`boolean`_, default `false`) Request complete source-layout chains for static primitives. Meshes can override with `source-lods` or opt out of inheritance.
 buffer-size | (_`unsigned integer`_) Brotli buffer size. Used only when `compression = 'brotli'`. Defaults to `4096`.
 quality | (_`unsigned integer`_) Brotli compression quality. Used only when `compression = 'brotli'`. Defaults to `8`.
 window-size | (_`unsigned integer`_) Brotli window size. Used only when `compression = 'brotli'`. Defaults to `22`.
+
+Mesh LOD defaults are content-wide, not group settings. Direct `.glb`/`.gltf` assets,
+keyed mesh recipes, and inline or referenced scene meshes all inherit the root
+`[content].default-lods`. Mesh `lods` adds requests to these defaults.
 
 ### _`[content.group]` Schema_
 
@@ -65,11 +76,13 @@ All fields are optional.
 
 _Note:_
 
-Additional `[[content.group]]` tables may be appended. All groups are added to the package and these
-individual groups are not distinct entities in the runtime file.
+Additional `[[content.group]]` tables may be appended. All groups are added to the same logical
+package. Debug baking uses enabled groups as internal segment boundaries; release baking stores
+their payloads in the root file.
 
 Item | Description
 ---- | -----------
+name | (_`string`_) Optional display name used in diagnostics and debug segment filenames.
 assets | (_`string array`_) File paths or glob patterns of assets to bake. Assets may be native file types (_such as `.png` and `.glb`_) or asset (_`.toml`_) files as detailed in the following sections.
 exclude | (_`string array`_) File paths or glob patterns to exclude from the baking process when considering `assets`.
 enabled | (_`boolean`_) Global flag which may be used to prevent baking of this group.
@@ -110,7 +123,7 @@ _Example, `large-goblet.toml`:_
 ```toml
 [mesh]
 src = 'some_file.gltf'
-lod = true
+lods = [{ layout = 'PACKED_NORMAL', simplify = true }]
 max-index = 'u16'
 ```
 
@@ -120,30 +133,141 @@ All fields are optional.
 
 Item | Description
 ---- | -----------
-`data` | File path to an optional unstructured byte blob associated with this mesh.
+`blob` | File path to an optional unstructured byte blob associated with this mesh.
+`authored-lods` | (_string array_) Ordered names of reduced mesh nodes in the same source file. Replaces automatic complete-layout generation; each level must retain primitive/material order and vertex layout and strictly reduce triangle count. Skinned levels must share joint order, names, parents and inverse binds, with at most 256 joints and four influences per vertex. Weights must be normalized and round to an exact 255-unit UNORM8 sum. The measured geometric error describes the rest pose, not arbitrary deformation.
+`data` | TOML table of application-defined metadata, using the same value types as material data. Included in mesh identity and deduplication.
 `src` | File path to a `.gltf` or `.glb` mesh. May be relative to the `[mesh]` TOML file or absolute where the root is the same folder as the `[content]` TOML file. When unspecified, attempts to load a mesh with the same name as the `[mesh]` TOML file.
 `euler` | (_`string`_) Order of operations applied to 3-channel `rotation` values (example: `xyz`, `zyx`, _etc_).
 `flip-x` | (_`boolean`_) When set, flips the X component of all position vertices.
 `flip-y` | (_`boolean`_) When set, flips the Y component of all position vertices.
 `flip-z` | (_`boolean`_) When set, flips the Z component of all position vertices.
 `ignore-skin` | (_`boolean`_) When set, any embedded skin data is ignored.
-`lod` | (_`boolean`_) When set, generates level of detail meshes using MeshOpt.
+`ignore-texture1` | (_`boolean`_) When set, the second texture coordinate channel is ignored.
+`inherit-lods` | (_`boolean`_, default `true`) Include `[content].default-lods` and `default-source-lods`. Set `false` to use only local requests; this does not disable inheritance of `[content.lod]` processing settings.
+`lods` | (_array_, default `[]`) Local layout requests added to inherited defaults, overriding matching layouts. An empty list does not disable inheritance. Use `simplify = false` for a source-only request.
 `lod-lock-border` | (_`boolean`_) When set, tells MeshOpt to generate level of detail meshes using only interior vertices.
-`lod-target-error` | (_`float`_) When set, tells MeshOpt to attempt to hit a certain error threshold between level of detail meshes.
+`lod-target-error` | (_`float`_, default `0.05`) Finite nonnegative base-relative MeshOpt error budget. Overrides nested `target-error`; iterative group errors accumulate within the original absolute budget.
 `max-index` | (_`string` or `unsigned integer`_) When set, reduces and compacts the baked mesh so no LOD references an index greater than this value. Accepts `'u8'`, `'u16'`, or an exact value such as `4095` or `65535`. Uses MeshOpt simplification and may reduce the base mesh before generating LODs.
 `min-lod-triangles` | (_`unsigned integer`_) When set, tells MeshOpt to stop generating level of detail meshes below this threshold.
 `name` | (_`string`_) When set, imports this named mesh. Otherwise, imports the first mesh.
 `normals` | (_`boolean`_) When set (default `true`), imports geometry normals.
 `offset` | (_array of `float` with a length of 3_) When set, offsets geometry positions by the given amount.
 `optimize` | (_`boolean`_) When set (default `true`), reorders geometry indices and vertices using MeshOpt.
+`optimize-vertex-cache` | (_`boolean`_) Overrides the vertex-cache part of `optimize`. Defaults to the value of `optimize`; explicitly setting `true` with `optimize = false` reorders triangles only, retaining vertex bytes and leaving overdraw/fetch optimization disabled. Triangle IDs change, so derive triangle-indexed metadata from the baked result.
 `overdraw-threshold` | (_`float`_) When set (default `1.05`), controls MeshOpt optimization.
 `rotation` | (_array of `float` with a length of 3 or 4_) When set, the vector (XYZ) or quaternion (XYZW) rotation applied to geometry.
 `scale` | (_`float` or array of `float` with a length of 3_) When set, the uniform or vector (XYZ) scale applied to geometry.
 `scene-name` | (_`string`_) When set, controls which GLTF scene is imported from the source file.
-`shadow` | (_`boolean`_) When set, imports position-only geometry optimized for use in shadow or other similar rendering techniques.
+`source-lods` | (_`boolean`_) Generate complete source-layout chains independently for each static primitive. Overrides `[content].default-source-lods`, including when `inherit-lods = false`.
 `tangents` | (_`boolean`_) When set (default `true`), imports geometry tangents. If missing, tangents are generated using the MikkTSpace algorithm
 
 `max-index` is a hard cap on the maximum index value, not just a triangle-count target. If a mesh initially needs indices above the cap, baking simplifies the mesh and compacts the vertex buffer so `IndexBuffer` can store the result as `u8` or `u16` where possible. Lower generated LODs are derived from the capped mesh.
+
+Meshes expose `blob()` / `set_blob(BlobId)` separately from `data(key)` and the public
+`data: DataMap`. Use `mesh.data.insert(key, pak::scene::DataData::Float(value))` to
+add or replace metadata while preserving other authored entries. `MeshAsset` accepts
+`blob = 'payload.bin'` alongside `[mesh.data]`; its public `data` map matches materials.
+The derived-asset baking entry points call `DerivedAssetBaker::bake_mesh(&mut Mesh)`
+once per unique final mesh, after transforms, optimization, and primitive construction,
+even without scene references or eligible opacity micromaps. The hook defaults to no-op.
+Pak writes `pak.mesh-lod.*` for LOD generation reports; other mesh metadata is application-defined.
+
+### Complete source-layout LODs
+
+Use this when consumers need each retained triangle's original attributes and material
+slot, rather than a projected guide or a joined material partition:
+
+```toml
+[content]
+default-source-lods = true
+
+[content.lod]
+min-triangles = 64
+target-error = 0.05
+normal-weight = 0.5
+texture-weight = 1.0
+```
+
+A per-model `[mesh] source-lods = false` disables automatic source-layout requests.
+Existing primitive-local `lods` take precedence when they already request the complete
+source layout, including `simplify = false`. Grouped requests remain separate families.
+Selecting a model recipe requires referencing
+its TOML file; a reference to its GLB does not read a neighboring recipe.
+
+Each chain is stored in `Primitive::lod_sets()` and starts with the unchanged final
+canonical geometry, after transforms, optimization, and `max-index`. Reduced levels
+compact only retained source vertex records; they preserve normals, UV0/UV1, tangents,
+and the primitive's material slot without creating replacement materials. Normals and
+UV channels contribute weighted simplification error. `texture-weight` defaults to
+`1.0` and must be finite and nonnegative. Errors are estimates, not texture or alpha-
+coverage guarantees; tangent bytes are retained but tangent interpolation error is not
+measured separately.
+
+Automatic requests skip skinned and morph-target primitives. Valid chains may contain
+only the canonical level if reduction stalls. Shared material-seam positions stay locked,
+so a consumer may retain one primitive's canonical geometry while simplifying another.
+This guarantee applies to these independent chains, not to arbitrary members of a
+grouped snapshot. Automatic source-layout requests ignore `join`/`voxelize`; existing
+explicit grouped requests continue to use those settings separately.
+
+Direct `LodRequest::process` also accepts non-joint-weighted complete layouts for
+simplification. Requested normals, texture coordinates, and tangents must be finite.
+Generation does not select a runtime level or enable any consumer feature.
+
+### Authored complete-layout LODs
+
+```toml
+[mesh]
+name = 'bench'
+authored-lods = ['bench_lod1', 'bench_lod2']
+source-lods = false
+inherit-lods = false
+optimize = false
+```
+
+The canonical node is selected from the requested source scene; authored levels
+are named nodes anywhere in the same file. Separate scenes can keep alternatives
+out of canonical-only collision or acoustic exports. Their transforms and the
+recipe's import options apply normally. Lower levels may contain new positions,
+normals, UVs and tangents; they need not be subsets of the canonical mesh. Primitive
+count, original glTF material indices, material order and imported vertex layouts
+must match. Skins, morph targets, duplicate names, conflicting full-layout requests
+and `max-index` reduction are rejected. The source level remains unchanged.
+
+Errors use `SampledGeometricAbsolute`: bidirectional nearest-surface distances at
+triangle corners and seven interior samples, measured directly against LOD0 in
+transformed mesh-local units. These estimates do not bound unsampled displacement,
+normal, texture, silhouette or coverage changes. No simplification is performed on
+the authored family. Independent projected layout requests are still separate.
+
+### Joined and voxelized LODs
+
+Opt in per mesh (or through `[content.lod]` defaults):
+
+```toml
+[mesh]
+src = 'prop.glb'
+lods = [{ layout = 'POSITION', simplify = true }]
+
+[mesh.lod]
+join = true
+voxelize = true
+voxel-size = 0.05
+```
+
+`join` and `voxelize` independently default to `false`. Joining operates across material
+primitives in one mesh. Voxelization reconstructs a smooth surface from closed, outward-wound
+shells; `voxel-size` is a positive length in transformed mesh-local units. `voxel-max-cells`
+defaults to `262144` and bounds sparse reconstruction work; exceeding the limit fails baking.
+
+Generated triangles are assigned whole to original materials using the unsimplified source.
+Final buffers, patches, bounds, and diagnostics are stored in `Mesh::lod_groups()`.
+Consumers must select a complete group snapshot together; an omitted material partition
+means zero triangles at that level. `Mesh::bounds()` encloses canonical and alternative geometry.
+
+See [grouped surface LODs](docs/grouped-surface-lods.md) for the API, error metrics, limitations,
+and consumer migration. Archives now use **V1.11** and must be rebaked; include
+`pak::buf::MESH_LOD_PRODUCER` in consumer cache keys.
 
 ## Raw Blobs
 
@@ -187,11 +311,28 @@ Item | Description
 `double-sided` | (`boolean`_) When set, indicates the material is double-sided.
 `emissive` | Hex string, path string, inline bitmap asset, or array of three floating point values.
 `metal` | Hex string, path string, inline bitmap asset, or floating point value.
+`mip-quality` | `'default'` (also when omitted) or `'high'`. See High-Quality Mips below.
 `normal` | Path string or inline bitmap asset.
+`occlusion` | Hex string, path string, inline bitmap asset, or floating point value. Mutually exclusive with `height`.
 `rough` | Hex string, path string, inline bitmap asset, or floating point value.
 `transmission` | Hex string, path string, inline bitmap asset, or floating point value.
 
-When any material parameter is set, `MaterialInfo::params` stores the packed RGBA parameter map as `R = metal`, `G = rough`, `B = height`, and `A = transmission`. `MaterialInfo::params_used` indicates which channels were authored; missing channels are default-filled.
+When any material parameter is set, `MaterialInfo::params` stores the packed RGBA parameter map as `R = metal`, `G = rough`, `B = height or occlusion`, and `A = transmission`. Height and occlusion cannot both be authored. `MaterialInfo::params_used` indicates which channels were authored; missing channels are default-filled, with occlusion's neutral value being `1`.
+
+Materials can also carry application-defined data using the same value types as scene data: booleans, `f32` floats, `i32` numbers, strings, and recursively nested arrays. Pak stores these values without application-specific interpretation or validation. Data participates in material deduplication; key order does not matter.
+
+```toml
+[material]
+rough = 0.5
+
+[material.data]
+category = "fabric"
+enabled = true
+layers = [1, 2, 3]
+settings = [0.25, ["detail", false]]
+```
+
+Inline scene materials also accept a `data` table. At runtime, `MaterialInfo::data(key)` and `MaterialInfo::data.get(key)` return a borrowed `pak::scene::DataRef`; `MaterialInfo::data.iter()` yields `(&str, DataRef)` entries in key order, including application-unknown keys. Absent authored data produces an empty `DataMap`. `MaterialInfo` is owned and cloneable, not `Copy`; material reads return clones.
 
 ## Bitmaps
 
@@ -212,9 +353,31 @@ Item | Description
 ---- | -----------
 `src` | File path to an image. May be relative to the `[bitmap]` TOML file or absolute where the root is the same folder as the `[content]` TOML file. When unspecified, attempts to load a bitmap with the same name as the `[bitmap]` TOML file.
 `mip-levels` | (_`boolean` or `non-zero unsigned integer`_) When set (default `1`), allows configuration of the desired count of mip levels to be stored with a bitmap for later use by a program.
+`mip-quality` | `'default'` (also when omitted) or `'high'`.
 `resize` | (_`unsigned integer`_) When set, the image is uniformly resized to have this maximum dimension.
 `color` | (_`string`_) When set (default `srgb`), the image is imported as either `linear` or `srgb` color data.
 `swizzle` | (_`string`_) When set (default `rgba` for four channel images), the specified image color channels are imported in the given order (example: `r`, `rg` or `bgr`).
+
+### High-Quality Mips
+
+Set `mip-quality = 'high'` on a material or standalone bitmap:
+
+```toml
+[material]
+mip-quality = 'high'
+color = 'face-color.png'
+```
+
+High requires BC compression; materials require `texture-compression = true`.
+Standalone bitmaps may instead set `compression` to `bc1-srgb`, `bc1-rgb`, `bc3`,
+`bc4` or `bc5`. Base pixels are preserved; mips extend to 1x1 regardless of `mip-levels`.
+Color uses linear-light, premultiplied-alpha Lanczos3 filtering. Linear data and
+packed parameters use area averages. Material normals require BC5 and filter vector
+moments reconstructed from RG, normalizing only emitted directions. Filtering stays
+float32 between levels; RGB encoding uses `IterativeClusterFit` regardless of `PROFILE`.
+
+High rejects `resize`, uncompressed output, material height and alpha-test color.
+Parameter images must match dimensions.
 
 ### Bitmap Fonts
 
