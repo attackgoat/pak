@@ -1,12 +1,11 @@
 [package]
 name = "pak"
-version = "0.8.0"
+version = "0.8.1"
 authors = ["John Wells <john@attackgoat.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/attackgoat/pak"
-homepage = "https://github.com/attackgoat/pak"
 documentation = "https://docs.rs/pak"
 keywords = ["gamedev"]
 categories = ["game-development"]
@@ -17,13 +16,18 @@ default = []
 bake = [
     "blake3",
     "bmfont",
+    "dep:dunce",
     "glob",
+    "dep:gltf",
     "image",
+    "dep:mikktspace",
+    "dep:ordered-float",
     "parking_lot",
     "rayon",
     "texpresso",
     "tempfile",
     "tokio",
+    "dep:toml",
 ]
 
 [dependencies]
@@ -33,17 +37,17 @@ bitflags = { version = "2.10", features = ["serde"] }
 blake3 = { version = "1.8", optional = true }
 bmfont = { version = "0.3", default-features = false, optional = true }
 brotli = "8.0"
-dunce = "1.0"
+dunce = { version = "1.0", optional = true }
 glam = "0.31"
 glob = { version = "0.3", optional = true }
-gltf = { version = "1.4", features = ["names"] }
+gltf = { version = "1.4", features = ["names"], optional = true }
 image = { version = "0.25", optional = true }
 log = "0.4"
 meshopt = "0.6"
-mikktspace = { version = "0.16", package = "bevy_mikktspace" }
+mikktspace = { version = "0.16", package = "bevy_mikktspace", optional = true }
+ordered-float = { version = "5.1", features = ["serde"], optional = true }
 parking_lot = { version = "0.12", optional = true }
 rayon = { version = "1.11", optional = true }
-ordered-float = { version = "5.1", features = ["serde"] }
 paste = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_bytes = "0.11"
@@ -51,7 +55,7 @@ snap = "1.1"
 tokio = { version = "1.49", default-features = false, features = [
     "rt-multi-thread",
 ], optional = true }
-toml = "0.9"
+toml = { version = "0.9", optional = true }
 texpresso = { version = "2.0", features = ["rayon"], optional = true }
 tempfile = { version = "3.20", optional = true }
 

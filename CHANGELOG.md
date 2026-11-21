@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.8.0 (unreleased)
+## 0.8.1 (unreleased)
+
+- Remove redundant homepage metadata to silence a Cargo warning. The API and
+  archive format are unchanged from 0.8.0.
+- Enable `dunce`, `gltf`, `mikktspace`, `ordered-float`, and `toml` only with
+  the `bake` feature. Runtime-only builds no longer compile those dependencies.
+
+## 0.8.0 - 2026-11-21
 
 ### Upgrading from 0.7
 
