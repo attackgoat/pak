@@ -2,7 +2,7 @@ use {
     super::{
         Asset, Canonicalize, Writer,
         bitmap::{BitmapAsset, BitmapSwizzle},
-        file_key, re_run_if_changed,
+        file_key,
     },
     crate::{
         BitmapFontId, BlobId,
@@ -71,7 +71,8 @@ impl BlobAsset {
 
         info!("Baking blob: {}", key);
 
-        re_run_if_changed(src);
+        let cargo_watches = writer.lock().cargo_watches;
+        cargo_watches.re_run_if_changed(src);
 
         let mut file = File::open(src).context("Unable to open blob file")?;
         let mut value = vec![];
@@ -113,7 +114,8 @@ impl BlobAsset {
 
         info!("Baking bitmap font: {}", key);
 
-        re_run_if_changed(src);
+        let cargo_watches = writer.lock().cargo_watches;
+        cargo_watches.re_run_if_changed(src);
 
         // Get the fs objects for this asset
         let Some(def_parent) = src.parent() else {
@@ -125,9 +127,13 @@ impl BlobAsset {
         let mut pages = Vec::new();
         for page in def.pages() {
             let path = def_parent.join(page);
-            let (_, width, pixels) =
-                BitmapAsset::read_pixels(path, Some(BitmapSwizzle::RGBA), None)
-                    .context("Unable to read bitmap font page")?;
+            let (_, width, pixels) = BitmapAsset::read_pixels_with_watches(
+                path,
+                Some(BitmapSwizzle::RGBA),
+                None,
+                cargo_watches,
+            )
+            .context("Unable to read bitmap font page")?;
 
             // TODO: Handle format correctly!
             let mut better_pixels = Vec::with_capacity(pixels.len());

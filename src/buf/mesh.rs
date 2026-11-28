@@ -2,8 +2,8 @@ pub mod lod;
 
 use {
     super::{
-        Canonicalize, Euler, Rotation, Writer, blob::BlobAsset, file_key, mesh_source::MeshSource,
-        re_run_if_changed,
+        Canonicalize, CargoWatches, Euler, Rotation, Writer, blob::BlobAsset, file_key,
+        mesh_source::MeshSource,
     },
     crate::{
         MeshId,
@@ -150,7 +150,8 @@ impl MeshAsset {
             return id.as_mesh().context("asset context returned non-mesh id");
         }
 
-        self.re_run_if_changed();
+        let cargo_watches = writer.lock().cargo_watches;
+        self.re_run_if_changed(cargo_watches);
 
         // If a path is given it will be available as a key inside the .pak (paths are not
         // given if the asset is specified inline - those are only available in the .pak via ID)
@@ -1378,20 +1379,20 @@ impl MeshAsset {
         mesh.set_lod_groups(groups.into_boxed_slice())
     }
 
-    fn re_run_if_changed(&self) {
+    fn re_run_if_changed(&self, cargo_watches: CargoWatches) {
         // Watch the unstructered data file for changes, only if we're in a cargo build
         if let Some(data) = self.blob() {
-            re_run_if_changed(data);
+            cargo_watches.re_run_if_changed(data);
         }
 
         if let Some(src) = &self.src {
             // Watch the GLTF file for changes, only if we're in a cargo build
-            re_run_if_changed(src);
+            cargo_watches.re_run_if_changed(src);
 
             // Just in case there is a GLTF bin file; also watch it for changes
             let mut src_bin = src.to_path_buf();
             src_bin.set_extension("bin");
-            re_run_if_changed(src_bin);
+            cargo_watches.re_run_if_changed(src_bin);
         }
     }
 }

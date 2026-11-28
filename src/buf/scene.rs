@@ -23,6 +23,7 @@ use {
         mem::size_of,
         path::{Path, PathBuf},
         sync::Arc,
+        thread,
     },
     tokio::runtime::Runtime,
 };
@@ -366,11 +367,70 @@ impl SceneAsset {
 
 impl Canonicalize for SceneAsset {
     fn canonicalize(&mut self, project_dir: impl AsRef<Path>, src_dir: impl AsRef<Path>) {
-        self.references
-            .as_deref_mut()
-            .unwrap_or_default()
-            .iter_mut()
-            .for_each(|reference| reference.canonicalize(&project_dir, &src_dir));
+        const PARALLEL_MIN_REFS: usize = 4_096;
+
+        let references = self.references.as_deref_mut().unwrap_or_default();
+        let project_dir = project_dir.as_ref();
+        let src_dir = src_dir.as_ref();
+        let canonicalize = |references: &mut [Reference]| {
+            for reference in references {
+                reference.canonicalize(project_dir, src_dir);
+            }
+        };
+
+        if references.len() >= PARALLEL_MIN_REFS
+            && thread::available_parallelism().is_ok_and(|threads| threads.get() > 1)
+        {
+            // Rewrite disjoint slices in place. Do not cache lookups or move references:
+            // later, the serial bake uses first-use order to allocate dependency IDs.
+            let (first, second) = references.split_at_mut(references.len() / 2);
+            thread::scope(|scope| {
+                scope.spawn(move || canonicalize(second));
+                canonicalize(first);
+            });
+        } else {
+            canonicalize(references);
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use {
+        super::{Canonicalize, SceneAsset},
+        std::fs,
+    };
+
+    #[test]
+    fn large_scene_canonicalizes_each_reference_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let src = root.join("scene");
+        fs::create_dir(&src).unwrap();
+        fs::write(root.join("material.toml"), []).unwrap();
+        fs::write(root.join("mesh.glb"), []).unwrap();
+        let mut scene: SceneAsset = toml::from_str(
+            r#"
+            [[ref]]
+            id = "first"
+            materials = ["../material.toml", "/material.toml"]
+            mesh = { src = "../mesh.glb", blob = "../unavailable.bin" }
+
+            [[ref]]
+            id = "second"
+            materials = ["../unavailable.toml"]
+            mesh = "/mesh.glb"
+            "#,
+        )
+        .unwrap();
+        scene.references = Some(scene.refs().iter().cycle().take(4_098).cloned().collect());
+        let mut expected = scene.clone();
+        for reference in expected.references.as_deref_mut().unwrap() {
+            reference.canonicalize(root, &src);
+        }
+
+        scene.canonicalize(root, &src);
+        assert_eq!(scene, expected);
     }
 }
 

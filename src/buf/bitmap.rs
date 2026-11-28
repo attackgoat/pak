@@ -1,5 +1,5 @@
 use {
-    super::{Canonicalize, Writer, file_key, re_run_if_changed},
+    super::{Canonicalize, CargoWatches, Writer, file_key},
     crate::{
         BitmapId,
         bitmap::{
@@ -232,7 +232,11 @@ impl BitmapAsset {
         Ok(())
     }
 
-    pub(super) fn scalar_pixels(&self, quality: MipQuality) -> anyhow::Result<Bitmap> {
+    pub(super) fn scalar_pixels(
+        &self,
+        quality: MipQuality,
+        cargo_watches: CargoWatches,
+    ) -> anyhow::Result<Bitmap> {
         ensure!(
             self.mip_quality != MipQuality::High,
             "scalar input mip-quality is not a final parameter policy; set mip-quality on the material root"
@@ -241,9 +245,9 @@ impl BitmapAsset {
             self.validate_native_size()?;
             let mut source = self.clone();
             source.compression = None;
-            source.as_bitmap_buf()
+            source.as_bitmap_buf_with_watches(cargo_watches)
         } else {
-            self.as_bitmap_buf()
+            self.as_bitmap_buf_with_watches(cargo_watches)
         }
     }
 
@@ -336,8 +340,9 @@ impl BitmapAsset {
             info!("Baking bitmap: {} (inline)", file_key(&project_dir, src));
         }
 
+        let cargo_watches = writer.lock().cargo_watches;
         let bitmap = self
-            .as_bitmap_buf()
+            .as_bitmap_buf_with_watches(cargo_watches)
             .context("Unable to create bitmap buf")?;
 
         let mut writer = writer.lock();
@@ -354,7 +359,15 @@ impl BitmapAsset {
         Ok(id)
     }
 
+    #[allow(dead_code)]
     pub fn as_bitmap_buf(&self) -> anyhow::Result<Bitmap> {
+        self.as_bitmap_buf_with_watches(CargoWatches::Enabled)
+    }
+
+    pub(super) fn as_bitmap_buf_with_watches(
+        &self,
+        cargo_watches: CargoWatches,
+    ) -> anyhow::Result<Bitmap> {
         if self.mip_quality == MipQuality::High {
             self.validate_native_size()?;
             ensure!(
@@ -372,7 +385,8 @@ impl BitmapAsset {
         };
 
         let (format, width, pixels) =
-            Self::read_pixels(src, self.swizzle, self.resize).context("Unable to read pixels")?;
+            Self::read_pixels_with_watches(src, self.swizzle, self.resize, cargo_watches)
+                .context("Unable to read pixels")?;
 
         let row_length = format.byte_len() * width as usize;
 
@@ -828,12 +842,22 @@ impl BitmapAsset {
     }
 
     /// Reads raw pixel data from an image source file and returns them in the given format.
+    #[allow(dead_code)]
     pub fn read_pixels(
         path: impl AsRef<Path>,
         swizzle: Option<BitmapSwizzle>,
         resize: Option<u32>,
     ) -> anyhow::Result<(BitmapFormat, u32, Vec<u8>)> {
-        re_run_if_changed(&path);
+        Self::read_pixels_with_watches(path, swizzle, resize, CargoWatches::Enabled)
+    }
+
+    pub(super) fn read_pixels_with_watches(
+        path: impl AsRef<Path>,
+        swizzle: Option<BitmapSwizzle>,
+        resize: Option<u32>,
+        cargo_watches: CargoWatches,
+    ) -> anyhow::Result<(BitmapFormat, u32, Vec<u8>)> {
+        cargo_watches.re_run_if_changed(&path);
 
         //let started = std::time::Instant::now();
 

@@ -1,5 +1,5 @@
 use {
-    super::{super::compression::Compression, Asset},
+    super::{super::compression::Compression, Asset, CargoWatches},
     crate::{
         AnimationId, BitmapData, BitmapFontId, BitmapId, BlobId, Data, DataRange, DataRef, Id,
         MaterialId, MaterialInfo, MeshId, OpacityMicromapId, SceneId, SegmentMeta,
@@ -48,6 +48,7 @@ impl StoragePolicy {
 
 #[derive(Default)]
 pub struct Writer {
+    pub(super) cargo_watches: CargoWatches,
     pub(super) lod: super::mesh::lod::LodSettings,
     pub(super) default_lods: Box<[super::mesh::lod::LodRequest]>,
     pub(super) default_source_lods: bool,

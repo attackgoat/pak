@@ -51,10 +51,7 @@ use {
         fs::{File, create_dir_all},
         num::FpCategory,
         path::{Path, PathBuf},
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
+        sync::Arc,
     },
     tempfile::NamedTempFile,
     tokio::runtime::Runtime,
@@ -226,29 +223,18 @@ fn parse_hex_scalar(val: &str) -> Option<u8> {
     }
 }
 
-static CARGO_WATCHES_ENABLED: AtomicBool = AtomicBool::new(true);
-
-fn re_run_if_changed(p: impl AsRef<Path>) {
-    if is_cargo_build() && CARGO_WATCHES_ENABLED.load(Ordering::Relaxed) {
-        println!("cargo:rerun-if-changed={}", p.as_ref().display());
-    }
+#[derive(Clone, Copy, Default)]
+enum CargoWatches {
+    #[default]
+    Enabled,
+    Disabled,
 }
 
-struct CargoWatchesGuard {
-    enabled: bool,
-}
-
-impl CargoWatchesGuard {
-    fn set(enabled: bool) -> Self {
-        Self {
-            enabled: CARGO_WATCHES_ENABLED.swap(enabled, Ordering::Relaxed),
+impl CargoWatches {
+    fn re_run_if_changed(self, path: impl AsRef<Path>) {
+        if matches!(self, Self::Enabled) && is_cargo_build() {
+            println!("cargo:rerun-if-changed={}", path.as_ref().display());
         }
-    }
-}
-
-impl Drop for CargoWatchesGuard {
-    fn drop(&mut self) {
-        CARGO_WATCHES_ENABLED.store(self.enabled, Ordering::Relaxed);
     }
 }
 
@@ -627,7 +613,7 @@ impl PakBuf {
         dst: impl AsRef<Path>,
         dir: impl AsRef<Path>,
     ) -> anyhow::Result<()> {
-        Self::bake_with_dir_impl(src, dst, dir, true, None)
+        Self::bake_with_dir_impl(src, dst, dir, CargoWatches::Enabled, None)
     }
 
     /// Bakes content into a `.pak` file using `dir` as the asset root without emitting Cargo
@@ -639,7 +625,7 @@ impl PakBuf {
         dst: impl AsRef<Path>,
         dir: impl AsRef<Path>,
     ) -> anyhow::Result<()> {
-        Self::bake_with_dir_impl(src, dst, dir, false, None)
+        Self::bake_with_dir_impl(src, dst, dir, CargoWatches::Disabled, None)
     }
 
     pub fn bake_with_dir_and_derived_assets(
@@ -648,7 +634,7 @@ impl PakBuf {
         dir: impl AsRef<Path>,
         baker: &mut dyn DerivedAssetBaker,
     ) -> anyhow::Result<()> {
-        Self::bake_with_dir_impl(src, dst, dir, true, Some(baker))
+        Self::bake_with_dir_impl(src, dst, dir, CargoWatches::Enabled, Some(baker))
     }
 
     /// Bakes content with derived assets without emitting Cargo change watches.
@@ -658,19 +644,17 @@ impl PakBuf {
         dir: impl AsRef<Path>,
         baker: &mut dyn DerivedAssetBaker,
     ) -> anyhow::Result<()> {
-        Self::bake_with_dir_impl(src, dst, dir, false, Some(baker))
+        Self::bake_with_dir_impl(src, dst, dir, CargoWatches::Disabled, Some(baker))
     }
 
     fn bake_with_dir_impl(
         src: impl AsRef<Path>,
         dst: impl AsRef<Path>,
         dir: impl AsRef<Path>,
-        cargo_watches: bool,
+        cargo_watches: CargoWatches,
         mut baker: Option<&mut dyn DerivedAssetBaker>,
     ) -> anyhow::Result<()> {
-        let _cargo_watches = CargoWatchesGuard::set(cargo_watches);
-
-        re_run_if_changed(&src);
+        cargo_watches.re_run_if_changed(&src);
 
         let rt = Arc::new(Runtime::new()?);
         let mut tasks: Vec<tokio::task::JoinHandle<anyhow::Result<()>>> = vec![];
@@ -684,6 +668,7 @@ impl PakBuf {
 
         {
             let mut writer = writer.lock();
+            writer.cargo_watches = cargo_watches;
             let mut layouts = BTreeSet::new();
             for request in content.default_lod_requests() {
                 anyhow::ensure!(
@@ -765,7 +750,7 @@ impl PakBuf {
         for (asset_path, policy, asset) in planned {
             info!("processing {}", asset_path.display());
 
-            re_run_if_changed(&asset_path);
+            cargo_watches.re_run_if_changed(&asset_path);
             writer.lock().set_active_policy(policy);
 
             match asset {

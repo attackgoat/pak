@@ -1,6 +1,6 @@
 use {
     super::{
-        Asset, Canonicalize, Writer,
+        Asset, Canonicalize, CargoWatches, Writer,
         bitmap::{BitmapAsset, BitmapSwizzle, MipQuality, MipSemantic},
         file_key, is_toml, parent, parse_hex_color, parse_hex_scalar,
     },
@@ -403,7 +403,10 @@ impl MaterialAsset {
             );
         }
 
-        let compress_textures = writer.lock().texture_compression();
+        let (compress_textures, cargo_watches) = {
+            let writer = writer.lock();
+            (writer.texture_compression(), writer.cargo_watches)
+        };
         let quality = self.mip_quality;
         if quality == MipQuality::High {
             ensure!(
@@ -719,12 +722,18 @@ impl MaterialAsset {
                 }
 
                 let mut metal_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&metal, &project_dir, 0, quality)
+                    Self::scalar_ref_into_gray_image(&metal, &project_dir, 0, quality, cargo_watches)
                         .context("Unable to create metal bitmap buf")?,
                 );
                 let mut rough_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&rough, &project_dir, u8::MAX, quality)
-                        .context("Unable to create rough bitmap buf")?,
+                    Self::scalar_ref_into_gray_image(
+                        &rough,
+                        &project_dir,
+                        u8::MAX,
+                        quality,
+                        cargo_watches,
+                    )
+                    .context("Unable to create rough bitmap buf")?,
                 );
                 let parameter_b_default = if occlusion.is_some() { u8::MAX } else { 0 };
                 let parameter_b = height_ref.or(occlusion);
@@ -734,12 +743,19 @@ impl MaterialAsset {
                         &project_dir,
                         parameter_b_default,
                         quality,
+                        cargo_watches,
                     )
                     .context("Unable to create height or occlusion bitmap buf")?,
                 );
                 let mut transmission_image = DynamicImage::ImageLuma8(
-                    Self::scalar_ref_into_gray_image(&transmission, &project_dir, 0, quality)
-                        .context("Unable to create transmission bitmap buf")?,
+                    Self::scalar_ref_into_gray_image(
+                        &transmission,
+                        &project_dir,
+                        0,
+                        quality,
+                        cargo_watches,
+                    )
+                    .context("Unable to create transmission bitmap buf")?,
                 );
 
                 let width = metal_image
@@ -924,8 +940,9 @@ impl MaterialAsset {
             return bitmap.bake_from_path(writer, project_dir, path).map(Some);
         }
 
+        let cargo_watches = writer.lock().cargo_watches;
         let bitmap_buf = bitmap
-            .as_bitmap_buf()
+            .as_bitmap_buf_with_watches(cargo_watches)
             .context("Unable to create normal bitmap buf")?;
 
         if Self::normal_bitmap_is_valid(&bitmap_buf) {
@@ -983,10 +1000,11 @@ impl MaterialAsset {
         project_dir: impl AsRef<Path>,
         default: u8,
         quality: MipQuality,
+        cargo_watches: CargoWatches,
     ) -> anyhow::Result<GrayImage> {
         let bitmap = match scalar {
             Some(ScalarRef::Asset(bitmap)) => bitmap
-                .scalar_pixels(quality)
+                .scalar_pixels(quality, cargo_watches)
                 .context("Unable to create bitmap buf from scalar bitmap asset")?,
             Some(ScalarRef::Path(src)) => {
                 if is_toml(src) {
@@ -999,7 +1017,7 @@ impl MaterialAsset {
                     BitmapAsset::new(src)
                 }
             }
-            .scalar_pixels(quality)
+            .scalar_pixels(quality, cargo_watches)
             .context("Unable to create bitmap buf")?,
             &Some(ScalarRef::Value(val)) => Bitmap::new(
                 BitmapColor::Linear,
@@ -1403,8 +1421,14 @@ mod test {
         assert!(
             format!(
                 "{:#}",
-                MaterialAsset::scalar_ref_into_gray_image(&scalar, root, 0, MipQuality::High)
-                    .unwrap_err()
+                MaterialAsset::scalar_ref_into_gray_image(
+                    &scalar,
+                    root,
+                    0,
+                    MipQuality::High,
+                    CargoWatches::Enabled,
+                )
+                .unwrap_err()
             )
             .contains("material root")
         );
